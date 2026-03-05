@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Finance Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body { font-family: sans-serif; background: #f3f4f6; }</style>
+</head>
+<body class="p-6">
+    <div class="max-w-6xl mx-auto">
+        <header class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">Payment Prediction & Reminder</h1>
+            <div class="bg-white px-4 py-2 rounded shadow text-sm">
+                Total Outstanding: <span id="total-outstanding" class="font-bold text-red-600">...</span>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-white rounded-lg shadow overflow-hidden">
+                <table class="w-full text-left text-sm text-gray-600">
+                    <thead class="bg-gray-100 uppercase font-semibold text-gray-700">
+                        <tr>
+                            <th class="p-4">Client</th>
+                            <th class="p-4">Outstanding</th>
+                            <th class="p-4">Avg Behavior</th>
+                            <th class="p-4">Risk Score</th>
+                            <th class="p-4">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="client-rows" class="divide-y divide-gray-100">
+                        </tbody>
+                </table>
+            </div>
+
+            <div class="bg-white rounded-lg shadow p-6 sticky top-6 h-fit">
+                <h2 class="text-lg font-bold mb-4 border-b pb-2">AI Reminder Generator</h2>
+                
+                <div id="selected-client-view" class="hidden space-y-4">
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase">Selected Client</label>
+                        <div id="sel-name" class="font-bold text-xl text-gray-800"></div>
+                        <div id="sel-risk" class="text-sm"></div>
+                    </div>
+
+                    <button onclick="generateMsg()" id="btn-gen" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded transition">
+                        Draft Reminder Message
+                    </button>
+
+                    <div id="ai-output" class="hidden mt-4">
+                        <label for="msg-box" class="text-xs text-gray-500 uppercase">AI Draft:</label>
+                        <textarea id="msg-box" placeholder="Draft pesan AI akan muncul di sini..." rows="6" class="w-full mt-1 p-2 border rounded bg-gray-50 text-sm"></textarea>
+                    </div>
+                </div>
+
+                <div id="empty-view" class="text-center text-gray-400 py-10">
+                    Select a client from the list<br>to generate a reminder.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentClient = null;
+
+        const formatIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n);
+
+        async function loadData() {
+            const res = await fetch('/api/summary');
+            const json = await res.json();
+            
+            document.getElementById('total-outstanding').innerText = formatIDR(json.stats.total_outstanding);
+            
+            const tbody = document.getElementById('client-rows');
+            tbody.innerHTML = '';
+
+            json.data.forEach(c => {
+                let riskColor = c.risk === 'High' ? 'bg-red-100 text-red-800' : (c.risk === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
+                
+                tbody.innerHTML += `
+                    <tr class="hover:bg-gray-50 transition">
+                        <td class="p-4 font-medium">${c.client}</td>
+                        <td class="p-4">${formatIDR(c.outstanding)}</td>
+                        <td class="p-4">${c.delay_display}</td>
+                        <td class="p-4"><span class="px-2 py-1 rounded text-xs font-bold ${riskColor}">${c.risk}</span></td>
+                        <td class="p-4">
+                            <button onclick="selectClient('${c.client}', '${c.risk}')" class="text-blue-600 hover:underline">Select</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function selectClient(name, risk) {
+            currentClient = name;
+            document.getElementById('empty-view').classList.add('hidden');
+            document.getElementById('selected-client-view').classList.remove('hidden');
+            document.getElementById('ai-output').classList.add('hidden');
+            
+            document.getElementById('sel-name').innerText = name;
+            document.getElementById('sel-risk').innerHTML = `Risk Level: <span class="font-bold">${risk}</span>`;
+            document.getElementById('btn-gen').innerText = "Draft Reminder Message";
+        }
+
+        async function generateMsg() {
+            if(!currentClient) return;
+            const btn = document.getElementById('btn-gen');
+            btn.innerText = "Generating...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/generate-reminder', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ client: currentClient })
+                });
+                const data = await res.json();
+                
+                document.getElementById('ai-output').classList.remove('hidden');
+                document.getElementById('msg-box').value = data.message;
+            } catch (e) {
+                alert("Failed to generate message");
+            }
+            btn.innerText = "Regenerate";
+            btn.disabled = false;
+        }
+
+        // Init
+        loadData();
+    </script>
+</body>
+</html>
