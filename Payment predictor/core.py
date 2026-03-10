@@ -81,26 +81,25 @@ class KnowledgeBase:
                 
         return True
 
-    def query(self, timeframe, context_keywords=None):
+    def query(self, context_keywords=None):
         try:
-            query_str = f"Invoice delays, payment behavior, class A B C D E, financial risks. {context_keywords or ''}"
+            # Query is now completely unrestricted by timeframe
+            query_str = f"Historical invoice delays, overall payment behavior, class A B C D E, systemic financial risks. {context_keywords or ''}"
             res = self.collection.query(
                 query_texts=[query_str], 
-                n_results=25, 
-                where={"Periode Laporan": timeframe}
+                n_results=100 # Scoops up a massive chunk of overall history
             )
             if res['documents'] and len(res['documents'][0]) > 0: 
                 return "\n---\n".join(res['documents'][0])
         except Exception as e: 
             logger.error(f"Query Error: {e}")
-            return "Tidak ada data finansial internal untuk periode ini."
+            return "Tidak ada data finansial internal."
 
 class Researcher:
     @staticmethod
     def get_macro_finance_trends():
         if "YOUR_GOOGLE" in GOOGLE_API_KEY: return "Data OSINT eksternal tidak tersedia."
         try:
-            # Shifted to budget cycles and corporate payment behaviors in Indonesia
             query = "Siklus anggaran pemerintah APBN pencairan BUMN corporate payment behavior invoice trends Indonesia"
             params = {'q': query, 'key': GOOGLE_API_KEY, 'cx': GOOGLE_CX_ID, 'num': 3}
             res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=5).json()
@@ -148,7 +147,7 @@ class ChartEngine:
     def create_bar_chart(data_str, theme_color):
         try:
             parts = data_str.split('|')
-            title_str, ylabel_str, raw_data = parts[0].strip(), parts[1].strip(), parts[2].strip() if len(parts) == 3 else ("Distribusi Kelas Pembayaran", "Persentase", data_str)
+            title_str, ylabel_str, raw_data = parts[0].strip(), parts[1].strip(), parts[2].strip() if len(parts) == 3 else ("Distribusi Historis Kelas Pembayaran", "Persentase", data_str)
             labels, values = [], []
             for p in raw_data.split(';'):
                 if ',' in p:
@@ -234,7 +233,7 @@ class DocumentBuilder:
         DocumentBuilder.parse_html_to_docx(doc, html, theme_color)
 
     @staticmethod
-    def create_cover(doc, timeframe, theme_color=DEFAULT_COLOR):
+    def create_cover(doc, theme_color=DEFAULT_COLOR):
         StyleEngine.apply_document_styles(doc, theme_color)
         for _ in range(5): doc.add_paragraph()
         
@@ -245,7 +244,7 @@ class DocumentBuilder:
         conf.runs[0].font.bold = True
         doc.add_paragraph() 
         
-        t = doc.add_paragraph("MACRO REVENUE & PAYMENT PREDICTION REPORT")
+        t = doc.add_paragraph("ALL-TIME HISTORICAL REVENUE PREDICTOR")
         t.alignment = WD_ALIGN_PARAGRAPH.CENTER
         t.runs[0].font.name = 'Arial'
         t.runs[0].font.size = Pt(20)
@@ -258,7 +257,7 @@ class DocumentBuilder:
         c.runs[0].font.color.rgb = RGBColor(*theme_color)
         doc.add_paragraph() 
         
-        p_name = doc.add_paragraph(f"Periode Evaluasi Laporan: {timeframe}")
+        p_name = doc.add_paragraph(f"Cakupan Data: Seluruh Histori Database (All-Time)")
         p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p_name.runs[0].font.size = Pt(14)
         
@@ -281,23 +280,23 @@ class ReportGenerator:
         self.kb = kb_instance
         self.io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
-    def _fetch_chapter_context(self, chap, timeframe, notes, research_futures):
+    def _fetch_chapter_context(self, chap, notes, research_futures):
         try:
             try: industry_trends = research_futures['trends'].result(timeout=5)
             except Exception: industry_trends = "Tidak ada tren finansial eksternal."
 
-            rag_data = self.kb.query(timeframe, chap['keywords'] + " " + notes)
+            rag_data = self.kb.query(chap['keywords'] + " " + notes)
             persona = PERSONAS.get('default')
             
             subs = "\n".join([f"### {s}" for s in chap['subs']])
             
             visual_prompt = "Do not force visuals."
             if "visual_intent" in chap:
-                if chap['visual_intent'] == "bar_chart": visual_prompt = "Mandatory Visual: [[CHART: Distribusi Kelas Pembayaran | Persentase | Kelas A,40; Kelas B,20; Kelas C,15; Kelas D,15; Kelas E,10]]"
-                elif chap['visual_intent'] == "flowchart": visual_prompt = "Action Plan Visual: [[FLOW: Deteksi Risiko Kelas C -> Terapkan Denda Keterlambatan -> Eskalasi ke Divisi Legal]]."
+                if chap['visual_intent'] == "bar_chart": visual_prompt = "Mandatory Visual: [[CHART: Distribusi Historis Kelas Pembayaran | Persentase | Kelas A,30; Kelas B,25; Kelas C,20; Kelas D,15; Kelas E,10]]"
+                elif chap['visual_intent'] == "flowchart": visual_prompt = "Action Plan Visual: [[FLOW: Analisis Pola Historis -> Pembaruan SOP Penagihan -> Pengurangan Risiko Gagal Bayar]]."
 
             prompt = FINANCE_SYSTEM_PROMPT.format(
-                persona=persona, timeframe=timeframe, industry_trends=industry_trends,
+                persona=persona, industry_trends=industry_trends,
                 rag_data=rag_data, visual_prompt=visual_prompt,
                 chapter_title=chap['title'], sub_chapters=subs
             )
@@ -305,8 +304,8 @@ class ReportGenerator:
         except Exception as e:
             return {"prompt": "", "success": False, "error": str(e)}
 
-    def run(self, timeframe, notes=""):
-        logger.info(f"Starting Holistic Financial Generation for Timeframe: {timeframe}")
+    def run(self, notes=""):
+        logger.info(f"Starting All-Time Historical Financial Generation")
         
         research_futures = {
             'trends': self.io_pool.submit(Researcher.get_macro_finance_trends)
@@ -315,11 +314,11 @@ class ReportGenerator:
         context_futures = {}
         for chap in FINANCE_STRUCTURE:
             context_futures[chap['id']] = self.io_pool.submit(
-                self._fetch_chapter_context, chap, timeframe, notes, research_futures
+                self._fetch_chapter_context, chap, notes, research_futures
             )
 
         doc = Document()
-        DocumentBuilder.create_cover(doc, timeframe, DEFAULT_COLOR)
+        DocumentBuilder.create_cover(doc, DEFAULT_COLOR)
         
         for i, chap in enumerate(FINANCE_STRUCTURE):
             ctx = context_futures[chap['id']].result()
@@ -327,7 +326,7 @@ class ReportGenerator:
                 try:
                     res = self.ollama.chat(
                         model=LLM_MODEL, 
-                        messages=[{'role': 'system', 'content': ctx['prompt']}, {'role': 'user', 'content': f"Write content for {chap['title']}. Remember: Use '###' for EVERY sub-chapter header and focus on cash flow and payment classes."}],
+                        messages=[{'role': 'system', 'content': ctx['prompt']}, {'role': 'user', 'content': f"Write content for {chap['title']}. Remember: Use '###' for EVERY sub-chapter header and focus on ALL-TIME historical patterns."}],
                         options={'num_ctx': 4096}  
                     )
                     doc.add_heading(chap['title'], level=1)
@@ -335,4 +334,4 @@ class ReportGenerator:
                     if i < len(FINANCE_STRUCTURE) - 1: doc.add_page_break()
                 except Exception as e: logger.error(f"Error {chap['title']}: {e}")
 
-        return doc, f"Inixindo_Revenue_Prediction_{timeframe}".replace(" ", "_")
+        return doc, "Inixindo_Historical_Revenue_Prediction"

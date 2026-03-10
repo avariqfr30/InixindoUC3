@@ -24,15 +24,8 @@ def home():
 def get_config():
     if kb.df is None or kb.df.empty: 
         return jsonify({"error": "File db.csv tidak ditemukan di dalam folder 'data/db.csv'."})
-        
-    try:
-        # Mengambil Kuartal / Periode dari database finansial
-        timeframes = kb.df['Periode Laporan'].dropna().unique().tolist()
-    except KeyError:
-        return jsonify({"error": "Struktur CSV salah. Pastikan terdapat kolom 'Periode Laporan'."})
             
     return jsonify({
-        "timeframes": timeframes, 
         "suggestions": SMART_SUGGESTIONS
     })
 
@@ -40,10 +33,10 @@ def get_config():
 def generate_doc():
     data = request.json
     
-    timeframe = data.get('timeframe')
+    # Timeframe is completely removed. We only care about notes/instructions now.
     notes = data.get('notes', '')
     
-    doc, filename = generator.run(timeframe, notes)
+    doc, filename = generator.run(notes)
     
     out = io.BytesIO()
     doc.save(out)
