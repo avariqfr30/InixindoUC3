@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inixindo Revenue Predictor</title>
+    <title>Inixindo Historical Revenue Predictor</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
         .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; }
@@ -11,8 +11,8 @@
         h2 { color: #0f172a; margin: 0 0 10px 0; font-size: 1.8rem; }
         p.sub { color: #64748b; margin: 0 0 25px 0; font-size: 1rem; line-height: 1.4; }
         label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.95rem; }
-        select, textarea, button { width: 100%; padding: 12px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; background: white; box-sizing: border-box; font-family: 'Segoe UI', sans-serif;}
-        select:focus, textarea:focus { border-color: #CC0000; outline: none; box-shadow: 0 0 0 3px rgba(204,0,0,0.1); }
+        textarea, button { width: 100%; padding: 12px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; background: white; box-sizing: border-box; font-family: 'Segoe UI', sans-serif;}
+        textarea:focus { border-color: #CC0000; outline: none; box-shadow: 0 0 0 3px rgba(204,0,0,0.1); }
         button { background: #CC0000; color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; margin-top: 10px; }
         button:hover { background: #990000; }
         button:disabled { background: #94a3b8; cursor: not-allowed; }
@@ -23,7 +23,7 @@
         .review-row span:last-child { font-weight: 600; color: #0f172a; text-align: right;}
         .spinner { width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; display: none; vertical-align: middle; margin-left: 10px; }
         .spinner.active { display: inline-block; }
-        textarea { resize: vertical; min-height: 90px; margin-bottom: 8px; }
+        textarea { resize: vertical; min-height: 120px; margin-bottom: 8px; }
         .chip-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
         .chip { background: #f1f5f9; color: #475569; padding: 6px 12px; border-radius: 16px; font-size: 0.85rem; cursor: pointer; transition: 0.2s; border: 1px solid #cbd5e1; }
         .chip:hover { background: #fff0f0; border-color: #CC0000; color: #CC0000; }
@@ -34,26 +34,19 @@
     <div class="card">
         <div id="loader" style="text-align:center; padding: 40px;">
             <div style="border:4px solid #e2e8f0; border-top:4px solid #CC0000; border-radius:50%; width:40px; height:40px; animation: spin 1s linear infinite; margin: 0 auto 20px auto;"></div>
-            <p id="loader-text">Memuat Database Finansial Inixindo...</p>
+            <p id="loader-text">Memuat Seluruh Database Finansial Inixindo...</p>
         </div>
 
         <div id="step-config" class="hidden">
-            <h2><span style="color: #CC0000;">Inixindo</span> Revenue & Invoice Predictor</h2>
-            <p class="sub">AI akan menganalisis histori invoice tertunda, membedah Kelas Pembayaran partner (Kelas A s/d E), dan memprediksi bottleneck likuiditas kas perusahaan.</p>
+            <h2><span style="color: #CC0000;">Inixindo</span> Historical Revenue Predictor</h2>
+            <p class="sub">Sistem AI akan membaca dan menganalisis <strong>seluruh histori database keuangan</strong> tanpa batas waktu untuk menemukan pola sistemik Kelas Pembayaran (A-E) dan memprediksi risiko likuiditas.</p>
             
-            <label for="select-timeframe">Kuartal / Periode Penagihan</label>
-            <select id="select-timeframe">
-                <option value="" disabled selected>Pilih Periode...</option>
-            </select>
+            <label for="input-notes">Fokus Analisis Tambahan (Opsional)</label>
+            <textarea id="input-notes" placeholder="Atau klik rekomendasi instruksi makro di bawah ini..."></textarea>
             
-            <div id="container-discovery" class="hidden" style="margin-top: 15px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-                <label for="input-notes">Instruksi Analisis Tambahan untuk CFO AI (Opsional)</label>
-                <textarea id="input-notes" placeholder="Atau klik rekomendasi instruksi di bawah ini..."></textarea>
-                
-                <div id="suggestion-container" class="chip-container"></div>
-            </div>
+            <div id="suggestion-container" class="chip-container"></div>
             
-            <button type="button" id="btn-review" disabled>Tinjau Parameter Finansial</button>
+            <button type="button" id="btn-review">Tinjau Parameter Finansial</button>
             <button type="button" id="btn-refresh" class="secondary" style="font-size:0.9rem; padding:10px;">🔄 Sync Financial Database</button>
         </div>
 
@@ -69,7 +62,7 @@
         <div id="step-success" class="hidden" style="text-align:center; padding: 20px;">
             <div style="font-size: 60px; margin-bottom: 20px; color: #CC0000;">✅</div>
             <h2>Selesai!</h2>
-            <p class="sub">Laporan Prediksi Arus Kas & Optimalisasi Penagihan telah diunduh.</p>
+            <p class="sub">Laporan Analisis Historis & Prediksi Arus Kas telah diunduh.</p>
             <button type="button" onclick="location.reload()" class="secondary">Buat Laporan Baru</button>
         </div>
     </div>
@@ -82,10 +75,8 @@
             reviewStep: document.getElementById('step-review'),
             successStep: document.getElementById('step-success'),
             
-            selectTimeframe: document.getElementById('select-timeframe'),
             inputNotes: document.getElementById('input-notes'),
             suggestionContainer: document.getElementById('suggestion-container'),
-            containerDiscovery: document.getElementById('container-discovery'),
             reviewText: document.getElementById('review-text'),
             
             btnReview: document.getElementById('btn-review'),
@@ -121,12 +112,6 @@
                 .then(data => {
                     if (data.error) throw new Error(data.error);
                     
-                    data.timeframes.forEach(tf => {
-                        let option = document.createElement('option');
-                        option.value = tf; option.text = tf;
-                        ui.selectTimeframe.add(option);
-                    });
-                    
                     renderSuggestions(data.suggestions);
                     
                     ui.loader.classList.add('hidden'); 
@@ -142,16 +127,11 @@
         }
         
         loadConfig();
-
-        ui.selectTimeframe.onchange = () => {
-            ui.containerDiscovery.classList.remove('hidden');
-            ui.btnReview.disabled = false;
-        };
         
         ui.btnReview.onclick = () => { 
             let html = `
-                <div class="review-row"><span>Cakupan Data</span><span>Distribusi Kelas Pembayaran (A-E)</span></div>
-                <div class="review-row"><span>Periode Penagihan</span><span>${ui.selectTimeframe.value}</span></div>
+                <div class="review-row"><span>Cakupan Data</span><span>Seluruh Histori Database Inixindo (All-Time)</span></div>
+                <div class="review-row"><span>Target Analisis</span><span>Distribusi Kelas Pembayaran & Pola Sistemik Keterlambatan</span></div>
             `;
             ui.reviewText.innerHTML = html; 
             ui.configStep.classList.add('hidden'); 
@@ -168,7 +148,6 @@
             document.getElementById('spinner').classList.add('active');
             
             const payload = {
-                timeframe: ui.selectTimeframe.value,
                 notes: ui.inputNotes.value
             };
 
@@ -180,7 +159,7 @@
             .then(blob => {
                 let url = window.URL.createObjectURL(blob);
                 let a = document.createElement('a'); a.href = url; 
-                a.download = `Inixindo_Revenue_Prediction_${ui.selectTimeframe.value.replace(/\s+/g, '_')}.docx`; 
+                a.download = `Inixindo_Historical_Revenue_Prediction.docx`; 
                 a.click();
                 ui.reviewStep.classList.add('hidden'); ui.successStep.classList.remove('hidden');
             })
