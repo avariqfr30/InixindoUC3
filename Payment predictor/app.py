@@ -1,49 +1,65 @@
-from flask import Flask, jsonify, request, render_template
-import core
+# app.py
+import io
+import logging
+from flask import Flask, send_file, request, jsonify, render_template
+from flask_cors import CORS
+
+from core import ReportGenerator, KnowledgeBase
+from config import DB_URI, SMART_SUGGESTIONS
+
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)
+
+kb = KnowledgeBase(DB_URI)
+generator = ReportGenerator(kb)
 
 @app.route('/')
-def index():
-    # Flask automatically looks for index.html inside the /templates folder
+def home(): 
     return render_template('index.html')
 
-@app.route('/api/summary')
-def api_summary():
-    df = core.get_data()
-    if df.empty:
-        return jsonify({"stats": {"total_outstanding": 0, "client_count": 0}, "data": []})
-
-    clients = df['Client'].unique()
-    total_outstanding = df[df['Status'] == 'Outstanding']['Amount'].sum()
-    
-    results = []
-    for client in clients:
-        stats = core.calculate_risk(client)
-        if stats:
-            results.append(stats)
-
-    # Priority sorting: High risk bubbles to the top, then sorts by money owed
-    results.sort(key=lambda x: (x['risk'] == 'High', x['outstanding']), reverse=True)
-
+@app.route('/get-config')
+def get_config():
+    if kb.df is None or kb.df.empty: 
+        return jsonify({"error": "File db.csv tidak ditemukan di dalam folder 'data/db.csv'."})
+        
+    try:
+        # Mengambil Kuartal / Periode dari database finansial
+        timeframes = kb.df['Periode Laporan'].dropna().unique().tolist()
+    except KeyError:
+        return jsonify({"error": "Struktur CSV salah. Pastikan terdapat kolom 'Periode Laporan'."})
+            
     return jsonify({
-        "stats": {
-            "total_outstanding": int(total_outstanding),
-            "client_count": len(clients)
-        },
-        "data": results
+        "timeframes": timeframes, 
+        "suggestions": SMART_SUGGESTIONS
     })
 
-@app.route('/api/generate-reminder', methods=['POST'])
-def generate_reminder():
-    req_data = request.json
-    client_name = req_data.get('client')
+@app.route('/generate', methods=['POST'])
+def generate_doc():
+    data = request.json
     
-    if not client_name:
-        return jsonify({"error": "Missing client parameter"}), 400
+    timeframe = data.get('timeframe')
+    notes = data.get('notes', '')
+    
+    doc, filename = generator.run(timeframe, notes)
+    
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    
+    return send_file(
+        out, 
+        as_attachment=True, 
+        download_name=f"{filename}.docx", 
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
 
-    msg = core.generate_ai_reminder(client_name)
-    return jsonify({"message": msg})
+@app.route('/refresh-knowledge', methods=['POST'])
+def refresh():
+    success = kb.refresh_data()
+    return jsonify({"status": "success" if success else "error"})
 
 if __name__ == '__main__':
-    app.run(port=5500, debug=True)
+    app.run(port=5000, debug=True, threaded=True)
