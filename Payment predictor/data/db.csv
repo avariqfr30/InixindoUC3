@@ -1,33 +1,10 @@
-InvoiceID,Client,Project,Amount,DueDate,PaidDate,Status
-INV-001,PT. Sinar Jaya,Web Revamp,15000000,2025-01-10,2025-01-08,Paid
-INV-002,CV. Kreatif Digital,SEO Monthly,5000000,2025-01-15,2025-01-20,Paid
-INV-003,PT. Mega Konstruksi,ERP System Phase 1,50000000,2025-01-20,2025-02-05,Paid
-INV-004,Startup Kopi,App Dev Term 1,25000000,2025-01-25,2025-01-25,Paid
-INV-005,PT. Sinar Jaya,Maintenance Jan,2000000,2025-02-01,2025-02-01,Paid
-INV-006,UD. Tani Makmur,E-commerce Setup,12000000,2025-02-05,2025-02-10,Paid
-INV-007,CV. Kreatif Digital,SEO Monthly Feb,5000000,2025-02-15,2025-02-22,Paid
-INV-008,PT. Mega Konstruksi,ERP System Phase 2,50000000,2025-02-20,,Outstanding
-INV-009,Startup Kopi,App Dev Term 2,25000000,2025-02-25,2025-02-24,Paid
-INV-010,Global Tech Indo,Consulting,10000000,2025-01-05,2025-01-05,Paid
-INV-011,Global Tech Indo,Server Migration,15000000,2025-02-05,2025-02-05,Paid
-INV-012,PT. Maju Terus,Mobile App Design,8000000,2025-01-12,2025-01-30,Paid
-INV-013,PT. Maju Terus,Asset Design,3000000,2025-02-12,2025-03-01,Paid
-INV-014,Yayasan Harapan,Web Profile,4000000,2025-01-20,2025-01-22,Paid
-INV-015,Toko Kue Budi,POS System,6500000,2025-01-28,2025-01-28,Paid
-INV-016,PT. Sinar Jaya,Maintenance Feb,2000000,2025-03-01,,Outstanding
-INV-017,CV. Kreatif Digital,SEO Monthly Mar,5000000,2025-03-15,,Outstanding
-INV-018,PT. Langit Biru,Cloud Audit,18000000,2025-01-15,2025-01-14,Paid
-INV-019,PT. Langit Biru,Security Patch,5000000,2025-02-15,2025-02-16,Paid
-INV-020,PT. Maju Terus,App Dev Term 3,25000000,2025-03-12,,Outstanding
-INV-021,UD. Tani Makmur,Support Q1,3000000,2025-03-05,,Outstanding
-INV-022,Startup Kopi,Hosting Year 1,1500000,2025-03-01,,Outstanding
-INV-023,Law Firm A&B,Website Redesign,12000000,2025-02-10,2025-02-10,Paid
-INV-024,Law Firm A&B,Email Setup,2000000,2025-02-20,2025-02-20,Paid
-INV-025,PT. Beton Kuat,Inventory System,35000000,2025-01-30,2025-02-15,Paid
-INV-026,PT. Beton Kuat,Training,5000000,2025-02-28,,Outstanding
-INV-027,Resto Padang Murah,Social Media Mgt,3000000,2025-01-10,2025-01-15,Paid
-INV-028,Resto Padang Murah,Ads Credit,2000000,2025-02-10,,Outstanding
-INV-029,Klinik Sehat,Patient App DP,10000000,2025-02-01,2025-02-01,Paid
-INV-030,Klinik Sehat,Patient App Term 2,10000000,2025-03-01,,Outstanding
-INV-031,Bapak Budi (Personal),Blog Setup,1500000,2025-01-05,2025-01-20,Paid
-INV-032,Bapak Budi (Personal),Maintenance,500000,2025-02-05,,Outstanding
+Periode Laporan,Tipe Partner,Layanan,Kelas Pembayaran,Nilai Invoice,Catatan Historis Keterlambatan
+Q1 2026,Instansi Pemerintah,Pelatihan IT Security,Kelas C (Telat 1-2 Bulan),Rp 150.000.000,"Pembayaran tertunda karena menunggu pencairan DIPA awal tahun anggaran baru."
+Q1 2026,BUMN / Corporate,Konsultasi IT Masterplan,Kelas B (Telat 1-2 Minggu),Rp 300.000.000,"Telat ringan karena proses tanda tangan direksi untuk Berita Acara Serah Terima (BAST) memakan waktu."
+Q1 2026,Swasta,Sertifikasi Cisco,Kelas A (Tepat Waktu),Rp 45.000.000,"Klien swasta membayar lunas di muka (Down Payment 100%) sebelum kelas dimulai."
+Q1 2026,Universitas,Program Magang,Kelas D (Telat 3-6 Bulan),Rp 80.000.000,"Sistem birokrasi kampus sedang transisi ke ERP baru, invoice terselip di departemen keuangan."
+Q4 2025,Instansi Pemerintah,Audit SPBE,Kelas D (Telat 3-6 Bulan),Rp 250.000.000,"Proyek selesai di akhir tahun, namun gagal bayar di tahun berjalan sehingga masuk ke anggaran perubahan tahun berikutnya."
+Q4 2025,BUMN / Corporate,Pelatihan Cloud Native,Kelas A (Tepat Waktu),Rp 120.000.000,"Pembayaran lancar karena budget sisa akhir tahun harus segera dihabiskan oleh klien."
+Q4 2025,Vendor / Partner,Kerja Sama Event,Kelas B (Telat 1-2 Minggu),Rp 60.000.000,"Menunggu proses rekonsiliasi tiket event bersama."
+Q4 2025,Swasta,Bootcamp Data Science,Kelas E (Telat > 6 Bulan),Rp 90.000.000,"Klien startup mengalami masalah arus kas internal (layoffs), penagihan harus di-eskalasi ke jalur legal."
+Q4 2025,Instansi Pemerintah,Pelatihan Web Dev,Kelas C (Telat 1-2 Bulan),Rp 110.000.000,"Pejabat Pembuat Komitmen (PPK) berganti di tengah proyek, butuh waktu untuk review ulang dokumen penagihan."
