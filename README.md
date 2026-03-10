@@ -35,23 +35,14 @@ Pastikan struktur proyek Anda persis seperti ini sebelum dijalankan:
  └── requirements.txt
 ```
 
-### 2. Format Database (`data/db.csv`)
-AI membutuhkan metrik spesifik untuk melakukan sintesis kelas pembayaran. Pastikan *header* kolom CSV Anda seperti berikut:
-* `Periode Laporan` (Contoh: Q1 2026, Q4 2025)
-* `Tipe Partner` (Contoh: Instansi Pemerintah, BUMN, Swasta)
-* `Layanan` (Contoh: Pelatihan IT Security, Konsultasi Masterplan)
-* `Kelas Pembayaran` (Contoh: Kelas C (Telat 1-2 Bulan))
-* `Nilai Invoice` (Contoh: Rp 150.000.000)
-* `Catatan Historis Keterlambatan` (Teks bebas mengenai alasan telat bayar)
-
-### 3. Instalasi Dependensi Python
+### 2. Instalasi Dependensi Python
 Buka terminal/CMD di dalam folder proyek Anda, lalu jalankan:
 ```bash
 pip install -r requirements.txt
 ```
 *(Atau instal manual: `pip install flask flask-cors pandas chromadb ollama matplotlib python-docx markdown beautifulsoup4 requests Pillow sqlalchemy`)*
 
-### 4. Menyiapkan Model Ollama (Wajib)
+### 3. Menyiapkan Model Ollama (Wajib)
 Pastikan Anda sudah mengunduh model LLM dan *Embedding* yang menjadi otak sistem ini:
 ```bash
 ollama pull bge-m3:latest
@@ -59,7 +50,7 @@ ollama pull gpt-oss:120b-cloud
 ```
 *(Catatan: Anda bisa mengganti nama model `gpt-oss:120b-cloud` di file `config.py` sesuai dengan model yang terinstal di mesin Anda, misalnya `llama3` atau `mistral`).*
 
-### 5. Menjalankan Aplikasi
+### 4. Menjalankan Aplikasi
 Setiap kali ada perubahan struktur pada `db.csv`, pastikan Anda **menghapus** file `finance_predictor.db` di dalam folder `data/` agar sistem melakukan sinkronisasi ulang dengan bersih.
 
 Jalankan server Flask:
