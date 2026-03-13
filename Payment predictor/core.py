@@ -1,6 +1,7 @@
 import os
 import io
 import re
+import json
 import logging
 import requests
 import pandas as pd
@@ -97,14 +98,43 @@ class KnowledgeBase:
 
 class Researcher:
     @staticmethod
-    def get_macro_finance_trends():
-        if "YOUR_GOOGLE" in GOOGLE_API_KEY: return "Data OSINT eksternal tidak tersedia."
+    def _execute_serper_search(query, num_results=3):
+        """Mesin inti Serper.dev untuk mengeksekusi pencarian OSINT."""
+        if not SERPER_API_KEY or SERPER_API_KEY == "masukkan_api_key_serper_anda_disini":
+            return "Data OSINT eksternal tidak tersedia (API Key Serper belum diisi)."
+        
+        url = "https://google.serper.dev/search"
+        payload = json.dumps({
+            "q": query,
+            "num": num_results,
+            "gl": "id", # Geolocation: Indonesia (Memastikan hasil relevan secara lokal)
+            "hl": "id"  # Language: Bahasa Indonesia
+        })
+        headers = {
+            'X-API-KEY': SERPER_API_KEY,
+            'Content-Type': 'application/json'
+        }
+        
         try:
-            query = "Siklus anggaran pemerintah APBN pencairan BUMN corporate payment behavior invoice trends Indonesia"
-            params = {'q': query, 'key': GOOGLE_API_KEY, 'cx': GOOGLE_CX_ID, 'num': 3}
-            res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=5).json()
-            return "\n".join([i.get('snippet', '') for i in res.get('items', [])])
-        except Exception: return "Gagal memuat tren finansial makro."
+            response = requests.request("POST", url, headers=headers, data=payload, timeout=8)
+            res_json = response.json()
+            
+            # Mengekstrak hasil pencarian organik
+            organic_results = res_json.get('organic', [])
+            snippets = [item.get('snippet', '') for item in organic_results if 'snippet' in item]
+            
+            if not snippets:
+                return "Pencarian berhasil, namun tidak ada snippet data yang ditemukan."
+                
+            return "\n".join(snippets)
+        except Exception as e:
+            logger.error(f"Serper API Error: {str(e)}")
+            return "Gagal memuat tren OSINT via Serper.dev."
+            
+    @staticmethod
+    def get_macro_finance_trends():
+        query = "Siklus pencairan anggaran APBN pemerintah BUMN corporate payment behavior invoice trends Indonesia"
+        return Researcher._execute_serper_search(query, num_results=3)
 
 class StyleEngine:
     @staticmethod
