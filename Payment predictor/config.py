@@ -3,8 +3,7 @@ import os
 
 DEMO_MODE = True 
 
-GOOGLE_API_KEY = "AI_KEY"
-GOOGLE_CX_ID = "CX_ID"
+SERPER_API_KEY = "masukkan_api_key_serper_anda_disini"
 
 OLLAMA_HOST = "http://127.0.0.1:11434"
 
