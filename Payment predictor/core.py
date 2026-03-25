@@ -357,7 +357,7 @@ class ReportGenerator:
                     res = self.ollama.chat(
                         model=LLM_MODEL, 
                         messages=[{'role': 'system', 'content': ctx['prompt']}, {'role': 'user', 'content': f"Write content for {chap['title']}. Remember: Use '###' for EVERY sub-chapter header and focus on ALL-TIME historical patterns."}],
-                        options={'num_ctx': 4096}  
+                        options={'num_ctx': 65536, 'num_predict': 4096, 'temperature': 0.3, 'top_p': 0.85, 'repeat_penalty': 1.15}  
                     )
                     doc.add_heading(chap['title'], level=1)
                     DocumentBuilder.process_content(doc, res['message']['content'], DEFAULT_COLOR)
