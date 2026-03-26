@@ -1,10 +1,27 @@
 import os
 
+DATA_ACQUISITION_MODE = os.getenv("DATA_ACQUISITION_MODE", "demo").strip().lower()
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "masukkan_api_key_serper_anda_disini")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss:120b-cloud")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3:latest")
 DB_URI = os.getenv("DB_URI", "sqlite:///data/finance_predictor.db")
+
+INTERNAL_API_BASE_URL = os.getenv("INTERNAL_API_BASE_URL", "").strip()
+INTERNAL_API_DATASET_PATH = os.getenv(
+    "INTERNAL_API_DATASET_PATH",
+    "/api/finance/invoices",
+).strip()
+INTERNAL_API_RECORDS_KEY = os.getenv("INTERNAL_API_RECORDS_KEY", "").strip()
+INTERNAL_API_AUTH_TOKEN = os.getenv("INTERNAL_API_AUTH_TOKEN", "").strip()
+INTERNAL_API_HEADERS_JSON = os.getenv("INTERNAL_API_HEADERS_JSON", "{}").strip()
+INTERNAL_API_QUERY_PARAMS_JSON = os.getenv("INTERNAL_API_QUERY_PARAMS_JSON", "{}").strip()
+INTERNAL_API_TIMEOUT = int(os.getenv("INTERNAL_API_TIMEOUT", "20"))
+INTERNAL_API_VERIFY_SSL = os.getenv("INTERNAL_API_VERIFY_SSL", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 WRITER_FIRM_NAME = "Inixindo Jogja - Finance & Revenue Optimization Division"
 DEFAULT_COLOR = (204, 0, 0)

@@ -6,7 +6,7 @@ import os
 import re
 import textwrap
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import chromadb
 import markdown
@@ -27,10 +27,19 @@ from ollama import Client
 from sqlalchemy import create_engine
 
 from config import (
+    DATA_ACQUISITION_MODE,
     DEFAULT_COLOR,
     EMBED_MODEL,
     FINANCE_STRUCTURE,
     FINANCE_SYSTEM_PROMPT,
+    INTERNAL_API_AUTH_TOKEN,
+    INTERNAL_API_BASE_URL,
+    INTERNAL_API_DATASET_PATH,
+    INTERNAL_API_HEADERS_JSON,
+    INTERNAL_API_QUERY_PARAMS_JSON,
+    INTERNAL_API_RECORDS_KEY,
+    INTERNAL_API_TIMEOUT,
+    INTERNAL_API_VERIFY_SSL,
     LLM_MODEL,
     OLLAMA_HOST,
     PERSONAS,
@@ -42,10 +51,91 @@ matplotlib.use("Agg")
 logger = logging.getLogger(__name__)
 
 
+class InternalAPIClient:
+    def __init__(self):
+        self.base_url = INTERNAL_API_BASE_URL.rstrip("/")
+        self.dataset_path = INTERNAL_API_DATASET_PATH.strip() or "/api/finance/invoices"
+        self.records_key = INTERNAL_API_RECORDS_KEY.strip()
+        self.auth_token = INTERNAL_API_AUTH_TOKEN.strip()
+        self.timeout = INTERNAL_API_TIMEOUT
+        self.verify_ssl = INTERNAL_API_VERIFY_SSL
+        self.headers = self._parse_json_object(INTERNAL_API_HEADERS_JSON, "headers")
+        self.query_params = self._parse_json_object(
+            INTERNAL_API_QUERY_PARAMS_JSON,
+            "query params",
+        )
+
+    @staticmethod
+    def _parse_json_object(raw_value, label):
+        if not raw_value:
+            return {}
+
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid INTERNAL_API_{label.upper().replace(' ', '_')}_JSON: {exc}") from exc
+
+        if not isinstance(parsed, dict):
+            raise ValueError(f"INTERNAL_API_{label.upper().replace(' ', '_')}_JSON must be a JSON object.")
+
+        return parsed
+
+    @staticmethod
+    def _extract_nested_value(payload, path):
+        current = payload
+        for key in path.split("."):
+            if not isinstance(current, dict) or key not in current:
+                raise KeyError(path)
+            current = current[key]
+        return current
+
+    def is_configured(self):
+        return bool(self.base_url)
+
+    def fetch_records(self):
+        if not self.is_configured():
+            raise RuntimeError("Internal API base URL is not configured.")
+
+        headers = {"Accept": "application/json"}
+        headers.update(self.headers)
+        if self.auth_token:
+            headers.setdefault("Authorization", f"Bearer {self.auth_token}")
+
+        dataset_url = urljoin(f"{self.base_url}/", self.dataset_path.lstrip("/"))
+        response = requests.get(
+            dataset_url,
+            headers=headers,
+            params=self.query_params,
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        records = payload
+
+        if self.records_key:
+            records = self._extract_nested_value(payload, self.records_key)
+        elif isinstance(payload, dict):
+            for candidate_key in ("records", "items", "results", "data", "invoices"):
+                candidate_value = payload.get(candidate_key)
+                if isinstance(candidate_value, list):
+                    records = candidate_value
+                    break
+
+        if not isinstance(records, list):
+            raise ValueError("Internal API response must resolve to a list of records.")
+
+        return records
+
+
 class KnowledgeBase:
     def __init__(self, db_uri):
         os.makedirs("data", exist_ok=True)
         self.engine = create_engine(db_uri)
+        self.data_mode = "internal_api" if DATA_ACQUISITION_MODE == "internal_api" else "demo"
+        self.table_name = f"invoices_{self.data_mode}"
+        self.internal_api_client = InternalAPIClient()
         self.chroma = chromadb.Client(Settings(anonymized_telemetry=False))
         self.embed_fn = embedding_functions.OllamaEmbeddingFunction(
             url=f"{OLLAMA_HOST}/api/embeddings",
@@ -58,19 +148,63 @@ class KnowledgeBase:
         self.df = None
         self.refresh_data()
 
-    def refresh_data(self):
+    @staticmethod
+    def _normalize_records(records):
+        data_frame = pd.json_normalize(records, sep="_")
+        if data_frame.empty:
+            return data_frame
+
+        for column in data_frame.columns:
+            data_frame[column] = data_frame[column].apply(
+                lambda value: json.dumps(value, ensure_ascii=False)
+                if isinstance(value, (dict, list))
+                else value
+            )
+
+        data_frame.columns = [column.strip() for column in data_frame.columns]
+        return data_frame
+
+    def _load_demo_data(self):
         try:
-            self.df = pd.read_sql("SELECT * FROM invoices", self.engine)
+            return pd.read_sql(f"SELECT * FROM {self.table_name}", self.engine)
         except Exception:
             csv_path = os.path.join("data", "db.csv")
             if not os.path.exists(csv_path):
-                logger.error("Gagal memuat data: %s tidak ditemukan.", csv_path)
-                return False
+                logger.error("Financial data source is unavailable.")
+                return None
 
             raw_df = pd.read_csv(csv_path)
             raw_df.columns = [column.strip() for column in raw_df.columns]
-            raw_df.to_sql("invoices", self.engine, index=False, if_exists="replace")
-            self.df = raw_df
+            raw_df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
+            return raw_df
+
+    def _load_internal_api_data(self):
+        if not self.internal_api_client.is_configured():
+            logger.error("Internal data source is not configured.")
+            return None
+
+        try:
+            records = self.internal_api_client.fetch_records()
+        except Exception as exc:
+            logger.error("Internal data sync failed: %s", exc)
+            return None
+
+        data_frame = self._normalize_records(records)
+        if data_frame.empty:
+            logger.error("Internal data source returned no records.")
+            return None
+
+        data_frame.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
+        return data_frame
+
+    def _load_source_data(self):
+        if self.data_mode == "internal_api":
+            return self._load_internal_api_data()
+        return self._load_demo_data()
+
+    def _rebuild_embeddings(self):
+        if self.df is None or self.df.empty:
+            return False
 
         existing_ids = self.collection.get().get("ids", [])
         if existing_ids:
@@ -88,23 +222,30 @@ class KnowledgeBase:
             documents.append(text_representation)
             metadatas.append(row.astype(str).to_dict())
 
-        if ids:
-            try:
-                logger.info(
-                    "Mengirim %s invoice ke Ollama embedding di %s.",
-                    len(ids),
-                    OLLAMA_HOST,
-                )
-                self.collection.add(
-                    documents=documents,
-                    metadatas=metadatas,
-                    ids=ids,
-                )
-            except Exception as exc:
-                logger.error("Gagal sinkronisasi embedding: %s", exc)
-                return False
+        if not ids:
+            return False
+
+        try:
+            logger.info(
+                "Syncing %s financial records to the embedding store.",
+                len(ids),
+            )
+            self.collection.add(
+                documents=documents,
+                metadatas=metadatas,
+                ids=ids,
+            )
+        except Exception as exc:
+            logger.error("Embedding sync failed: %s", exc)
+            return False
 
         return True
+
+    def refresh_data(self):
+        self.df = self._load_source_data()
+        if self.df is None or self.df.empty:
+            return False
+        return self._rebuild_embeddings()
 
     def query(self, context_keywords=""):
         query_text = (
@@ -112,12 +253,15 @@ class KnowledgeBase:
             "systemic financial risk, collection bottlenecks. "
             f"{context_keywords or ''}"
         )
+        if self.df is None or self.df.empty:
+            return "Tidak ada data finansial internal yang dapat dipakai."
+
         max_results = 100
-        if self.df is not None and not self.df.empty:
-            max_results = min(120, len(self.df))
+        max_results = min(120, len(self.df))
         collection_size = self.collection.count()
-        if collection_size > 0:
-            max_results = min(max_results, collection_size)
+        if collection_size <= 0:
+            return "Tidak ada data finansial internal yang dapat dipakai."
+        max_results = min(max_results, collection_size)
 
         try:
             result = self.collection.query(query_texts=[query_text], n_results=max_results)
