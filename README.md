@@ -8,15 +8,15 @@ Berbeda dengan sistem analitik tradisional, AI ini tidak hanya menghitung angka,
 
 * **All-Time Macro Analysis**: Menarik dan mensintesis 100% data historis perusahaan secara serentak untuk menemukan pola tunda bayar (*bottlenecks*) jangka panjang.
 * **Payment Class Profiling**: Secara cerdas membedah pergeseran perilaku klien dari Kelas A (Tepat Waktu) hingga Kelas E (Macet > 6 Bulan).
-* **OSINT Budget Cycle Context**: Menggunakan *Google Custom Search API* untuk mencari tahu tren siklus pencairan anggaran APBN/BUMN saat ini dan menggabungkannya dengan histori internal.
-* **CFO-Level Auto-Reporting**: Menghasilkan dokumen Microsoft Word (*Strictly Confidential*) berskala eksekutif yang dilengkapi dengan grafik distribusi *Bar Chart*, *Flowchart* mitigasi, dan tipografi tata letak profesional rata kanan-kiri.
+* **OSINT Budget Cycle Context**: Menggunakan *Serper API* (multi-query `search` + `news`) untuk memperkaya konteks tren anggaran, perilaku pembayaran, dan sinyal risiko likuiditas di Indonesia.
+* **CFO-Level Auto-Reporting**: Menghasilkan dokumen Microsoft Word (*Strictly Confidential*) berskala eksekutif dengan daftar isi, heading terstruktur, numbering/bullet bawaan Word, tabel, grafik *Bar Chart*, dan *Flowchart* mitigasi.
 * **Smart Prompt Suggestions**: Menyediakan cip instruksi makro otomatis agar manajemen tidak perlu repot merangkai *prompt* analisis dari nol.
 
 ## Prasyarat Sistem
 
 * **Python 3.9+** (Untuk *deployment* lokal).
 * **Ollama**: Berjalan di *background* pada port `11434`.
-* **Kredensial Google Custom Search**: `API_KEY` dan `CX_ID` aktif di `config.py`.
+* **Kredensial Serper**: `SERPER_API_KEY` aktif (bisa diisi lewat environment variable atau `config.py`).
 * **Database Historis**: File CSV berisi data penagihan.
 
 ## Instalasi & Persiapan (Local Deployment)
@@ -40,7 +40,7 @@ Buka terminal/CMD di dalam folder proyek Anda, lalu jalankan:
 ```bash
 pip install -r requirements.txt
 ```
-*(Atau instal manual: `pip install flask flask-cors pandas chromadb ollama matplotlib python-docx markdown beautifulsoup4 requests Pillow sqlalchemy`)*
+*(Atau instal manual: `pip install flask flask-cors pandas chromadb ollama matplotlib python-docx markdown beautifulsoup4 requests sqlalchemy`)*
 
 ### 3. Menyiapkan Model Ollama (Wajib)
 Pastikan Anda sudah mengunduh model LLM dan *Embedding* yang menjadi otak sistem ini:
