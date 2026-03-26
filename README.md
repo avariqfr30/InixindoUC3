@@ -17,7 +17,8 @@ Berbeda dengan sistem analitik tradisional, AI ini tidak hanya menghitung angka,
 * **Python 3.9+** (Untuk *deployment* lokal).
 * **Ollama**: Berjalan di *background* pada port `11434`.
 * **Kredensial Serper**: `SERPER_API_KEY` aktif (bisa diisi lewat environment variable atau `config.py`).
-* **Database Historis**: File CSV berisi data penagihan.
+* **Demo mode**: File CSV berisi data penagihan pada `data/db.csv`.
+* **Internal API mode**: Endpoint API internal yang mengembalikan dataset finansial dalam format JSON.
 
 ## Instalasi & Persiapan (Local Deployment)
 
@@ -53,10 +54,22 @@ ollama pull gpt-oss:120b-cloud
 ### 4. Menjalankan Aplikasi
 Setiap kali ada perubahan struktur pada `db.csv`, pastikan Anda **menghapus** file `finance_predictor.db` di dalam folder `data/` agar sistem melakukan sinkronisasi ulang dengan bersih.
 
-Jalankan server Flask:
+Mode demo mempertahankan perilaku saat ini dan memakai SQLite/CSV lokal:
 ```bash
-python app.py
+python3 app.py --data-mode demo
 ```
+
+Mode internal API mengambil data finansial internal dari endpoint API, lalu memproses OSINT hanya sebagai konteks eksternal:
+```bash
+DATA_ACQUISITION_MODE=internal_api \
+INTERNAL_API_BASE_URL=https://internal.example.com \
+INTERNAL_API_DATASET_PATH=/api/finance/invoices \
+INTERNAL_API_AUTH_TOKEN=your_token \
+python3 app.py
+```
+
+Jika response API dibungkus object, Anda bisa menambahkan `INTERNAL_API_RECORDS_KEY`, misalnya `data.items`.
+
 Akses *dashboard* melalui *browser* di **`http://127.0.0.1:5000`**.
 
 ---
@@ -65,3 +78,4 @@ Akses *dashboard* melalui *browser* di **`http://127.0.0.1:5000`**.
 * **"Error: Flask mati / Tidak terhubung"**: Pastikan Anda membuka melalui URL `http://127.0.0.1:5000`, BUKAN dengan melakukan *double-click* pada file `index.html`.
 * **Ollama Connection Refused**: Pastikan aplikasi Ollama berjalan di latar belakang (cek ikon tray di Windows/Mac).
 * **KeyError saat Generate**: Hapus file `.db` (SQLite) di folder `data/` dan *restart* `app.py`. Ini terjadi jika CSV Anda memiliki nama kolom yang berbeda dengan format lama.
+* **Financial data unavailable**: Pastikan mode data sesuai, lalu cek `INTERNAL_API_BASE_URL`, `INTERNAL_API_DATASET_PATH`, token, dan bentuk JSON response bila menggunakan internal API.
