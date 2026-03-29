@@ -75,16 +75,14 @@ The report must be detailed enough for an internal meeting, numerically consiste
 === USER FOCUS ===
 {user_focus}
 
+=== ACTIVE SECTION SCOPE ===
+{section_scope}
+
 MANDATORY RULES:
 1. Write the full response in professional but easy-to-understand Bahasa Indonesia.
 2. Keep the analysis focused on cash-in behavior, collection patterns, and invoice realization risk.
-3. Use these exact top-level Markdown headings in order:
-   # Ringkasan Eksekutif
-   # Analisis Deskriptif Cash In
-   # Analisis Diagnostik
-   # Analisis Prediktif
-   # Rekomendasi Preskriptif
-   # Prioritas Tindakan 30 Hari
+3. Use these exact top-level Markdown headings in order for this pass:
+{section_headings}
 4. This must read like a management memo, not a generic AI answer.
 5. Use `###` sub-headings inside sections to separate portfolio snapshot, concentration, trend, root causes, scenarios, and actions.
 6. Use numbered lists for action priorities and bullet lists for operational details.
@@ -98,8 +96,8 @@ MANDATORY RULES:
    - short-term forecast or scenarios,
    - management implications,
    - concrete next actions.
-12. In `# Analisis Prediktif`, include a scenario discussion for upside, base case, and downside using the supplied analysis brief.
-13. In `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
+12. If this pass includes `# Analisis Prediktif`, include a scenario discussion for upside, base case, and downside using the supplied analysis brief.
+13. If this pass includes `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
    `Prioritas | Fokus | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan`
 14. Avoid vague phrases such as `perlu perhatian lebih` unless followed by a specific action and expected impact.
 15. Do not add an introduction before `# Ringkasan Eksekutif`.

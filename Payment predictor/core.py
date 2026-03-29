@@ -1632,27 +1632,54 @@ class DocumentBuilder:
 
 
 class ReportGenerator:
+    SECTION_PASSES = (
+        {
+            "sections": REPORT_SECTION_SEQUENCE[:3],
+            "include_visuals": True,
+            "label": "executive_overview",
+        },
+        {
+            "sections": REPORT_SECTION_SEQUENCE[3:],
+            "include_visuals": False,
+            "label": "forward_actions",
+        },
+    )
+
     def __init__(self, kb_instance):
         self.ollama = Client(host=OLLAMA_HOST)
         self.kb = kb_instance
         self.io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
     @staticmethod
-    def _build_user_instruction(notes):
+    def _build_user_instruction(notes, active_sections):
         notes = (notes or "").strip()
-        report_sections = "\n".join(f"- {section}" for section in REPORT_SECTION_SEQUENCE)
+        report_sections = "\n".join(f"- {section}" for section in active_sections)
         focus_block = notes if notes else "Tidak ada fokus tambahan dari pengguna."
         return (
             "Susun laporan internal yang detail, profesional, dan siap dipakai sebagai bahan diskusi rapat manajemen.\n"
             "Jangan menulis seperti jawaban AI generik; tulis seperti memo manajemen yang berbasis data.\n"
+            "Kerjakan hanya section yang diminta pada pass ini dan hentikan output setelah section terakhir selesai.\n"
             "Pastikan setiap bagian di bawah terisi secara jelas:\n"
             f"{report_sections}\n\n"
             "Setiap rekomendasi harus menyebutkan fokus tindakan dan dampak yang diharapkan.\n"
             f"Fokus pengguna:\n{focus_block}"
         )
 
-    def _build_report_prompt(self, report_context, notes, macro_osint):
+    @staticmethod
+    def _build_section_scope(active_sections):
+        section_list = "\n".join(f"- {section}" for section in active_sections)
+        section_headings = "\n".join(f"   # {section}" for section in active_sections)
+        section_scope = (
+            "Generate only the sections listed below for this pass.\n"
+            "Start with the first heading listed and stop after the last heading listed.\n"
+            "Do not repeat prior sections and do not preview later sections.\n"
+            f"{section_list}"
+        )
+        return section_scope, section_headings
+
+    def _build_report_prompt(self, report_context, notes, macro_osint, active_sections, include_visuals):
         persona = PERSONAS.get("default", "Chief Financial Officer")
+        section_scope, section_headings = self._build_section_scope(active_sections)
         return FINANCE_SYSTEM_PROMPT.format(
             persona=persona,
             financial_summary=report_context["financial_summary"],
@@ -1660,7 +1687,9 @@ class ReportGenerator:
             internal_evidence=report_context["evidence"],
             industry_trends=macro_osint,
             user_focus=(notes or "Tidak ada fokus tambahan."),
-            visual_prompt=report_context["visual_prompt"],
+            section_scope=section_scope,
+            section_headings=section_headings,
+            visual_prompt=report_context["visual_prompt"] if include_visuals else "",
         )
 
     @staticmethod
@@ -1672,7 +1701,10 @@ class ReportGenerator:
         if any(heading not in raw_text for heading in required_headings):
             return False
 
-        if "Prioritas | Fokus | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan" not in raw_text:
+        table_header_pattern = re.compile(
+            r"\|\s*Prioritas\s*\|\s*Fokus\s*\|\s*Isu Utama\s*\|\s*Aksi 30 Hari\s*\|\s*Dampak yang Diharapkan\s*\|"
+        )
+        if not table_header_pattern.search(raw_text):
             return False
 
         return True
@@ -1775,20 +1807,15 @@ class ReportGenerator:
 
         return "\n".join(lines)
 
-    def run(self, notes=""):
-        logger.info("Starting cash-in intelligence report generation.")
-
-        global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, notes)
-        report_context = self.kb.get_report_context(notes)
-
-        try:
-            macro_osint = global_osint_future.result(timeout=25)
-        except Exception:
-            macro_osint = "Tidak ada tren finansial eksternal yang tersedia."
-
-        prompt = self._build_report_prompt(report_context, notes, macro_osint)
-        user_instruction = self._build_user_instruction(notes)
-
+    def _run_generation_pass(self, report_context, notes, macro_osint, active_sections, include_visuals, label):
+        prompt = self._build_report_prompt(
+            report_context,
+            notes,
+            macro_osint,
+            active_sections,
+            include_visuals,
+        )
+        user_instruction = self._build_user_instruction(notes, active_sections)
         response = self.ollama.chat(
             model=LLM_MODEL,
             messages=[
@@ -1803,7 +1830,39 @@ class ReportGenerator:
                 "repeat_penalty": REPORT_REPEAT_PENALTY,
             },
         )
-        generated_content = response["message"]["content"]
+        logger.info(
+            "Generation pass %s completed with done_reason=%s, eval_count=%s.",
+            label,
+            response.get("done_reason"),
+            response.get("eval_count"),
+        )
+        return response["message"]["content"]
+
+    def run(self, notes=""):
+        logger.info("Starting cash-in intelligence report generation.")
+
+        global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, notes)
+        report_context = self.kb.get_report_context(notes)
+
+        try:
+            macro_osint = global_osint_future.result(timeout=25)
+        except Exception:
+            macro_osint = "Tidak ada tren finansial eksternal yang tersedia."
+
+        generated_sections = []
+        for section_pass in self.SECTION_PASSES:
+            generated_sections.append(
+                self._run_generation_pass(
+                    report_context,
+                    notes,
+                    macro_osint,
+                    section_pass["sections"],
+                    section_pass["include_visuals"],
+                    section_pass["label"],
+                ).strip()
+            )
+
+        generated_content = "\n\n".join(section for section in generated_sections if section).strip()
         if not self._is_acceptable_report(generated_content):
             logger.warning("Generated report failed quality gate. Falling back to deterministic management draft.")
             generated_content = self._build_fallback_report(report_context, notes, macro_osint)
