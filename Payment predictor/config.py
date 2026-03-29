@@ -1,11 +1,30 @@
 import os
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
 DATA_ACQUISITION_MODE = os.getenv("DATA_ACQUISITION_MODE", "demo").strip().lower()
+APP_SERVER = os.getenv("APP_SERVER", "flask").strip().lower()
+APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip()
+APP_PORT = int(os.getenv("APP_PORT", "5000"))
+APP_DEBUG = os.getenv("APP_DEBUG", "false").strip().lower() in {"1", "true", "yes"}
+WAITRESS_THREADS = int(os.getenv("WAITRESS_THREADS", "12"))
+WAITRESS_CONNECTION_LIMIT = int(os.getenv("WAITRESS_CONNECTION_LIMIT", "100"))
+WAITRESS_CHANNEL_TIMEOUT = int(os.getenv("WAITRESS_CHANNEL_TIMEOUT", "120"))
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "masukkan_api_key_serper_anda_disini")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss:120b-cloud")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3:latest")
-DB_URI = os.getenv("DB_URI", "sqlite:///data/finance_predictor.db")
+DB_URI = os.getenv("DB_URI", f"sqlite:///{os.path.join(DATA_DIR, 'finance_predictor.db')}")
+DEMO_CSV_PATH = os.getenv("DEMO_CSV_PATH", os.path.join(DATA_DIR, "db.csv"))
+REPORT_MAX_CONCURRENT_JOBS = int(os.getenv("REPORT_MAX_CONCURRENT_JOBS", "4"))
+REPORT_JOB_RETENTION_SECONDS = int(os.getenv("REPORT_JOB_RETENTION_SECONDS", "1800"))
+REPORT_STATUS_POLL_INTERVAL_MS = int(os.getenv("REPORT_STATUS_POLL_INTERVAL_MS", "1500"))
+REPORT_NUM_CTX = int(os.getenv("REPORT_NUM_CTX", "24576"))
+REPORT_NUM_PREDICT = int(os.getenv("REPORT_NUM_PREDICT", "2200"))
+REPORT_TEMPERATURE = float(os.getenv("REPORT_TEMPERATURE", "0.2"))
+REPORT_TOP_P = float(os.getenv("REPORT_TOP_P", "0.85"))
+REPORT_REPEAT_PENALTY = float(os.getenv("REPORT_REPEAT_PENALTY", "1.1"))
 
 INTERNAL_API_BASE_URL = os.getenv("INTERNAL_API_BASE_URL", "").strip()
 INTERNAL_API_DATASET_PATH = os.getenv(
@@ -27,80 +46,61 @@ WRITER_FIRM_NAME = "Inixindo Jogja - Finance & Revenue Optimization Division"
 DEFAULT_COLOR = (204, 0, 0)
 
 SMART_SUGGESTIONS = [
-    "Lakukan analisis historis menyeluruh atas portofolio piutang dan petakan penyebab sistemik keterlambatan pembayaran.",
-    "Ukur dampak agregat invoice tertunda (Kelas C, D, E) terhadap likuiditas dan arus kas operasional.",
-    "Susun kebijakan penagihan lintas unit berbasis pola historis kelas pembayaran.",
-    "Prediksi potensi pergeseran invoice dari Kelas A/B menuju Kelas D/E untuk horizon 2-4 kuartal ke depan.",
+    "Jelaskan kondisi cash in saat ini dari karakter penagihan partner dan faktor yang paling memengaruhi keterlambatan.",
+    "Diagnosa akar masalah cash in berdasarkan pola kelas pembayaran, jenis partner, dan catatan historis penagihan.",
+    "Prediksi risiko penurunan cash in 1-2 kuartal ke depan dan tandai segmen partner yang perlu diawasi.",
+    "Berikan rekomendasi tindakan prioritas untuk mempercepat cash in dan menurunkan invoice berisiko.",
 ]
 
 FINANCE_SYSTEM_PROMPT = """
 You are the Chief Financial Officer (CFO) and Lead Financial Data Scientist for Inixindo Jogja.
 ROLE: {persona}
 
-=== INTERNAL HISTORICAL INVOICE & PAYMENT DATA ===
-{rag_data}
+OBJECTIVE:
+Create one practical cash-in intelligence report that helps business users understand collection behavior,
+diagnose causes of delayed cash-in, predict short-term risk, and decide what to do next.
 
-=== EXTERNAL OSINT BENCHMARKS (INDONESIA) ===
+=== INTERNAL CASH-IN SUMMARY ===
+{financial_summary}
+
+=== INTERNAL EVIDENCE NOTES ===
+{internal_evidence}
+
+=== EXTERNAL OSINT CONTEXT (INDONESIA) ===
 {industry_trends}
 
-MANDATORY RULES:
-1. Write the full response in professional corporate Bahasa Indonesia.
-2. Analyze aggregate historical performance of the entire company across all available periods.
-3. Compare partner/payment classes A-E and explain forward-looking revenue bottlenecks.
-4. You MUST use Markdown header `###` for every requested sub-chapter below.
-5. Every sub-chapter must be substantive and include clear evidence from historical records.
-6. Use numbered lists for priority actions and bullet lists for operational details when relevant.
-7. Use concise markdown tables for direct comparisons when they improve clarity.
-8. Do not repeat '{chapter_title}' as the opening title in the response.
-9. {visual_prompt}
+=== USER FOCUS ===
+{user_focus}
 
-WRITE DETAILED CONTENT FOR THESE SUB-CHAPTERS:
-{sub_chapters}
+MANDATORY RULES:
+1. Write the full response in professional but easy-to-understand Bahasa Indonesia.
+2. Keep the analysis focused on cash-in behavior, collection patterns, and invoice realization risk.
+3. Use these exact top-level Markdown headings in order:
+   # Ringkasan Eksekutif
+   # Analisis Deskriptif Cash In
+   # Analisis Diagnostik
+   # Analisis Prediktif
+   # Rekomendasi Preskriptif
+   # Prioritas Tindakan 30 Hari
+4. Use `###` sub-headings inside sections when needed.
+5. Use numbered lists for action priorities and bullet lists for operational details.
+6. Use concise Markdown tables only when they make comparison clearer.
+7. Cite internal evidence naturally by paraphrasing or quoting short anonymized note fragments.
+8. Treat OSINT as supporting context, never as the source of truth for internal financial facts.
+9. Include the provided visual markers exactly as supplied when they are present.
+10. Do not add an introduction before `# Ringkasan Eksekutif`.
+
+VISUAL MARKERS:
+{visual_prompt}
 """
 
-FINANCE_STRUCTURE = [
-    {
-        "id": "fin_chap_1",
-        "title": "BAB I – OVERALL HISTORICAL CASH FLOW & INVOICE SUMMARY",
-        "subsections": [
-            "1.1 Kondisi Historis Kesehatan Piutang & Arus Kas Perusahaan",
-            "1.2 Distribusi Keseluruhan Kelas Pembayaran Partner (Kelas A hingga Kelas E)",
-            "1.3 Identifikasi Anomali Makro Sepanjang Sejarah Penagihan",
-        ],
-        "keywords": "overall historical company cash flow revenue invoice late payment class aggregate",
-        "visual_intent": "bar_chart",
-    },
-    {
-        "id": "fin_chap_2",
-        "title": "BAB II – COMPANY-WIDE PAYMENT BEHAVIOR & BOTTLENECK ANALYSIS",
-        "subsections": [
-            "2.1 Perbandingan Pola Pembayaran Lintas Demografi Secara Historis (Pemerintah vs BUMN vs Swasta)",
-            "2.2 Akar Masalah Sistemik Keterlambatan Jangka Panjang",
-            "2.3 Kutipan Bukti Historis (Evidence dari Catatan Penagihan)",
-        ],
-        "keywords": "historical systemic payment behavior bottleneck bureaucracy delay reasons",
-    },
-    {
-        "id": "fin_chap_3",
-        "title": "BAB III – AGGREGATE REVENUE PREDICTION & RISK ASSESSMENT",
-        "subsections": [
-            "3.1 Prediksi Pergeseran Kelas di Masa Depan (Berdasarkan pola historis)",
-            "3.2 Dampak Siklus Anggaran Eksternal terhadap Likuiditas Perusahaan",
-            "3.3 Identifikasi Segmen Pasar Paling Berisiko Secara Jangka Panjang",
-        ],
-        "keywords": "predict long-term aggregate risk shift class downgrade total liquidity",
-    },
-    {
-        "id": "fin_chap_4",
-        "title": "BAB IV – STRATEGIC COLLECTION & INCOME OPTIMIZATION",
-        "subsections": [
-            "4.1 Kebijakan Penagihan Standar Perusahaan (Berdasarkan evaluasi kelemahan historis)",
-            "4.2 Rekomendasi Mitigasi Likuiditas Lintas Sektor",
-            "4.3 Langkah Hukum dan Eskalasi Final untuk Piutang Kelas E",
-        ],
-        "keywords": "recommendation company-wide collection policy SOP optimize revenue legal action",
-        "visual_intent": "flowchart",
-    },
+REPORT_SECTION_SEQUENCE = [
+    "Ringkasan Eksekutif",
+    "Analisis Deskriptif Cash In",
+    "Analisis Diagnostik",
+    "Analisis Prediktif",
+    "Rekomendasi Preskriptif",
+    "Prioritas Tindakan 30 Hari",
 ]
 
 PERSONAS = {

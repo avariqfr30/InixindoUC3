@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import re
+import statistics
 import textwrap
+import threading
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
@@ -28,9 +30,10 @@ from sqlalchemy import create_engine
 
 from config import (
     DATA_ACQUISITION_MODE,
+    DATA_DIR,
     DEFAULT_COLOR,
+    DEMO_CSV_PATH,
     EMBED_MODEL,
-    FINANCE_STRUCTURE,
     FINANCE_SYSTEM_PROMPT,
     INTERNAL_API_AUTH_TOKEN,
     INTERNAL_API_BASE_URL,
@@ -43,6 +46,12 @@ from config import (
     LLM_MODEL,
     OLLAMA_HOST,
     PERSONAS,
+    REPORT_NUM_CTX,
+    REPORT_NUM_PREDICT,
+    REPORT_REPEAT_PENALTY,
+    REPORT_SECTION_SEQUENCE,
+    REPORT_TEMPERATURE,
+    REPORT_TOP_P,
     SERPER_API_KEY,
     WRITER_FIRM_NAME,
 )
@@ -131,7 +140,7 @@ class InternalAPIClient:
 
 class KnowledgeBase:
     def __init__(self, db_uri):
-        os.makedirs("data", exist_ok=True)
+        os.makedirs(DATA_DIR, exist_ok=True)
         self.engine = create_engine(db_uri)
         self.data_mode = "internal_api" if DATA_ACQUISITION_MODE == "internal_api" else "demo"
         self.table_name = f"invoices_{self.data_mode}"
@@ -146,6 +155,8 @@ class KnowledgeBase:
             embedding_function=self.embed_fn,
         )
         self.df = None
+        self.report_context_cache = None
+        self.cache_lock = threading.Lock()
         self.refresh_data()
 
     @staticmethod
@@ -168,7 +179,7 @@ class KnowledgeBase:
         try:
             return pd.read_sql(f"SELECT * FROM {self.table_name}", self.engine)
         except Exception:
-            csv_path = os.path.join("data", "db.csv")
+            csv_path = DEMO_CSV_PATH
             if not os.path.exists(csv_path):
                 logger.error("Financial data source is unavailable.")
                 return None
@@ -245,9 +256,11 @@ class KnowledgeBase:
         self.df = self._load_source_data()
         if self.df is None or self.df.empty:
             return False
+        with self.cache_lock:
+            self.report_context_cache = None
         return self._rebuild_embeddings()
 
-    def query(self, context_keywords=""):
+    def query(self, context_keywords="", max_results=12):
         query_text = (
             "Historical invoice delays, payment behavior class A-E, "
             "systemic financial risk, collection bottlenecks. "
@@ -256,8 +269,7 @@ class KnowledgeBase:
         if self.df is None or self.df.empty:
             return "Tidak ada data finansial internal yang dapat dipakai."
 
-        max_results = 100
-        max_results = min(120, len(self.df))
+        max_results = min(max_results, len(self.df))
         collection_size = self.collection.count()
         if collection_size <= 0:
             return "Tidak ada data finansial internal yang dapat dipakai."
@@ -272,6 +284,323 @@ class KnowledgeBase:
             logger.error("Query error: %s", exc)
 
         return "Tidak ada data finansial internal yang dapat dipakai."
+
+    def get_report_context(self, notes=""):
+        with self.cache_lock:
+            if self.report_context_cache is None:
+                self.report_context_cache = FinancialAnalyzer.build_report_context(self.df)
+
+        context = dict(self.report_context_cache)
+        notes = (notes or "").strip()
+        if notes:
+            context["evidence"] = self.query(notes, max_results=10) or context["evidence"]
+        return context
+
+
+class FinancialAnalyzer:
+    CLASS_SCORE_MAP = {
+        "kelas a": 1,
+        "kelas b": 2,
+        "kelas c": 3,
+        "kelas d": 4,
+        "kelas e": 5,
+    }
+
+    DELAY_THEME_KEYWORDS = {
+        "Siklus anggaran": ("dipa", "anggaran", "apbn", "apbd", "pencairan", "budget"),
+        "Persetujuan internal klien": ("direksi", "approval", "persetujuan", "otorisasi", "tanda tangan"),
+        "Dokumen dan administrasi": ("bast", "dokumen", "administrasi", "berita acara", "po", "invoice revisi"),
+        "Likuiditas pelanggan": ("cashflow", "likuiditas", "arus kas", "pending dana", "menunggu dana"),
+        "Sengketa atau klarifikasi": ("dispute", "klarifikasi", "komplain", "revisi", "sengketa"),
+    }
+
+    COLUMN_ALIASES = {
+        "period": ("periode laporan", "period", "report period", "invoice period"),
+        "partner": ("tipe partner", "partner type", "partner_type", "customer segment", "segment"),
+        "service": ("layanan", "service", "product", "offering"),
+        "payment_class": ("kelas pembayaran", "payment class", "payment_class", "collection class"),
+        "invoice_value": ("nilai invoice", "invoice value", "invoice_amount", "amount", "outstanding"),
+        "notes": (
+            "catatan historis keterlambatan",
+            "collection note",
+            "collection notes",
+            "notes",
+            "delay note",
+        ),
+    }
+
+    @staticmethod
+    def _normalize_column_name(column_name):
+        return re.sub(r"[^a-z0-9]+", " ", str(column_name).strip().lower()).strip()
+
+    @classmethod
+    def _find_column(cls, df, alias_key):
+        normalized_map = {
+            cls._normalize_column_name(column): column
+            for column in df.columns
+        }
+        for candidate in cls.COLUMN_ALIASES[alias_key]:
+            column = normalized_map.get(candidate)
+            if column:
+                return column
+        return None
+
+    @staticmethod
+    def _parse_currency(value):
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return 0
+        digits = re.sub(r"[^\d]", "", str(value))
+        return int(digits) if digits else 0
+
+    @classmethod
+    def _detect_payment_class(cls, raw_value):
+        text = str(raw_value or "").lower()
+        for class_name, score in cls.CLASS_SCORE_MAP.items():
+            if class_name in text:
+                return class_name.upper().replace("KELAS", "Kelas"), score
+        return "Tidak Diketahui", 3
+
+    @staticmethod
+    def _format_currency(amount):
+        return f"Rp {amount:,.0f}".replace(",", ".")
+
+    @staticmethod
+    def _format_percentage(value):
+        return f"{value:.1f}%"
+
+    @staticmethod
+    def _parse_period_sort_key(period_label):
+        text = str(period_label or "").strip().lower()
+        match = re.search(r"q([1-4])\s*(20\d{2})", text)
+        if match:
+            return int(match.group(2)), int(match.group(1))
+        year_match = re.search(r"(20\d{2})", text)
+        if year_match:
+            return int(year_match.group(1)), 0
+        return 0, 0
+
+    @classmethod
+    def _extract_delay_themes(cls, notes_series):
+        counts = {theme: 0 for theme in cls.DELAY_THEME_KEYWORDS}
+        for note in notes_series.dropna().astype(str):
+            lowered_note = note.lower()
+            for theme, keywords in cls.DELAY_THEME_KEYWORDS.items():
+                if any(keyword in lowered_note for keyword in keywords):
+                    counts[theme] += 1
+
+        ranked = [(theme, count) for theme, count in counts.items() if count > 0]
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked[:4]
+
+    @classmethod
+    def _build_visual_prompt(cls, class_distribution):
+        labels = []
+        for payment_class, metrics in class_distribution.items():
+            labels.append(f"{payment_class},{round(metrics['share'], 1)}")
+        chart_marker = (
+            "[[CHART: Distribusi Historis Kelas Pembayaran | Persentase Invoice | "
+            + "; ".join(labels)
+            + "]]"
+        )
+        flow_marker = (
+            "[[FLOW: Prioritisasi Invoice Risiko Tinggi -> Penagihan Berbasis Bukti -> "
+            "Eskalasi Manajemen -> Pemulihan Cash In]]"
+        )
+        return f"{chart_marker}\n{flow_marker}"
+
+    @classmethod
+    def build_report_context(cls, df):
+        if df is None or df.empty:
+            return {
+                "financial_summary": "Tidak ada data finansial internal yang tersedia.",
+                "evidence": "Tidak ada catatan historis yang tersedia.",
+                "visual_prompt": "Do not force visuals.",
+            }
+
+        working_df = df.copy()
+        period_column = cls._find_column(working_df, "period")
+        partner_column = cls._find_column(working_df, "partner")
+        service_column = cls._find_column(working_df, "service")
+        payment_class_column = cls._find_column(working_df, "payment_class")
+        invoice_value_column = cls._find_column(working_df, "invoice_value")
+        notes_column = cls._find_column(working_df, "notes")
+
+        working_df["__period"] = (
+            working_df[period_column].astype(str).fillna("Tidak Diketahui")
+            if period_column
+            else "Tidak Diketahui"
+        )
+        working_df["__partner"] = (
+            working_df[partner_column].astype(str).fillna("Tidak Diketahui")
+            if partner_column
+            else "Tidak Diketahui"
+        )
+        working_df["__service"] = (
+            working_df[service_column].astype(str).fillna("Tidak Diketahui")
+            if service_column
+            else "Tidak Diketahui"
+        )
+        working_df["__note"] = (
+            working_df[notes_column].astype(str).fillna("")
+            if notes_column
+            else ""
+        )
+        working_df["__invoice_value"] = (
+            working_df[invoice_value_column].apply(cls._parse_currency)
+            if invoice_value_column
+            else 0
+        )
+        class_labels = []
+        class_scores = []
+        source_series = working_df[payment_class_column] if payment_class_column else pd.Series([""] * len(working_df))
+        for raw_value in source_series:
+            payment_class, score = cls._detect_payment_class(raw_value)
+            class_labels.append(payment_class)
+            class_scores.append(score)
+        working_df["__payment_class"] = class_labels
+        working_df["__payment_score"] = class_scores
+
+        total_invoices = len(working_df)
+        total_invoice_value = int(working_df["__invoice_value"].sum())
+        delayed_invoices = int((working_df["__payment_score"] > 1).sum())
+        high_risk_invoices = int((working_df["__payment_score"] >= 4).sum())
+        weighted_risk_score = statistics.fmean(working_df["__payment_score"]) if total_invoices else 0
+
+        class_summary_df = (
+            working_df.groupby("__payment_class", dropna=False)
+            .agg(
+                invoice_count=("__payment_class", "size"),
+                invoice_value=("__invoice_value", "sum"),
+                risk_score=("__payment_score", "mean"),
+            )
+            .sort_values(["risk_score", "invoice_value"], ascending=[True, False])
+        )
+        class_distribution = {}
+        for payment_class, row in class_summary_df.iterrows():
+            class_distribution[payment_class] = {
+                "count": int(row["invoice_count"]),
+                "value": int(row["invoice_value"]),
+                "share": (row["invoice_count"] / total_invoices) * 100 if total_invoices else 0,
+            }
+
+        partner_summary_df = (
+            working_df.groupby("__partner", dropna=False)
+            .agg(
+                invoice_count=("__partner", "size"),
+                invoice_value=("__invoice_value", "sum"),
+                avg_risk_score=("__payment_score", "mean"),
+            )
+            .sort_values(["avg_risk_score", "invoice_value"], ascending=[False, False])
+            .head(5)
+        )
+        service_summary_df = (
+            working_df.groupby("__service", dropna=False)
+            .agg(
+                invoice_count=("__service", "size"),
+                invoice_value=("__invoice_value", "sum"),
+                avg_risk_score=("__payment_score", "mean"),
+            )
+            .sort_values(["avg_risk_score", "invoice_value"], ascending=[False, False])
+            .head(5)
+        )
+        period_summary_df = (
+            working_df.groupby("__period", dropna=False)
+            .agg(
+                invoice_count=("__period", "size"),
+                invoice_value=("__invoice_value", "sum"),
+                avg_risk_score=("__payment_score", "mean"),
+            )
+            .reset_index()
+        )
+        period_summary_df["__sort_key"] = period_summary_df["__period"].apply(cls._parse_period_sort_key)
+        period_summary_df = period_summary_df.sort_values("__sort_key").tail(4)
+
+        top_themes = cls._extract_delay_themes(working_df["__note"])
+        evidence_rows = working_df.sort_values(
+            ["__payment_score", "__invoice_value"],
+            ascending=[False, False],
+        ).head(8)
+
+        financial_summary_lines = [
+            "## Snapshot Cash In",
+            f"- Total invoice dianalisis: {total_invoices}",
+            f"- Total nilai invoice: {cls._format_currency(total_invoice_value)}",
+            f"- Porsi invoice terlambat: {cls._format_percentage((delayed_invoices / total_invoices) * 100 if total_invoices else 0)}",
+            f"- Porsi invoice risiko tinggi (Kelas D/E): {cls._format_percentage((high_risk_invoices / total_invoices) * 100 if total_invoices else 0)}",
+            f"- Skor risiko penagihan rata-rata: {weighted_risk_score:.2f} dari 5.00",
+            "",
+            "## Distribusi Kelas Pembayaran",
+            "| Kelas | Jumlah Invoice | Nilai Invoice | Porsi Invoice |",
+            "|---|---:|---:|---:|",
+        ]
+        for payment_class, metrics in class_distribution.items():
+            financial_summary_lines.append(
+                f"| {payment_class} | {metrics['count']} | {cls._format_currency(metrics['value'])} | {cls._format_percentage(metrics['share'])} |"
+            )
+
+        financial_summary_lines.extend(
+            [
+                "",
+                "## Segmentasi Risiko per Tipe Partner",
+                "| Tipe Partner | Jumlah Invoice | Nilai Invoice | Skor Risiko Rata-rata |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for partner, row in partner_summary_df.iterrows():
+            financial_summary_lines.append(
+                f"| {partner} | {int(row['invoice_count'])} | {cls._format_currency(int(row['invoice_value']))} | {row['avg_risk_score']:.2f} |"
+            )
+
+        financial_summary_lines.extend(
+            [
+                "",
+                "## Segmentasi Risiko per Layanan",
+                "| Layanan | Jumlah Invoice | Nilai Invoice | Skor Risiko Rata-rata |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for service, row in service_summary_df.iterrows():
+            financial_summary_lines.append(
+                f"| {service} | {int(row['invoice_count'])} | {cls._format_currency(int(row['invoice_value']))} | {row['avg_risk_score']:.2f} |"
+            )
+
+        financial_summary_lines.extend(
+            [
+                "",
+                "## Tren Ringkas per Periode",
+                "| Periode | Jumlah Invoice | Nilai Invoice | Skor Risiko Rata-rata |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for _, row in period_summary_df.iterrows():
+            financial_summary_lines.append(
+                f"| {row['__period']} | {int(row['invoice_count'])} | {cls._format_currency(int(row['invoice_value']))} | {row['avg_risk_score']:.2f} |"
+            )
+
+        financial_summary_lines.extend(["", "## Sinyal Diagnostik Utama"])
+        if top_themes:
+            for index, (theme, count) in enumerate(top_themes, start=1):
+                financial_summary_lines.append(f"{index}. {theme} muncul pada {count} catatan historis.")
+        else:
+            financial_summary_lines.append("1. Belum ada tema dominan yang dapat diambil dari catatan historis.")
+
+        evidence_lines = []
+        for _, row in evidence_rows.iterrows():
+            note = str(row["__note"]).strip()
+            if not note:
+                continue
+            trimmed_note = note[:180] + ("..." if len(note) > 180 else "")
+            evidence_lines.append(
+                f"- {row['__partner']} | {row['__payment_class']} | {cls._format_currency(int(row['__invoice_value']))} | {trimmed_note}"
+            )
+        if not evidence_lines:
+            evidence_lines.append("- Tidak ada catatan historis yang cukup untuk dikutip.")
+
+        return {
+            "financial_summary": "\n".join(financial_summary_lines),
+            "evidence": "\n".join(evidence_lines),
+            "visual_prompt": cls._build_visual_prompt(class_distribution),
+        }
 
 
 class Researcher:
@@ -943,8 +1272,8 @@ class DocumentBuilder:
         StyleEngine.apply_document_styles(doc, theme_color)
 
         properties = doc.core_properties
-        properties.title = "Inixindo Historical Revenue Prediction"
-        properties.subject = "Internal Financial Intelligence Report"
+        properties.title = "Inixindo Cash In Intelligence Report"
+        properties.subject = "Internal Cash In Intelligence Report"
         properties.author = WRITER_FIRM_NAME
         properties.category = "Finance"
 
@@ -960,7 +1289,7 @@ class DocumentBuilder:
 
         doc.add_paragraph()
 
-        title = doc.add_paragraph("HISTORICAL REVENUE PREDICTION REPORT")
+        title = doc.add_paragraph("CASH IN INTELLIGENCE REPORT")
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title.runs[0].font.name = "Calibri"
         title.runs[0].font.size = Pt(22)
@@ -979,7 +1308,7 @@ class DocumentBuilder:
         metadata_table.style = "Table Grid"
         metadata = [
             ("Cakupan Data", "Seluruh histori invoice dan catatan penagihan"),
-            ("Tipe Laporan", "Analisis prediksi arus kas dan risiko likuiditas"),
+            ("Tipe Laporan", "Analisis deskriptif, diagnostik, prediktif, dan preskriptif cash in"),
             ("Tanggal Generasi", datetime.now().strftime("%d %B %Y")),
             ("Disusun Oleh", WRITER_FIRM_NAME),
         ]
@@ -1014,116 +1343,67 @@ class ReportGenerator:
     def __init__(self, kb_instance):
         self.ollama = Client(host=OLLAMA_HOST)
         self.kb = kb_instance
-        self.io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=6)
+        self.io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
     @staticmethod
-    def _resolve_visual_instruction(chapter):
-        visual_intent = chapter.get("visual_intent")
-        if visual_intent == "bar_chart":
-            return (
-                "Mandatory Visual: [[CHART: Distribusi Historis Kelas Pembayaran | Persentase | "
-                "Kelas A,30; Kelas B,25; Kelas C,20; Kelas D,15; Kelas E,10]]"
-            )
-        if visual_intent == "flowchart":
-            return (
-                "Action Plan Visual: [[FLOW: Analisis Pola Historis -> Pembaruan SOP Penagihan -> "
-                "Pengurangan Risiko Gagal Bayar]]"
-            )
-        return "Do not force visuals."
+    def _build_user_instruction(notes):
+        notes = (notes or "").strip()
+        report_sections = "\n".join(f"- {section}" for section in REPORT_SECTION_SEQUENCE)
+        focus_block = notes if notes else "Tidak ada fokus tambahan dari pengguna."
+        return (
+            "Susun laporan yang ringkas, tajam, dan bisa langsung dipakai manajemen.\n"
+            "Pastikan setiap bagian di bawah terisi secara jelas:\n"
+            f"{report_sections}\n\n"
+            f"Fokus pengguna:\n{focus_block}"
+        )
 
-    def _build_chapter_prompt(self, chapter, notes, macro_osint, chapter_osint):
-        rag_data = self.kb.query(f"{chapter.get('keywords', '')} {notes or ''}")
+    def _build_report_prompt(self, notes, macro_osint):
+        report_context = self.kb.get_report_context(notes)
         persona = PERSONAS.get("default", "Chief Financial Officer")
-
-        subsection_headers = "\n".join(
-            f"### {subtitle}" for subtitle in chapter.get("subsections", [])
-        )
-
-        external_context = (
-            f"{macro_osint}\n\n"
-            f"=== CHAPTER-SPECIFIC OSINT SIGNALS ===\n"
-            f"{chapter_osint}"
-        )
-
         return FINANCE_SYSTEM_PROMPT.format(
             persona=persona,
-            industry_trends=external_context,
-            rag_data=rag_data,
-            visual_prompt=self._resolve_visual_instruction(chapter),
-            chapter_title=chapter.get("title", "Bab"),
-            sub_chapters=subsection_headers,
+            financial_summary=report_context["financial_summary"],
+            internal_evidence=report_context["evidence"],
+            industry_trends=macro_osint,
+            user_focus=(notes or "Tidak ada fokus tambahan."),
+            visual_prompt=report_context["visual_prompt"],
         )
 
     def run(self, notes=""):
-        logger.info("Starting historical financial report generation.")
+        logger.info("Starting cash-in intelligence report generation.")
 
         global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, notes)
-        chapter_osint_futures = {
-            chapter["id"]: self.io_pool.submit(
-                Researcher.get_chapter_signal,
-                chapter.get("keywords", ""),
-                notes,
-            )
-            for chapter in FINANCE_STRUCTURE
-        }
 
         try:
             macro_osint = global_osint_future.result(timeout=25)
         except Exception:
             macro_osint = "Tidak ada tren finansial eksternal yang tersedia."
 
+        prompt = self._build_report_prompt(notes, macro_osint)
+        user_instruction = self._build_user_instruction(notes)
+
+        response = self.ollama.chat(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_instruction},
+            ],
+            options={
+                "num_ctx": REPORT_NUM_CTX,
+                "num_predict": REPORT_NUM_PREDICT,
+                "temperature": REPORT_TEMPERATURE,
+                "top_p": REPORT_TOP_P,
+                "repeat_penalty": REPORT_REPEAT_PENALTY,
+            },
+        )
+
         document = Document()
         DocumentBuilder.create_cover(document, DEFAULT_COLOR)
         DocumentBuilder.add_table_of_contents(document)
+        DocumentBuilder.process_content(
+            document,
+            response["message"]["content"],
+            DEFAULT_COLOR,
+        )
 
-        for index, chapter in enumerate(FINANCE_STRUCTURE):
-            chapter_id = chapter["id"]
-
-            try:
-                chapter_osint = chapter_osint_futures[chapter_id].result(timeout=10)
-            except Exception:
-                chapter_osint = "Tidak ada sinyal OSINT spesifik bab yang tersedia."
-
-            try:
-                prompt = self._build_chapter_prompt(chapter, notes, macro_osint, chapter_osint)
-            except Exception as exc:
-                logger.error("Gagal menyiapkan konteks untuk %s: %s", chapter["title"], exc)
-                continue
-
-            try:
-                response = self.ollama.chat(
-                    model=LLM_MODEL,
-                    messages=[
-                        {"role": "system", "content": prompt},
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Tulis konten untuk {chapter['title']}. "
-                                "Gunakan semua subbab ### yang diwajibkan, "
-                                "dan gunakan numbered list/bullet list untuk rekomendasi tindakan."
-                            ),
-                        },
-                    ],
-                    options={
-                        "num_ctx": 65536,
-                        "num_predict": 4096,
-                        "temperature": 0.3,
-                        "top_p": 0.85,
-                        "repeat_penalty": 1.15,
-                    },
-                )
-            except Exception as exc:
-                logger.error("Gagal menghasilkan konten untuk %s: %s", chapter["title"], exc)
-                continue
-
-            document.add_heading(chapter["title"], level=1)
-            DocumentBuilder.process_content(
-                document,
-                response["message"]["content"],
-                DEFAULT_COLOR,
-            )
-
-            if index < len(FINANCE_STRUCTURE) - 1:
-                document.add_page_break()
-
-        return document, "Inixindo_Historical_Revenue_Prediction"
+        return document, "Inixindo_Cash_In_Intelligence_Report"

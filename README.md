@@ -1,15 +1,16 @@
-# Historical Revenue Predictor (Internal Tool)
+# Cash In Intelligence (Internal Tool)
 
-Sistem *Enterprise AI* berbasis web yang dirancang khusus untuk divisi Finance dan Executive Board (CFO) Inixindo Jogja. Aplikasi ini menelan **seluruh histori data penagihan (All-Time)** tanpa batasan kuartal, untuk memprediksi risiko arus kas, membedah pola keterlambatan pembayaran lintas demografi, dan menghasilkan strategi mitigasi likuiditas secara otomatis.
+Sistem *Enterprise AI* berbasis web yang dirancang untuk divisi Finance dan Executive Board (CFO) Inixindo Jogja. Aplikasi ini membaca histori data cash in dan karakter penagihan untuk menghasilkan analisis **deskriptif, diagnostik, prediktif, dan preskriptif** terhadap arus kas masuk.
 
 Berbeda dengan sistem analitik tradisional, AI ini tidak hanya menghitung angka, tetapi membaca *konteks* dari catatan penagihan dan membandingkannya dengan tren siklus anggaran makro di Indonesia (Pemerintah, BUMN, dan Swasta) untuk memprediksi pergeseran **Kelas Pembayaran (Kelas A hingga Kelas E)**.
 
 ## Fitur Utama
 
-* **All-Time Macro Analysis**: Menarik dan mensintesis 100% data historis perusahaan secara serentak untuk menemukan pola tunda bayar (*bottlenecks*) jangka panjang.
-* **Payment Class Profiling**: Secara cerdas membedah pergeseran perilaku klien dari Kelas A (Tepat Waktu) hingga Kelas E (Macet > 6 Bulan).
+* **Cash In Intelligence**: Mengubah histori invoice, kelas pembayaran, dan catatan penagihan menjadi laporan deskriptif, diagnostik, prediktif, dan preskriptif.
+* **Payment Class Profiling**: Membedah perilaku klien dari Kelas A (Tepat Waktu) hingga Kelas E (Macet > 6 Bulan).
 * **OSINT Budget Cycle Context**: Menggunakan *Serper API* (multi-query `search` + `news`) untuk memperkaya konteks tren anggaran, perilaku pembayaran, dan sinyal risiko likuiditas di Indonesia.
-* **CFO-Level Auto-Reporting**: Menghasilkan dokumen Microsoft Word (*Strictly Confidential*) berskala eksekutif dengan daftar isi, heading terstruktur, numbering/bullet bawaan Word, tabel, grafik *Bar Chart*, dan *Flowchart* mitigasi.
+* **Shared Stress-Test Ready**: Mendukung job queue di sisi server agar beberapa pengguna bisa menjalankan generate report secara bersamaan dengan UI yang tetap sederhana.
+* **CFO-Level Auto-Reporting**: Menghasilkan dokumen Microsoft Word (*Strictly Confidential*) dengan daftar isi, heading terstruktur, numbering/bullet bawaan Word, tabel, grafik *Bar Chart*, dan *Flowchart* mitigasi.
 * **Smart Prompt Suggestions**: Menyediakan cip instruksi makro otomatis agar manajemen tidak perlu repot merangkai *prompt* analisis dari nol.
 
 ## Prasyarat Sistem
@@ -41,7 +42,7 @@ Buka terminal/CMD di dalam folder proyek Anda, lalu jalankan:
 ```bash
 pip install -r requirements.txt
 ```
-*(Atau instal manual: `pip install flask flask-cors pandas chromadb ollama matplotlib python-docx markdown beautifulsoup4 requests sqlalchemy`)*
+*(Atau instal manual: `pip install flask flask-cors pandas chromadb ollama matplotlib python-docx markdown beautifulsoup4 requests sqlalchemy waitress`)*
 
 ### 3. Menyiapkan Model Ollama (Wajib)
 Pastikan Anda sudah mengunduh model LLM dan *Embedding* yang menjadi otak sistem ini:
@@ -70,6 +71,22 @@ python3 app.py
 
 Jika response API dibungkus object, Anda bisa menambahkan `INTERNAL_API_RECORDS_KEY`, misalnya `data.items`.
 
+Untuk sesi uji bersama di jaringan internal perusahaan, gunakan Waitress dan bind aplikasi ke semua interface:
+```bash
+python3 app.py --data-mode demo --server waitress --host 0.0.0.0 --port 5000
+```
+
+Atau dengan internal API dan worker queue yang sedikit lebih agresif untuk stress test:
+```bash
+DATA_ACQUISITION_MODE=internal_api \
+INTERNAL_API_BASE_URL=https://internal.example.com \
+INTERNAL_API_DATASET_PATH=/api/finance/invoices \
+INTERNAL_API_AUTH_TOKEN=your_token \
+REPORT_MAX_CONCURRENT_JOBS=4 \
+WAITRESS_THREADS=12 \
+python3 app.py --server waitress --host 0.0.0.0 --port 5000
+```
+
 Akses *dashboard* melalui *browser* di **`http://127.0.0.1:5000`**.
 
 ---
@@ -79,3 +96,5 @@ Akses *dashboard* melalui *browser* di **`http://127.0.0.1:5000`**.
 * **Ollama Connection Refused**: Pastikan aplikasi Ollama berjalan di latar belakang (cek ikon tray di Windows/Mac).
 * **KeyError saat Generate**: Hapus file `.db` (SQLite) di folder `data/` dan *restart* `app.py`. Ini terjadi jika CSV Anda memiliki nama kolom yang berbeda dengan format lama.
 * **Financial data unavailable**: Pastikan mode data sesuai, lalu cek `INTERNAL_API_BASE_URL`, `INTERNAL_API_DATASET_PATH`, token, dan bentuk JSON response bila menggunakan internal API.
+* **Generate terasa lambat saat banyak user**: Turunkan ukuran model, kecilkan `REPORT_NUM_PREDICT`, atau sesuaikan `REPORT_MAX_CONCURRENT_JOBS` dengan kapasitas mesin yang menjalankan Ollama.
+* **Waitress tidak jalan**: Pastikan dependensi terbaru sudah terpasang dengan `pip install -r requirements.txt`, lalu jalankan ulang dengan `--server waitress`.
