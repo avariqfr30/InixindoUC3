@@ -9,3 +9,4 @@ markdown
 beautifulsoup4
 requests
 sqlalchemy
+waitress

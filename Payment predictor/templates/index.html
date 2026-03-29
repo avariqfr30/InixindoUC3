@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inixindo Historical Revenue Predictor</title>
+    <title>Inixindo Cash In Intelligence</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
         .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; }
@@ -34,12 +34,12 @@
     <div class="card">
         <div id="loader" style="text-align:center; padding: 40px;">
             <div style="border:4px solid #e2e8f0; border-top:4px solid #CC0000; border-radius:50%; width:40px; height:40px; animation: spin 1s linear infinite; margin: 0 auto 20px auto;"></div>
-            <p id="loader-text">Memuat Seluruh Database Finansial Inixindo...</p>
+            <p id="loader-text">Memuat data finansial dan konteks analisis cash in...</p>
         </div>
 
         <div id="step-config" class="hidden">
-            <h2><span style="color: #CC0000;">Inixindo</span> Historical Revenue Predictor</h2>
-            <p class="sub">Sistem AI akan membaca dan menganalisis <strong>seluruh histori database keuangan</strong> tanpa batas waktu untuk menemukan pola sistemik Kelas Pembayaran (A-E) dan memprediksi risiko likuiditas.</p>
+            <h2><span style="color: #CC0000;">Inixindo</span> Cash In Intelligence</h2>
+            <p class="sub">Sistem AI akan membaca <strong>histori data cash in dan karakter penagihan</strong> untuk membuat deskripsi, diagnosa, prediksi, dan rekomendasi tindakan terhadap arus kas masuk.</p>
             
             <label for="input-notes">Fokus Analisis Tambahan (Opsional)</label>
             <textarea id="input-notes" placeholder="Atau klik rekomendasi instruksi makro di bawah ini..."></textarea>
@@ -51,8 +51,9 @@
         </div>
 
         <div id="step-review" class="hidden">
-            <h2>Konfirmasi Laporan Prediksi Kas</h2>
+            <h2>Konfirmasi Laporan Cash In</h2>
             <div class="review-box" id="review-text"></div>
+            <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
             <div style="display:flex; gap:15px;">
                 <button type="button" id="btn-back" class="secondary" style="width:35%">Kembali</button>
                 <button type="button" id="btn-generate" style="width:65%">Generate Report <span id="spinner" class="spinner"></span></button>
@@ -62,7 +63,7 @@
         <div id="step-success" class="hidden" style="text-align:center; padding: 20px;">
             <div style="font-size: 60px; margin-bottom: 20px; color: #CC0000;">✅</div>
             <h2>Selesai!</h2>
-            <p class="sub">Laporan Analisis Historis & Prediksi Arus Kas telah diunduh.</p>
+            <p class="sub">Laporan analisis cash in telah diunduh.</p>
             <button type="button" onclick="location.reload()" class="secondary">Buat Laporan Baru</button>
         </div>
     </div>
@@ -78,10 +79,17 @@
             inputNotes: document.getElementById('input-notes'),
             suggestionContainer: document.getElementById('suggestion-container'),
             reviewText: document.getElementById('review-text'),
+            jobStatus: document.getElementById('job-status'),
             
             btnReview: document.getElementById('btn-review'),
             btnGenerate: document.getElementById('btn-generate'),
             btnBack: document.getElementById('btn-back')
+        };
+
+        const appState = {
+            currentJobId: null,
+            statusTimer: null,
+            statusPollIntervalMs: 1500
         };
         
         function renderSuggestions(suggestionsList) {
@@ -113,6 +121,7 @@
                     if (data.error) throw new Error(data.error);
                     
                     renderSuggestions(data.suggestions);
+                    appState.statusPollIntervalMs = data.statusPollIntervalMs || 1500;
                     
                     ui.loader.classList.add('hidden'); 
                     ui.configStep.classList.remove('hidden');
@@ -131,7 +140,7 @@
         ui.btnReview.onclick = () => { 
             let html = `
                 <div class="review-row"><span>Cakupan Data</span><span>Seluruh Histori Database Inixindo (All-Time)</span></div>
-                <div class="review-row"><span>Target Analisis</span><span>Distribusi Kelas Pembayaran & Pola Sistemik Keterlambatan</span></div>
+                <div class="review-row"><span>Target Analisis</span><span>Deskripsi, Diagnosa, Prediksi, dan Preskripsi Cash In</span></div>
             `;
             ui.reviewText.innerHTML = html; 
             ui.configStep.classList.add('hidden'); 
@@ -139,13 +148,93 @@
         };
         
         ui.btnBack.onclick = () => { 
+            if (appState.statusTimer) {
+                clearTimeout(appState.statusTimer);
+                appState.statusTimer = null;
+            }
+            ui.jobStatus.classList.add('hidden');
+            ui.jobStatus.textContent = '';
             ui.reviewStep.classList.add('hidden'); 
             ui.configStep.classList.remove('hidden'); 
         };
+
+        function updateJobStatus(message) {
+            ui.jobStatus.textContent = message;
+            ui.jobStatus.classList.remove('hidden');
+        }
+
+        function resetGenerateState() {
+            ui.btnGenerate.disabled = false;
+            document.getElementById('spinner').classList.remove('active');
+            appState.currentJobId = null;
+            if (appState.statusTimer) {
+                clearTimeout(appState.statusTimer);
+                appState.statusTimer = null;
+            }
+        }
+
+        function downloadGeneratedReport(jobId) {
+            fetch(`/jobs/${jobId}/download`)
+                .then(response => {
+                    if (!response.ok) throw new Error("Gagal mengunduh dokumen hasil generate.");
+                    return response.blob();
+                })
+                .then(blob => {
+                    let url = window.URL.createObjectURL(blob);
+                    let a = document.createElement('a');
+                    a.href = url;
+                    a.download = `Inixindo_Cash_In_Intelligence_Report.docx`;
+                    a.click();
+                    resetGenerateState();
+                    ui.reviewStep.classList.add('hidden');
+                    ui.successStep.classList.remove('hidden');
+                })
+                .catch(err => {
+                    alert(err.message);
+                    resetGenerateState();
+                });
+        }
+
+        function pollJobStatus(jobId) {
+            fetch(`/jobs/${jobId}`)
+                .then(response => {
+                    if (!response.ok) throw new Error("Status generate tidak tersedia.");
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.status === 'queued') {
+                        const queuedMessage = data.queuedAhead > 0
+                            ? `Permintaan Anda sedang antre. ${data.queuedAhead} proses berada di depan.`
+                            : 'Permintaan Anda sedang dipersiapkan.';
+                        updateJobStatus(queuedMessage);
+                        appState.statusTimer = setTimeout(() => pollJobStatus(jobId), appState.statusPollIntervalMs);
+                        return;
+                    }
+
+                    if (data.status === 'running') {
+                        updateJobStatus('AI sedang menyusun analisis cash in dan dokumen Word.');
+                        appState.statusTimer = setTimeout(() => pollJobStatus(jobId), appState.statusPollIntervalMs);
+                        return;
+                    }
+
+                    if (data.status === 'ready') {
+                        updateJobStatus(`Laporan selesai disusun dalam ${data.durationSeconds || 'beberapa'} detik. Mengunduh dokumen...`);
+                        downloadGeneratedReport(jobId);
+                        return;
+                    }
+
+                    throw new Error(data.error || "Generate dokumen gagal.");
+                })
+                .catch(err => {
+                    alert(err.message);
+                    resetGenerateState();
+                });
+        }
         
         ui.btnGenerate.onclick = () => {
             ui.btnGenerate.disabled = true; 
             document.getElementById('spinner').classList.add('active');
+            updateJobStatus('Permintaan Anda sedang dikirim ke sistem analisis.');
             
             const payload = {
                 notes: ui.inputNotes.value
@@ -153,20 +242,16 @@
 
             fetch('/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
             .then(response => {
-                if (!response.ok) throw new Error("Gagal generate dokumen. Pastikan Ollama menyala.");
-                return response.blob();
+                if (!response.ok) throw new Error("Gagal memulai generate dokumen. Pastikan layanan AI aktif.");
+                return response.json();
             })
-            .then(blob => {
-                let url = window.URL.createObjectURL(blob);
-                let a = document.createElement('a'); a.href = url; 
-                a.download = `Inixindo_Historical_Revenue_Prediction.docx`; 
-                a.click();
-                ui.reviewStep.classList.add('hidden'); ui.successStep.classList.remove('hidden');
+            .then(data => {
+                appState.currentJobId = data.jobId;
+                pollJobStatus(data.jobId);
             })
             .catch(err => {
                 alert(err.message);
-                ui.btnGenerate.disabled = false;
-                document.getElementById('spinner').classList.remove('active');
+                resetGenerateState();
             });
         };
         
