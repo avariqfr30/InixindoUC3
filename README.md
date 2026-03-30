@@ -99,6 +99,7 @@ REPORT_MAX_CONCURRENT_JOBS=4
 REPORT_MAX_PENDING_JOBS=12
 REPORT_JOB_RETENTION_SECONDS=3600
 REPORT_METRICS_WINDOW_HOURS=24
+REPORT_MIN_COMPLETENESS_SCORE=80
 REPORT_ARTIFACTS_DIR=/var/tmp/inixindo-generated-reports
 JOB_STATE_DB_PATH=/var/tmp/inixindo-report-jobs.db
 ```
@@ -108,6 +109,7 @@ Arti singkatnya:
 * `REPORT_MAX_PENDING_JOBS`: batas total job aktif (`queued` + `running`). Di atas batas ini, app akan mengembalikan `429` agar load spike tidak membuat sistem tidak responsif.
 * `REPORT_JOB_RETENTION_SECONDS`: berapa lama job selesai/error dan file hasilnya dipertahankan sebelum dibersihkan otomatis.
 * `REPORT_METRICS_WINDOW_HOURS`: jendela waktu untuk metrik kesehatan terakhir pada endpoint `/health`.
+* `REPORT_MIN_COMPLETENESS_SCORE`: ambang minimum kualitas dokumen. Job dianggap lolos bila struktur dan isi laporan mencapai skor ini.
 * `REPORT_ARTIFACTS_DIR`: direktori penyimpanan file `.docx` hasil generate.
 * `JOB_STATE_DB_PATH`: SQLite kecil untuk status job, durasi, fallback, dan metrik operasional.
 
