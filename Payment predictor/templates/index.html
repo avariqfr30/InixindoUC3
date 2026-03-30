@@ -189,7 +189,18 @@
         function downloadGeneratedReport(jobId) {
             fetch(`/jobs/${jobId}/download`)
                 .then(response => {
-                    if (!response.ok) throw new Error("Gagal mengunduh dokumen hasil generate.");
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            let message = "Gagal mengunduh dokumen hasil generate.";
+                            try {
+                                const data = JSON.parse(text);
+                                message = data.error || message;
+                            } catch (error) {
+                                // Keep the default message if the response is not JSON.
+                            }
+                            throw new Error(message);
+                        });
+                    }
                     return response.blob();
                 })
                 .then(blob => {
@@ -255,7 +266,18 @@
 
             fetch('/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
             .then(response => {
-                if (!response.ok) throw new Error("Gagal memulai generate dokumen. Pastikan layanan AI aktif.");
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        let message = "Gagal memulai generate dokumen. Pastikan layanan AI aktif.";
+                        try {
+                            const data = JSON.parse(text);
+                            message = data.error || message;
+                        } catch (error) {
+                            // Keep the default message if the response is not JSON.
+                        }
+                        throw new Error(message);
+                    });
+                }
                 return response.json();
             })
             .then(data => {

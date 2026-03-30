@@ -18,8 +18,18 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3:latest")
 DB_URI = os.getenv("DB_URI", f"sqlite:///{os.path.join(DATA_DIR, 'finance_predictor.db')}")
 DEMO_CSV_PATH = os.getenv("DEMO_CSV_PATH", os.path.join(DATA_DIR, "db.csv"))
 REPORT_MAX_CONCURRENT_JOBS = int(os.getenv("REPORT_MAX_CONCURRENT_JOBS", "4"))
+REPORT_MAX_PENDING_JOBS = int(os.getenv("REPORT_MAX_PENDING_JOBS", "12"))
 REPORT_JOB_RETENTION_SECONDS = int(os.getenv("REPORT_JOB_RETENTION_SECONDS", "1800"))
 REPORT_STATUS_POLL_INTERVAL_MS = int(os.getenv("REPORT_STATUS_POLL_INTERVAL_MS", "1500"))
+REPORT_METRICS_WINDOW_HOURS = int(os.getenv("REPORT_METRICS_WINDOW_HOURS", "24"))
+REPORT_ARTIFACTS_DIR = os.getenv(
+    "REPORT_ARTIFACTS_DIR",
+    os.path.join(DATA_DIR, "generated_reports"),
+)
+JOB_STATE_DB_PATH = os.getenv(
+    "JOB_STATE_DB_PATH",
+    os.path.join(DATA_DIR, "report_jobs.db"),
+)
 REPORT_NUM_CTX = int(os.getenv("REPORT_NUM_CTX", "24576"))
 REPORT_NUM_PREDICT = int(os.getenv("REPORT_NUM_PREDICT", "2200"))
 REPORT_TEMPERATURE = float(os.getenv("REPORT_TEMPERATURE", "0.2"))

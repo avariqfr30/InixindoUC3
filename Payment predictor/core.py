@@ -2276,6 +2276,7 @@ class ReportGenerator:
         except Exception:
             macro_osint = "Tidak ada tren finansial eksternal yang tersedia."
 
+        fallback_used = False
         generated_sections = []
         for section_pass in self.SECTION_PASSES:
             generated_sections.append(
@@ -2293,6 +2294,7 @@ class ReportGenerator:
         generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
         if not self._is_acceptable_report(generated_content):
             logger.warning("Generated report failed quality gate. Falling back to deterministic management draft.")
+            fallback_used = True
             generated_content = self._build_fallback_report(report_context, notes, macro_osint)
             generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
 
@@ -2305,4 +2307,16 @@ class ReportGenerator:
             DEFAULT_COLOR,
         )
 
-        return document, "Inixindo_Cash_In_Intelligence_Report"
+        run_metadata = {
+            "fallback_used": fallback_used,
+            "quality_gate_passed": not fallback_used,
+            "osint_available": bool(
+                macro_osint
+                and "tidak tersedia" not in macro_osint.lower()
+                and "tidak ada data osint" not in macro_osint.lower()
+            ),
+            "visuals_included": "[[CHART:" in generated_content and "[[FLOW:" in generated_content,
+            "report_length": len(generated_content),
+        }
+
+        return document, "Inixindo_Cash_In_Intelligence_Report", run_metadata

@@ -10,6 +10,7 @@ Berbeda dengan sistem analitik tradisional, AI ini tidak hanya menghitung angka,
 * **Payment Class Profiling**: Membedah perilaku klien dari Kelas A (Tepat Waktu) hingga Kelas E (Macet > 6 Bulan).
 * **OSINT Budget Cycle Context**: Menggunakan *Serper API* (multi-query `search` + `news`) untuk memperkaya konteks tren anggaran, perilaku pembayaran, dan sinyal risiko likuiditas di Indonesia.
 * **Shared Stress-Test Ready**: Mendukung job queue di sisi server agar beberapa pengguna bisa menjalankan generate report secara bersamaan dengan UI yang tetap sederhana.
+* **VPS Simulation Hardening**: Metadata job disimpan di SQLite terpisah, file `.docx` hasil generate disimpan ke disk, dan antrean dapat dibatasi agar stress test gagal secara terkontrol saat kapasitas penuh.
 * **CFO-Level Auto-Reporting**: Menghasilkan dokumen Microsoft Word (*Strictly Confidential*) dengan daftar isi, heading terstruktur, numbering/bullet bawaan Word, tabel, grafik *Bar Chart*, dan *Flowchart* mitigasi.
 * **Smart Prompt Suggestions**: Menyediakan cip instruksi makro otomatis agar manajemen tidak perlu repot merangkai *prompt* analisis dari nol.
 
@@ -83,11 +84,32 @@ INTERNAL_API_BASE_URL=https://internal.example.com \
 INTERNAL_API_DATASET_PATH=/api/finance/invoices \
 INTERNAL_API_AUTH_TOKEN=your_token \
 REPORT_MAX_CONCURRENT_JOBS=4 \
+REPORT_MAX_PENDING_JOBS=12 \
 WAITRESS_THREADS=12 \
 python3 app.py --server waitress --host 0.0.0.0 --port 5000
 ```
 
 Akses *dashboard* melalui *browser* di **`http://127.0.0.1:5000`**.
+
+### Konfigurasi yang Berguna untuk Simulasi VPS
+Anda bisa menyesuaikan perilaku antrean dan penyimpanan artefak dengan environment variable berikut:
+
+```bash
+REPORT_MAX_CONCURRENT_JOBS=4
+REPORT_MAX_PENDING_JOBS=12
+REPORT_JOB_RETENTION_SECONDS=3600
+REPORT_METRICS_WINDOW_HOURS=24
+REPORT_ARTIFACTS_DIR=/var/tmp/inixindo-generated-reports
+JOB_STATE_DB_PATH=/var/tmp/inixindo-report-jobs.db
+```
+
+Arti singkatnya:
+* `REPORT_MAX_CONCURRENT_JOBS`: jumlah job generate yang boleh berjalan bersamaan.
+* `REPORT_MAX_PENDING_JOBS`: batas total job aktif (`queued` + `running`). Di atas batas ini, app akan mengembalikan `429` agar load spike tidak membuat sistem tidak responsif.
+* `REPORT_JOB_RETENTION_SECONDS`: berapa lama job selesai/error dan file hasilnya dipertahankan sebelum dibersihkan otomatis.
+* `REPORT_METRICS_WINDOW_HOURS`: jendela waktu untuk metrik kesehatan terakhir pada endpoint `/health`.
+* `REPORT_ARTIFACTS_DIR`: direktori penyimpanan file `.docx` hasil generate.
+* `JOB_STATE_DB_PATH`: SQLite kecil untuk status job, durasi, fallback, dan metrik operasional.
 
 ---
 
@@ -97,4 +119,6 @@ Akses *dashboard* melalui *browser* di **`http://127.0.0.1:5000`**.
 * **KeyError saat Generate**: Hapus file `.db` (SQLite) di folder `data/` dan *restart* `app.py`. Ini terjadi jika CSV Anda memiliki nama kolom yang berbeda dengan format lama.
 * **Financial data unavailable**: Pastikan mode data sesuai, lalu cek `INTERNAL_API_BASE_URL`, `INTERNAL_API_DATASET_PATH`, token, dan bentuk JSON response bila menggunakan internal API.
 * **Generate terasa lambat saat banyak user**: Turunkan ukuran model, kecilkan `REPORT_NUM_PREDICT`, atau sesuaikan `REPORT_MAX_CONCURRENT_JOBS` dengan kapasitas mesin yang menjalankan Ollama.
+* **Queue penuh saat stress test**: Tingkatkan `REPORT_MAX_PENDING_JOBS` bila antrean memang ingin diperbolehkan lebih panjang, atau turunkan jumlah pengguna simultan bila target waktu 3-4 menit mulai meleset.
+* **Artefak hasil report tidak ditemukan**: Pastikan `REPORT_ARTIFACTS_DIR` dapat ditulis oleh user proses aplikasi, dan `JOB_STATE_DB_PATH` mengarah ke lokasi yang persisten di VPS.
 * **Waitress tidak jalan**: Pastikan dependensi terbaru sudah terpasang dengan `pip install -r requirements.txt`, lalu jalankan ulang dengan `--server waitress`.
