@@ -55,10 +55,29 @@ class ReportJobStore:
                     fallback_used INTEGER DEFAULT 0,
                     osint_available INTEGER DEFAULT 0,
                     visuals_included INTEGER DEFAULT 0,
-                    quality_gate_passed INTEGER DEFAULT 0
+                    quality_gate_passed INTEGER DEFAULT 0,
+                    completeness_score REAL DEFAULT 0
                 )
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(report_jobs)").fetchall()
+            }
+            column_migrations = {
+                "fallback_used": "ALTER TABLE report_jobs ADD COLUMN fallback_used INTEGER DEFAULT 0",
+                "osint_available": "ALTER TABLE report_jobs ADD COLUMN osint_available INTEGER DEFAULT 0",
+                "visuals_included": "ALTER TABLE report_jobs ADD COLUMN visuals_included INTEGER DEFAULT 0",
+                "quality_gate_passed": "ALTER TABLE report_jobs ADD COLUMN quality_gate_passed INTEGER DEFAULT 0",
+                "completeness_score": "ALTER TABLE report_jobs ADD COLUMN completeness_score REAL DEFAULT 0",
+            }
+            for column_name, migration_sql in column_migrations.items():
+                if column_name not in existing_columns:
+                    try:
+                        connection.execute(migration_sql)
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" not in str(exc).lower():
+                            raise
             connection.commit()
 
     def recover_incomplete_jobs(self):
@@ -152,6 +171,7 @@ class ReportJobStore:
         job = dict(row)
         for field_name in ("fallback_used", "osint_available", "visuals_included", "quality_gate_passed"):
             job[field_name] = bool(job.get(field_name))
+        job["completeness_score"] = float(job.get("completeness_score") or 0)
         return job
 
     def count_active_jobs(self):
@@ -202,6 +222,8 @@ class ReportJobStore:
                     SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_jobs,
                     SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_jobs,
                     SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END) AS fallback_jobs,
+                    SUM(CASE WHEN quality_gate_passed = 1 THEN 1 ELSE 0 END) AS accepted_jobs,
+                    AVG(completeness_score) AS avg_completeness_score,
                     AVG(duration_seconds) AS avg_duration
                 FROM report_jobs
                 WHERE status IN ('ready', 'error') AND updated_at >= ?
@@ -213,18 +235,24 @@ class ReportJobStore:
         ready_jobs = int(row["ready_jobs"] or 0)
         error_jobs = int(row["error_jobs"] or 0)
         fallback_jobs = int(row["fallback_jobs"] or 0)
+        accepted_jobs = int(row["accepted_jobs"] or 0)
         avg_duration = round(float(row["avg_duration"]), 2) if row["avg_duration"] is not None else None
+        avg_completeness = round(float(row["avg_completeness_score"]), 1) if row["avg_completeness_score"] is not None else None
         success_rate = round((ready_jobs / completed_jobs) * 100, 1) if completed_jobs else None
         fallback_rate = round((fallback_jobs / completed_jobs) * 100, 1) if completed_jobs else None
+        accepted_rate = round((accepted_jobs / completed_jobs) * 100, 1) if completed_jobs else None
 
         return {
             "completedJobs": completed_jobs,
             "readyJobs": ready_jobs,
             "errorJobs": error_jobs,
             "fallbackJobs": fallback_jobs,
+            "acceptedJobs": accepted_jobs,
             "averageDurationSeconds": avg_duration,
+            "averageCompletenessScore": avg_completeness,
             "successRatePct": success_rate,
             "fallbackRatePct": fallback_rate,
+            "acceptedRatePct": accepted_rate,
         }
 
 
@@ -257,6 +285,7 @@ class ReportJobManager:
             "osintAvailable": job["osint_available"],
             "visualsIncluded": job["visuals_included"],
             "qualityGatePassed": job["quality_gate_passed"],
+            "completenessScore": job["completeness_score"],
         }
 
     def submit(self, notes):
@@ -309,6 +338,7 @@ class ReportJobManager:
             osint_available=1 if run_metadata.get("osint_available") else 0,
             visuals_included=1 if run_metadata.get("visuals_included") else 0,
             quality_gate_passed=1 if run_metadata.get("quality_gate_passed") else 0,
+            completeness_score=float(run_metadata.get("completeness_score") or 0),
             error=None,
         )
 
@@ -362,6 +392,7 @@ def create_app():
         REPORT_JOB_RETENTION_SECONDS,
         REPORT_MAX_CONCURRENT_JOBS,
         REPORT_MAX_PENDING_JOBS,
+        REPORT_MIN_COMPLETENESS_SCORE,
         REPORT_METRICS_WINDOW_HOURS,
         REPORT_STATUS_POLL_INTERVAL_MS,
         SMART_SUGGESTIONS,
@@ -386,6 +417,7 @@ def create_app():
 
     app.config["knowledge_base"] = knowledge_base
     app.config["job_manager"] = job_manager
+    app.config["min_completeness_score"] = REPORT_MIN_COMPLETENESS_SCORE
     app.config["status_poll_interval_ms"] = REPORT_STATUS_POLL_INTERVAL_MS
 
     @app.route("/")
@@ -463,6 +495,7 @@ def create_app():
             current_app.config["knowledge_base"].df is not None
             and not current_app.config["knowledge_base"].df.empty
         )
+        health_snapshot["minimumCompletenessScore"] = current_app.config["min_completeness_score"]
         return jsonify(health_snapshot)
 
     return app

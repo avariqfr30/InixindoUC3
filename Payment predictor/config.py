@@ -26,6 +26,7 @@ REPORT_ARTIFACTS_DIR = os.getenv(
     "REPORT_ARTIFACTS_DIR",
     os.path.join(DATA_DIR, "generated_reports"),
 )
+REPORT_MIN_COMPLETENESS_SCORE = float(os.getenv("REPORT_MIN_COMPLETENESS_SCORE", "80"))
 JOB_STATE_DB_PATH = os.getenv(
     "JOB_STATE_DB_PATH",
     os.path.join(DATA_DIR, "report_jobs.db"),
