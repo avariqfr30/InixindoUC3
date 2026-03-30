@@ -39,7 +39,7 @@
 
         <div id="step-config" class="hidden">
             <h2><span style="color: #CC0000;">Inixindo</span> Cash In Intelligence</h2>
-            <p class="sub">Sistem AI akan membaca <strong>histori data cash in dan karakter penagihan</strong> untuk membuat deskripsi, diagnosa, prediksi, dan rekomendasi tindakan terhadap arus kas masuk.</p>
+            <p class="sub">Sistem AI akan membaca <strong>histori data cash in dan karakter penagihan</strong> untuk membuat laporan yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
             
             <label for="input-notes">Fokus Analisis Tambahan (Opsional)</label>
             <textarea id="input-notes" placeholder="Atau klik rekomendasi instruksi makro di bawah ini..."></textarea>
@@ -89,7 +89,8 @@
         const appState = {
             currentJobId: null,
             statusTimer: null,
-            statusPollIntervalMs: 1500
+            statusPollIntervalMs: 1500,
+            reviewContext: null
         };
         
         function renderSuggestions(suggestionsList) {
@@ -122,6 +123,7 @@
                     
                     renderSuggestions(data.suggestions);
                     appState.statusPollIntervalMs = data.statusPollIntervalMs || 1500;
+                    appState.reviewContext = data.reviewContext || null;
                     
                     ui.loader.classList.add('hidden'); 
                     ui.configStep.classList.remove('hidden');
@@ -138,10 +140,21 @@
         loadConfig();
         
         ui.btnReview.onclick = () => { 
+            const reviewContext = appState.reviewContext || {};
             let html = `
-                <div class="review-row"><span>Cakupan Data</span><span>Seluruh Histori Database Inixindo (All-Time)</span></div>
-                <div class="review-row"><span>Target Analisis</span><span>Deskripsi, Diagnosa, Prediksi, dan Preskripsi Cash In</span></div>
+                <div class="review-row"><span>Sumber Data</span><span>${reviewContext.dataSource || 'Sumber data aktif'}</span></div>
+                <div class="review-row"><span>Status Data</span><span>${reviewContext.dataStatus || 'Data siap dianalisis'}</span></div>
+                <div class="review-row"><span>Cakupan Operasional</span><span>${reviewContext.operationalScope || 'Analisis cash in dan prioritas penagihan'}</span></div>
+                <div class="review-row"><span>Tujuan Laporan</span><span>${reviewContext.reportPurpose || 'Bahan diskusi internal manajemen'}</span></div>
             `;
+            if (reviewContext.readinessCaveat) {
+                html += `<p style="margin:16px 0 8px 0; font-weight:600; color:#0f172a;">Catatan Kesiapan</p>
+                    <p style="margin:0 0 12px 0; color:#475569; line-height:1.5;">${reviewContext.readinessCaveat}</p>`;
+            }
+            if (reviewContext.controlNote) {
+                html += `<p style="margin:0; font-weight:600; color:#0f172a;">Catatan Kontrol</p>
+                    <p style="margin:8px 0 0 0; color:#475569; line-height:1.5;">${reviewContext.controlNote}</p>`;
+            }
             ui.reviewText.innerHTML = html; 
             ui.configStep.classList.add('hidden'); 
             ui.reviewStep.classList.remove('hidden'); 

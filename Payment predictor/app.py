@@ -173,11 +173,13 @@ def create_app():
         active_knowledge_base = current_app.config["knowledge_base"]
         if active_knowledge_base.df is None or active_knowledge_base.df.empty:
             return jsonify({"error": "Financial data is currently unavailable."})
+        review_context = active_knowledge_base.get_review_context()
 
         return jsonify(
             {
                 "suggestions": SMART_SUGGESTIONS,
                 "statusPollIntervalMs": current_app.config["status_poll_interval_ms"],
+                "reviewContext": review_context,
             }
         )
 
