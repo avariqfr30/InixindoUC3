@@ -1,11 +1,12 @@
 import argparse
 import concurrent.futures
-import io
 import logging
 import os
+import sqlite3
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from flask import Flask, current_app, jsonify, render_template, request, send_file
 from flask_cors import CORS
@@ -14,136 +15,354 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
+class QueueCapacityError(Exception):
+    def __init__(self, active_jobs, max_pending_jobs):
+        self.active_jobs = active_jobs
+        self.max_pending_jobs = max_pending_jobs
+        super().__init__(
+            f"Queue is full ({active_jobs}/{max_pending_jobs} active jobs). Please try again in a few minutes."
+        )
+
+
+class ReportJobStore:
+    def __init__(self, db_path, artifacts_dir):
+        self.db_path = str(db_path)
+        self.artifacts_dir = Path(artifacts_dir)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.Lock()
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self):
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS report_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    started_at REAL,
+                    duration_seconds REAL,
+                    error TEXT,
+                    filename TEXT,
+                    artifact_path TEXT,
+                    notes_preview TEXT,
+                    fallback_used INTEGER DEFAULT 0,
+                    osint_available INTEGER DEFAULT 0,
+                    visuals_included INTEGER DEFAULT 0,
+                    quality_gate_passed INTEGER DEFAULT 0
+                )
+                """
+            )
+            connection.commit()
+
+    def recover_incomplete_jobs(self):
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE report_jobs
+                SET status = 'error',
+                    error = 'Service restarted before this job completed.',
+                    updated_at = ?
+                WHERE status IN ('queued', 'running')
+                """,
+                (time.time(),),
+            )
+            connection.commit()
+
+    def cleanup_expired(self, retention_seconds):
+        cutoff_time = time.time() - retention_seconds
+        with self.lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, artifact_path
+                FROM report_jobs
+                WHERE status IN ('ready', 'error') AND updated_at < ?
+                """,
+                (cutoff_time,),
+            ).fetchall()
+
+            for row in rows:
+                artifact_path = row["artifact_path"]
+                if artifact_path:
+                    try:
+                        Path(artifact_path).unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("Unable to remove expired artifact for job %s.", row["job_id"])
+
+            connection.execute(
+                """
+                DELETE FROM report_jobs
+                WHERE status IN ('ready', 'error') AND updated_at < ?
+                """,
+                (cutoff_time,),
+            )
+            connection.commit()
+
+    def create_job(self, job_id, notes_preview):
+        now = time.time()
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO report_jobs (
+                    job_id,
+                    status,
+                    created_at,
+                    updated_at,
+                    notes_preview
+                ) VALUES (?, 'queued', ?, ?, ?)
+                """,
+                (job_id, now, now, notes_preview),
+            )
+            connection.commit()
+
+    def update_job(self, job_id, **fields):
+        if not fields:
+            return
+
+        assignments = []
+        values = []
+        for field_name, field_value in fields.items():
+            assignments.append(f"{field_name} = ?")
+            values.append(field_value)
+        values.append(job_id)
+
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                f"UPDATE report_jobs SET {', '.join(assignments)} WHERE job_id = ?",
+                values,
+            )
+            connection.commit()
+
+    def get_job(self, job_id):
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM report_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+
+        if not row:
+            return None
+
+        job = dict(row)
+        for field_name in ("fallback_used", "osint_available", "visuals_included", "quality_gate_passed"):
+            job[field_name] = bool(job.get(field_name))
+        return job
+
+    def count_active_jobs(self):
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM report_jobs WHERE status IN ('queued', 'running')"
+            ).fetchone()
+        return int(row["total"] if row else 0)
+
+    def count_queued_ahead(self, job_id, created_at):
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM report_jobs
+                WHERE job_id != ?
+                  AND status IN ('queued', 'running')
+                  AND created_at < ?
+                """,
+                (job_id, created_at),
+            ).fetchone()
+        return int(row["total"] if row else 0)
+
+    def get_status_counts(self):
+        counts = {"queuedJobs": 0, "runningJobs": 0, "readyJobs": 0, "errorJobs": 0}
+        with self.lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM report_jobs
+                GROUP BY status
+                """
+            ).fetchall()
+
+        for row in rows:
+            status_key = f"{row['status']}Jobs"
+            if status_key in counts:
+                counts[status_key] = int(row["total"])
+        return counts
+
+    def get_recent_metrics(self, window_hours):
+        since_timestamp = time.time() - (window_hours * 3600)
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS completed_jobs,
+                    SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_jobs,
+                    SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_jobs,
+                    SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END) AS fallback_jobs,
+                    AVG(duration_seconds) AS avg_duration
+                FROM report_jobs
+                WHERE status IN ('ready', 'error') AND updated_at >= ?
+                """,
+                (since_timestamp,),
+            ).fetchone()
+
+        completed_jobs = int(row["completed_jobs"] or 0)
+        ready_jobs = int(row["ready_jobs"] or 0)
+        error_jobs = int(row["error_jobs"] or 0)
+        fallback_jobs = int(row["fallback_jobs"] or 0)
+        avg_duration = round(float(row["avg_duration"]), 2) if row["avg_duration"] is not None else None
+        success_rate = round((ready_jobs / completed_jobs) * 100, 1) if completed_jobs else None
+        fallback_rate = round((fallback_jobs / completed_jobs) * 100, 1) if completed_jobs else None
+
+        return {
+            "completedJobs": completed_jobs,
+            "readyJobs": ready_jobs,
+            "errorJobs": error_jobs,
+            "fallbackJobs": fallback_jobs,
+            "averageDurationSeconds": avg_duration,
+            "successRatePct": success_rate,
+            "fallbackRatePct": fallback_rate,
+        }
+
+
 class ReportJobManager:
-    def __init__(self, report_generator, max_workers, retention_seconds):
+    def __init__(self, report_generator, max_workers, max_pending_jobs, retention_seconds, artifacts_dir, job_store, metrics_window_hours):
         self.report_generator = report_generator
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self.max_workers = max_workers
+        self.max_pending_jobs = max(max_pending_jobs, max_workers)
         self.retention_seconds = retention_seconds
-        self.jobs = {}
+        self.artifacts_dir = Path(artifacts_dir)
+        self.job_store = job_store
+        self.metrics_window_hours = metrics_window_hours
         self.lock = threading.Lock()
+        self.job_store.recover_incomplete_jobs()
+        self.job_store.cleanup_expired(self.retention_seconds)
 
     def _cleanup_locked(self):
-        now = time.time()
-        expired_job_ids = [
-            job_id
-            for job_id, job in self.jobs.items()
-            if job["status"] in {"ready", "error"}
-            and (now - job["updated_at"]) > self.retention_seconds
-        ]
-        for job_id in expired_job_ids:
-            self.jobs.pop(job_id, None)
+        self.job_store.cleanup_expired(self.retention_seconds)
 
-    def _serialize_job_locked(self, job_id, job):
-        queued_ahead = sum(
-            1
-            for other_job_id, other_job in self.jobs.items()
-            if other_job_id != job_id
-            and other_job["status"] in {"queued", "running"}
-            and other_job["created_at"] < job["created_at"]
-        )
+    def _serialize_job(self, job):
+        queued_ahead = self.job_store.count_queued_ahead(job["job_id"], job["created_at"])
         return {
-            "jobId": job_id,
+            "jobId": job["job_id"],
             "status": job["status"],
             "queuedAhead": queued_ahead,
             "durationSeconds": round(job["duration_seconds"], 2) if job["duration_seconds"] is not None else None,
             "error": job["error"],
+            "fallbackUsed": job["fallback_used"],
+            "osintAvailable": job["osint_available"],
+            "visualsIncluded": job["visuals_included"],
+            "qualityGatePassed": job["quality_gate_passed"],
         }
 
     def submit(self, notes):
         job_id = uuid.uuid4().hex
-        now = time.time()
+        notes_preview = (notes or "").strip().replace("\n", " ")[:240]
 
         with self.lock:
             self._cleanup_locked()
-            self.jobs[job_id] = {
-                "status": "queued",
-                "created_at": now,
-                "updated_at": now,
-                "duration_seconds": None,
-                "error": None,
-                "filename": None,
-                "file_bytes": None,
-            }
+            active_jobs = self.job_store.count_active_jobs()
+            if active_jobs >= self.max_pending_jobs:
+                raise QueueCapacityError(active_jobs, self.max_pending_jobs)
+            self.job_store.create_job(job_id, notes_preview)
 
         self.executor.submit(self._run_job, job_id, notes)
         return job_id
 
     def _run_job(self, job_id, notes):
-        with self.lock:
-            job = self.jobs.get(job_id)
-            if not job:
-                return
-            job["status"] = "running"
-            job["updated_at"] = time.time()
-
         started_at = time.time()
+        self.job_store.update_job(
+            job_id,
+            status="running",
+            started_at=started_at,
+            updated_at=started_at,
+            error=None,
+        )
 
         try:
-            document, file_name = self.report_generator.run(notes)
-            output_stream = io.BytesIO()
-            document.save(output_stream)
-            file_bytes = output_stream.getvalue()
+            document, file_name, run_metadata = self.report_generator.run(notes)
+            artifact_path = self.artifacts_dir / f"{job_id}_{file_name}.docx"
+            document.save(str(artifact_path))
         except Exception as exc:
             logger.exception("Background report generation failed: %s", exc)
-            with self.lock:
-                job = self.jobs.get(job_id)
-                if not job:
-                    return
-                job["status"] = "error"
-                job["updated_at"] = time.time()
-                job["duration_seconds"] = time.time() - started_at
-                job["error"] = "Document generation failed. Please verify the service configuration."
+            self.job_store.update_job(
+                job_id,
+                status="error",
+                updated_at=time.time(),
+                duration_seconds=time.time() - started_at,
+                error="Document generation failed. Please verify the service configuration.",
+            )
             return
 
-        with self.lock:
-            job = self.jobs.get(job_id)
-            if not job:
-                return
-            job["status"] = "ready"
-            job["updated_at"] = time.time()
-            job["duration_seconds"] = time.time() - started_at
-            job["filename"] = file_name
-            job["file_bytes"] = file_bytes
+        self.job_store.update_job(
+            job_id,
+            status="ready",
+            updated_at=time.time(),
+            duration_seconds=time.time() - started_at,
+            filename=file_name,
+            artifact_path=str(artifact_path),
+            fallback_used=1 if run_metadata.get("fallback_used") else 0,
+            osint_available=1 if run_metadata.get("osint_available") else 0,
+            visuals_included=1 if run_metadata.get("visuals_included") else 0,
+            quality_gate_passed=1 if run_metadata.get("quality_gate_passed") else 0,
+            error=None,
+        )
 
     def get_status(self, job_id):
         with self.lock:
             self._cleanup_locked()
-            job = self.jobs.get(job_id)
-            if not job:
-                return None
-            return self._serialize_job_locked(job_id, job)
+            job = self.job_store.get_job(job_id)
+        if not job:
+            return None
+        return self._serialize_job(job)
 
     def get_download(self, job_id):
         with self.lock:
             self._cleanup_locked()
-            job = self.jobs.get(job_id)
-            if not job:
-                return None
-            if job["status"] != "ready":
-                return {"status": job["status"], "error": job["error"]}
-            return {
-                "filename": job["filename"],
-                "file_bytes": job["file_bytes"],
-            }
+            job = self.job_store.get_job(job_id)
+        if not job:
+            return None
+        if job["status"] != "ready":
+            return {"status": job["status"], "error": job["error"]}
+        artifact_path = job.get("artifact_path")
+        if not artifact_path or not Path(artifact_path).exists():
+            return {"status": "error", "error": "Generated artifact is no longer available."}
+        return {
+            "filename": job["filename"],
+            "artifactPath": artifact_path,
+        }
 
     def get_health(self):
         with self.lock:
             self._cleanup_locked()
-            queued_jobs = sum(1 for job in self.jobs.values() if job["status"] == "queued")
-            running_jobs = sum(1 for job in self.jobs.values() if job["status"] == "running")
-            ready_jobs = sum(1 for job in self.jobs.values() if job["status"] == "ready")
+            status_counts = self.job_store.get_status_counts()
+            metrics = self.job_store.get_recent_metrics(self.metrics_window_hours)
+
+        active_jobs = status_counts["queuedJobs"] + status_counts["runningJobs"]
         return {
-            "queuedJobs": queued_jobs,
-            "runningJobs": running_jobs,
-            "readyJobs": ready_jobs,
+            **status_counts,
+            "activeJobs": active_jobs,
+            "maxConcurrentJobs": self.max_workers,
+            "maxPendingJobs": self.max_pending_jobs,
+            "acceptingJobs": active_jobs < self.max_pending_jobs,
+            "metricsWindowHours": self.metrics_window_hours,
+            "recentMetrics": metrics,
         }
 
 
 def create_app():
     from config import (
         DB_URI,
+        JOB_STATE_DB_PATH,
+        REPORT_ARTIFACTS_DIR,
         REPORT_JOB_RETENTION_SECONDS,
         REPORT_MAX_CONCURRENT_JOBS,
+        REPORT_MAX_PENDING_JOBS,
+        REPORT_METRICS_WINDOW_HOURS,
         REPORT_STATUS_POLL_INTERVAL_MS,
         SMART_SUGGESTIONS,
     )
@@ -154,10 +373,15 @@ def create_app():
 
     knowledge_base = KnowledgeBase(DB_URI)
     report_generator = ReportGenerator(knowledge_base)
+    job_store = ReportJobStore(JOB_STATE_DB_PATH, REPORT_ARTIFACTS_DIR)
     job_manager = ReportJobManager(
         report_generator=report_generator,
         max_workers=REPORT_MAX_CONCURRENT_JOBS,
+        max_pending_jobs=REPORT_MAX_PENDING_JOBS,
         retention_seconds=REPORT_JOB_RETENTION_SECONDS,
+        artifacts_dir=REPORT_ARTIFACTS_DIR,
+        job_store=job_store,
+        metrics_window_hours=REPORT_METRICS_WINDOW_HOURS,
     )
 
     app.config["knowledge_base"] = knowledge_base
@@ -188,7 +412,19 @@ def create_app():
         payload = request.get_json(silent=True) or {}
         notes = payload.get("notes", "")
         active_job_manager = current_app.config["job_manager"]
-        job_id = active_job_manager.submit(notes)
+        try:
+            job_id = active_job_manager.submit(notes)
+        except QueueCapacityError as exc:
+            return (
+                jsonify(
+                    {
+                        "error": str(exc),
+                        "activeJobs": exc.active_jobs,
+                        "maxPendingJobs": exc.max_pending_jobs,
+                    }
+                ),
+                429,
+            )
         return jsonify({"jobId": job_id}), 202
 
     @app.route("/jobs/<job_id>")
@@ -205,13 +441,10 @@ def create_app():
         download_payload = active_job_manager.get_download(job_id)
         if download_payload is None:
             return jsonify({"error": "Job not found."}), 404
-        if "file_bytes" not in download_payload:
+        if "artifactPath" not in download_payload:
             return jsonify(download_payload), 409
-
-        output_stream = io.BytesIO(download_payload["file_bytes"])
-        output_stream.seek(0)
         return send_file(
-            output_stream,
+            download_payload["artifactPath"],
             as_attachment=True,
             download_name=f"{download_payload['filename']}.docx",
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
