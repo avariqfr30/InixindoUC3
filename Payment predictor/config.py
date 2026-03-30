@@ -50,6 +50,8 @@ SMART_SUGGESTIONS = [
     "Diagnosa akar masalah cash in berdasarkan pola kelas pembayaran, jenis partner, dan catatan historis penagihan.",
     "Prediksi risiko penurunan cash in 1-2 kuartal ke depan dan tandai segmen partner yang perlu diawasi.",
     "Berikan rekomendasi tindakan prioritas untuk mempercepat cash in dan menurunkan invoice berisiko.",
+    "Sorot batasan data, asumsi kerja, dan tingkat keyakinan analisis agar laporan siap dibahas manajemen.",
+    "Jelaskan risiko kontrol, penanggung jawab utama, dan prasyarat implementasi agar tindak lanjut bisa dijalankan.",
 ]
 
 FINANCE_SYSTEM_PROMPT = """
@@ -75,6 +77,9 @@ The report must be detailed enough for an internal meeting, numerically consiste
 === USER FOCUS ===
 {user_focus}
 
+=== CONFIDENCE, CONTROL, AND EXECUTION SIGNALS ===
+{readiness_signals}
+
 === ACTIVE SECTION SCOPE ===
 {section_scope}
 
@@ -96,11 +101,17 @@ MANDATORY RULES:
    - short-term forecast or scenarios,
    - management implications,
    - concrete next actions.
-12. If this pass includes `# Analisis Prediktif`, include a scenario discussion for upside, base case, and downside using the supplied analysis brief.
-13. If this pass includes `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
-   `Prioritas | Fokus | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan`
-14. Avoid vague phrases such as `perlu perhatian lebih` unless followed by a specific action and expected impact.
-15. Do not add an introduction before `# Ringkasan Eksekutif`.
+12. If this pass includes `# Ringkasan Eksekutif`, include `### Dampak Bisnis` and `### Tingkat Keyakinan dan Caveat`.
+13. If this pass includes `# Analisis Deskriptif Cash In`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
+14. If this pass includes `# Analisis Diagnostik`, include `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
+15. If this pass includes `# Analisis Prediktif`, include `### Dasar Proyeksi`, `### Skenario 1-2 Kuartal`, and `### Implikasi terhadap Rencana Kas`.
+16. If this pass includes `# Rekomendasi Preskriptif`, include `### Prinsip Tindakan`, `### Prasyarat Implementasi`, and `### Kesiapan Pelaksanaan`.
+17. If this pass includes `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
+   `Prioritas | Fokus | Penanggung Jawab | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan`
+18. Avoid vague phrases such as `perlu perhatian lebih` unless followed by a specific action and expected impact.
+19. Do not add an introduction before `# Ringkasan Eksekutif`.
+20. If `### Konteks OSINT Pendukung` is included, summarize external signals in business language and mention source domains naturally.
+21. If visual markers are provided, reproduce them verbatim on standalone lines in the most relevant section and do not modify the marker syntax.
 
 VISUAL MARKERS:
 {visual_prompt}

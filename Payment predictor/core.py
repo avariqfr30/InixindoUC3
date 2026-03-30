@@ -1,3 +1,4 @@
+import copy
 import concurrent.futures
 import io
 import json
@@ -29,6 +30,7 @@ from ollama import Client
 from sqlalchemy import create_engine
 
 from config import (
+    APP_SERVER,
     DATA_ACQUISITION_MODE,
     DATA_DIR,
     DEFAULT_COLOR,
@@ -47,12 +49,14 @@ from config import (
     OLLAMA_HOST,
     PERSONAS,
     REPORT_NUM_CTX,
+    REPORT_MAX_CONCURRENT_JOBS,
     REPORT_NUM_PREDICT,
     REPORT_REPEAT_PENALTY,
     REPORT_SECTION_SEQUENCE,
     REPORT_TEMPERATURE,
     REPORT_TOP_P,
     SERPER_API_KEY,
+    WAITRESS_THREADS,
     WRITER_FIRM_NAME,
 )
 
@@ -288,14 +292,22 @@ class KnowledgeBase:
     def get_report_context(self, notes=""):
         with self.cache_lock:
             if self.report_context_cache is None:
-                self.report_context_cache = FinancialAnalyzer.build_report_context(self.df)
+                self.report_context_cache = FinancialAnalyzer.build_report_context(
+                    self.df,
+                    data_mode=self.data_mode,
+                )
 
-        context = dict(self.report_context_cache)
+        context = copy.deepcopy(self.report_context_cache)
         notes = (notes or "").strip()
         if notes:
             focused_evidence = self.query(notes, max_results=10) or context["evidence"]
             context["evidence"] = FinancialAnalyzer.normalize_evidence_text(focused_evidence)
+        context.update(FinancialAnalyzer.apply_silent_assessment(context, notes))
         return context
+
+    def get_review_context(self):
+        report_context = self.get_report_context("")
+        return report_context.get("review_context", {})
 
 
 class FinancialAnalyzer:
@@ -338,6 +350,61 @@ class FinancialAnalyzer:
         "Kelas E": 0.05,
         "Tidak Diketahui": 0.50,
     }
+    CONFIDENCE_LABELS = {
+        1: "rendah",
+        2: "rendah",
+        3: "menengah",
+        4: "tinggi",
+        5: "tinggi",
+    }
+    OWNERSHIP_KEYWORDS = (
+        "owner",
+        "pic",
+        "account manager",
+        "finance manager",
+        "finance",
+        "collection",
+        "cfo",
+        "direktur",
+        "direksi",
+        "sponsor",
+        "project lead",
+        "project manager",
+        "kepala",
+        "manajer",
+        "tim",
+        "business translator",
+        "ai engineer",
+        "it",
+    )
+    ADOPTION_KEYWORDS = (
+        "pilot",
+        "uat",
+        "testing",
+        "rollout",
+        "implementasi",
+        "adopsi",
+        "pelatihan",
+        "sosialisasi",
+        "workshop",
+        "change management",
+        "manajemen",
+        "governance",
+        "kontrol",
+        "roadmap",
+    )
+    CAUTION_KEYWORDS = (
+        "asumsi",
+        "batasan",
+        "risiko",
+        "kontrol",
+        "governance",
+        "pilot",
+        "owner",
+        "pic",
+        "siap",
+        "implementasi",
+    )
 
     DELAY_THEME_KEYWORDS = {
         "Siklus anggaran": ("dipa", "anggaran", "apbn", "apbd", "pencairan", "budget"),
@@ -495,6 +562,199 @@ class FinancialAnalyzer:
 
         return "\n".join(lines) if lines else "- Tidak ada catatan historis yang cukup untuk dikutip."
 
+    @staticmethod
+    def _clamp_score(score):
+        return max(1, min(5, int(round(score))))
+
+    @classmethod
+    def _score_to_confidence(cls, score):
+        return cls.CONFIDENCE_LABELS.get(cls._clamp_score(score), "menengah")
+
+    @staticmethod
+    def _format_list_as_sentence(items):
+        filtered_items = [str(item).strip() for item in items if str(item).strip()]
+        if not filtered_items:
+            return "-"
+        if len(filtered_items) == 1:
+            return filtered_items[0]
+        if len(filtered_items) == 2:
+            return f"{filtered_items[0]} dan {filtered_items[1]}"
+        return f"{', '.join(filtered_items[:-1])}, dan {filtered_items[-1]}"
+
+    @classmethod
+    def _count_keyword_hits(cls, raw_text, keywords):
+        lowered_text = str(raw_text or "").lower()
+        return sum(1 for keyword in keywords if keyword in lowered_text)
+
+    @classmethod
+    def _build_hidden_dimensions(cls, base_profile, notes):
+        notes = (notes or "").strip()
+        missing_core_fields = len(base_profile.get("missing_core_fields", []))
+        total_invoices = base_profile.get("total_invoices", 0)
+        data_mode = base_profile.get("data_mode", "demo")
+        owner_hits = cls._count_keyword_hits(notes, cls.OWNERSHIP_KEYWORDS)
+        adoption_hits = cls._count_keyword_hits(notes, cls.ADOPTION_KEYWORDS)
+
+        business_value_score = 4 if total_invoices > 0 and base_profile.get("high_risk_invoices", 0) > 0 else 3
+        if notes:
+            business_value_score += 1
+
+        data_model_score = 4 if missing_core_fields <= 1 and total_invoices >= 25 else 3
+        if data_mode == "demo":
+            data_model_score -= 1
+
+        infrastructure_score = 4 if APP_SERVER == "waitress" else 2
+        if REPORT_MAX_CONCURRENT_JOBS >= 4:
+            infrastructure_score += 1
+        if APP_SERVER == "waitress" and WAITRESS_THREADS < 8:
+            infrastructure_score -= 1
+
+        people_score = 2
+        if owner_hits >= 3:
+            people_score = 4
+        elif owner_hits >= 1:
+            people_score = 3
+
+        governance_score = 4
+        if data_mode == "demo":
+            governance_score -= 1
+        if missing_core_fields >= 2:
+            governance_score -= 1
+
+        adoption_score = 2
+        if adoption_hits >= 3:
+            adoption_score = 4
+        elif adoption_hits >= 1 or owner_hits >= 2:
+            adoption_score = 3
+
+        dimensions = {
+            "business_value_clarity": cls._clamp_score(business_value_score),
+            "data_model_readiness": cls._clamp_score(data_model_score),
+            "infrastructure_readiness": cls._clamp_score(infrastructure_score),
+            "people_ownership_readiness": cls._clamp_score(people_score),
+            "governance_control_readiness": cls._clamp_score(governance_score),
+            "organizational_adoption_readiness": cls._clamp_score(adoption_score),
+        }
+        note_profile = {
+            "owner_hits": owner_hits,
+            "adoption_hits": adoption_hits,
+            "has_caution_prompt": bool(cls._count_keyword_hits(notes, cls.CAUTION_KEYWORDS)),
+        }
+        return dimensions, note_profile
+
+    @classmethod
+    def _build_readiness_outputs(cls, base_profile, hidden_dimensions, note_profile):
+        data_mode = base_profile.get("data_mode", "demo")
+        total_invoices = base_profile.get("total_invoices", 0)
+        data_source_label = "dataset demo lokal" if data_mode == "demo" else "API internal perusahaan"
+        core_field_summary = (
+            f"{base_profile.get('core_fields_available', 0)}/{base_profile.get('core_fields_expected', 6)} atribut inti tersedia"
+        )
+        missing_fields_sentence = cls._format_list_as_sentence(base_profile.get("missing_core_fields", []))
+        partner_focus_sentence = cls._format_list_as_sentence(base_profile.get("top_risk_partners", []))
+
+        data_confidence = cls._score_to_confidence(hidden_dimensions["data_model_readiness"])
+        deployment_confidence = cls._score_to_confidence(hidden_dimensions["infrastructure_readiness"])
+        ownership_confidence = cls._score_to_confidence(hidden_dimensions["people_ownership_readiness"])
+        control_confidence = cls._score_to_confidence(hidden_dimensions["governance_control_readiness"])
+        adoption_confidence = cls._score_to_confidence(hidden_dimensions["organizational_adoption_readiness"])
+        expected_gap_base = base_profile.get("expected_gap_base", 0)
+
+        if data_mode == "demo":
+            data_mode_line = (
+                "Data masih berasal dari dataset demo lokal, sehingga laporan cocok untuk simulasi diskusi internal "
+                "dan pengujian alur, bukan untuk komitmen operasional final."
+            )
+        else:
+            data_mode_line = (
+                "Data sudah ditarik dari API internal, sehingga laporan lebih layak dipakai sebagai dasar prioritas operasional "
+                "selama sinkronisasi dan validasi sumber tetap terjaga."
+            )
+
+        readiness_signals = [
+            f"- Business value clarity: {hidden_dimensions['business_value_clarity']}/5. Use case cash in jelas dan langsung terkait percepatan realisasi invoice, pengurangan risiko keterlambatan, dan prioritas follow-up.",
+            f"- Data/model readiness: {hidden_dimensions['data_model_readiness']}/5. Sumber data saat ini adalah {data_source_label} dengan {total_invoices} invoice dan {core_field_summary}.",
+            f"- Infrastructure/deployment readiness: {hidden_dimensions['infrastructure_readiness']}/5. Runtime aktif adalah {APP_SERVER} dengan queue {REPORT_MAX_CONCURRENT_JOBS} job dan thread Waitress {WAITRESS_THREADS}.",
+            f"- People/ownership readiness: {hidden_dimensions['people_ownership_readiness']}/5. Sinyal owner atau sponsor eksplisit dari catatan pengguna = {note_profile['owner_hits']}.",
+            f"- Governance/risk control: {hidden_dimensions['governance_control_readiness']}/5. Internal data tetap menjadi sumber fakta utama, OSINT hanya pendukung, dan fallback menjaga konsistensi struktur laporan.",
+            f"- Organizational adoption readiness: {hidden_dimensions['organizational_adoption_readiness']}/5. Sinyal kesiapan adopsi atau pilot dari catatan pengguna = {note_profile['adoption_hits']}.",
+            "- Gunakan sinyal ini untuk mengatur tingkat keyakinan, caveat, risiko kontrol, kepemilikan tindakan, dan prasyarat implementasi secara halus tanpa menyebut kerangka internal apa pun.",
+        ]
+
+        confidence_lines = [
+            f"- Tingkat keyakinan data saat ini {data_confidence} karena laporan memakai {data_source_label} dengan {core_field_summary}.",
+            f"- Kesiapan operasional aplikasi berada pada tingkat {deployment_confidence}; jalur deployment saat ini {APP_SERVER} dengan dukungan antrean {REPORT_MAX_CONCURRENT_JOBS} pekerjaan paralel.",
+            f"- Kepastian penanggung jawab lintas fungsi berada pada tingkat {ownership_confidence}; sinyal owner eksplisit yang tertangkap dari catatan pengguna = {note_profile['owner_hits']}.",
+            data_mode_line,
+        ]
+
+        assumption_lines = [
+            f"- Analisis ini mengasumsikan {total_invoices} invoice yang tersedia sudah mewakili pola penagihan utama pada portofolio yang dibahas.",
+            f"- Atribut inti yang terbaca saat ini adalah {core_field_summary}; atribut yang belum kuat atau belum tersedia: {missing_fields_sentence}.",
+            "- Proyeksi cash in dibaca sebagai skenario manajemen berbasis histori kelas pembayaran, bukan kepastian realisasi kas.",
+        ]
+        if data_mode == "demo":
+            assumption_lines.append("- Karena masih demo mode, angka dan narasi diposisikan sebagai bahan kalibrasi diskusi sebelum integrasi source-of-truth internal.")
+        if note_profile["owner_hits"] == 0:
+            assumption_lines.append("- Catatan pengguna belum menyebut penanggung jawab spesifik, sehingga penetapan owner tindakan masih perlu divalidasi saat rapat.")
+
+        control_lines = [
+            f"- Postur kontrol saat ini berada pada tingkat {control_confidence}; invoice prioritas tetap memerlukan verifikasi manual sebelum komitmen eskalasi atau forecast dinaikkan.",
+            f"- Fokus kontrol utama saat ini berada pada konsentrasi risiko di {partner_focus_sentence} dan invoice Kelas D/E yang bernilai besar.",
+            "- Sebelum eskalasi ke klien, verifikasi ulang invoice prioritas, kelengkapan dokumen, dan status komitmen bayar terbaru.",
+            "- OSINT hanya dipakai sebagai konteks eksternal; fakta invoice, nilai, dan prioritas tetap harus mengikuti data internal yang tersedia.",
+        ]
+        if data_mode == "demo":
+            control_lines.append("- Hindari menjadikan hasil demo sebagai dasar komitmen eksternal atau forecast final tanpa verifikasi terhadap sistem internal.")
+        if hidden_dimensions["governance_control_readiness"] <= 2:
+            control_lines.append("- Risiko salah tafsir naik bila data tambahan dan kontrol review manual tidak disiapkan sebelum sesi tindak lanjut.")
+
+        implementation_lines = [
+            f"- Untuk penggunaan operasional yang lebih kuat, pertahankan minimal {REPORT_MAX_CONCURRENT_JOBS} slot antrean dan gunakan runtime {APP_SERVER if APP_SERVER == 'waitress' else 'Waitress pada uji bersama'} untuk akses internal bersama.",
+            "- Pastikan ritme refresh data, sumber invoice prioritas, dan jalur eskalasi ke account owner diputuskan sebelum laporan dipakai sebagai dasar action plan mingguan.",
+        ]
+        if data_mode == "demo":
+            implementation_lines.append("- Langkah implementasi terdekat adalah memetakan endpoint API internal, autentikasi, dan struktur data source-of-truth agar prioritas penagihan tidak lagi bergantung pada dataset simulasi.")
+        else:
+            implementation_lines.append("- Pertahankan monitoring sinkronisasi API, validasi schema, dan fallback dokumen agar kualitas laporan tetap stabil saat dipakai banyak pengguna.")
+
+        organizational_lines = [
+            f"- Kesiapan pelaksanaan saat ini berada pada tingkat {adoption_confidence}; laporan akan lebih mudah dieksekusi bila sponsor bisnis, finance collection, dan account owner duduk pada forum review yang sama.",
+            "- Gunakan laporan ini sebagai bahan keputusan internal: apa yang harus ditagih lebih dulu, siapa yang memimpin eskalasi, dan kontrol apa yang wajib ditutup sebelum follow-up berikutnya.",
+        ]
+        if note_profile["owner_hits"] == 0:
+            organizational_lines.append("- Tetapkan minimal satu owner bisnis dan satu owner operasional untuk setiap cluster invoice prioritas agar keputusan rapat langsung bisa dijalankan.")
+        if note_profile["adoption_hits"] == 0:
+            organizational_lines.append("- Siapkan ritme pilot atau review berkala agar penggunaan laporan tidak berhenti di tahap analisis saja.")
+
+        review_context = {
+            "dataSource": "Demo dataset lokal" if data_mode == "demo" else "API internal perusahaan",
+            "dataStatus": f"{total_invoices} invoice siap dianalisis",
+            "operationalScope": "Analisis cash in, risiko realisasi invoice, dan prioritas tindak lanjut 30 hari.",
+            "reportPurpose": "Bahan diskusi internal manajemen untuk keputusan penagihan, kontrol risiko, dan kesiapan pelaksanaan.",
+            "readinessCaveat": data_mode_line,
+            "controlNote": "Fakta internal tetap menjadi sumber utama; konteks eksternal hanya dipakai untuk memperkaya pembacaan risiko.",
+        }
+        cash_plan_implications = [
+            "- Base case sebaiknya dipakai sebagai jangkar pembacaan rencana kas jangka pendek, sedangkan upside dan downside dipakai untuk menguji kebutuhan eskalasi dan ruang koreksi target.",
+            "- Semakin besar eksposur Kelas D/E pada partner bernilai tinggi, semakin besar kebutuhan buffer keputusan, ritme follow-up, dan verifikasi dokumen sebelum asumsi cash in dinaikkan.",
+        ]
+        if data_mode == "demo":
+            cash_plan_implications.append("- Karena masih demo mode, implikasi rencana kas diposisikan sebagai arah diskusi internal, bukan angka forecast final.")
+        if expected_gap_base > 0:
+            cash_plan_implications.append("- Gap cash in pada base case harus dibaca sebagai ruang risiko yang perlu diperkecil lewat penagihan prioritas, bukan langsung diasumsikan akan pulih otomatis.")
+
+        return {
+            "readiness_signals": "\n".join(readiness_signals),
+            "confidence_summary": "\n".join(confidence_lines),
+            "assumptions": "\n".join(assumption_lines),
+            "controls": "\n".join(control_lines),
+            "implementation_prerequisites": "\n".join(implementation_lines),
+            "organizational_readiness": "\n".join(organizational_lines),
+            "cash_plan_implications": "\n".join(cash_plan_implications),
+            "review_context": review_context,
+        }
+
     @classmethod
     def _build_visual_prompt(cls, class_distribution):
         labels = []
@@ -512,7 +772,18 @@ class FinancialAnalyzer:
         return f"{chart_marker}\n{flow_marker}"
 
     @classmethod
-    def build_report_context(cls, df):
+    def apply_silent_assessment(cls, context, notes=""):
+        base_profile = context.get("base_profile", {})
+        hidden_dimensions, note_profile = cls._build_hidden_dimensions(base_profile, notes)
+        visible_outputs = cls._build_readiness_outputs(base_profile, hidden_dimensions, note_profile)
+        return {
+            **visible_outputs,
+            "hidden_dimensions": hidden_dimensions,
+            "note_profile": note_profile,
+        }
+
+    @classmethod
+    def build_report_context(cls, df, data_mode="demo"):
         if df is None or df.empty:
             return {
                 "financial_summary": "Tidak ada data finansial internal yang tersedia.",
@@ -520,8 +791,29 @@ class FinancialAnalyzer:
                 "management_brief": "Tidak ada management brief yang dapat disusun dari data kosong.",
                 "executive_facts": "- Tidak ada fakta eksekutif yang tersedia.",
                 "scenario_table": "| Skenario | Estimasi Realisasi Cash In | Gap terhadap Total Invoice | Narasi Manajemen |\n|---|---:|---:|---|\n| Base Case | Rp 0 | Rp 0 | Data kosong. |",
-                "priority_table": "| Prioritas | Fokus | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan |\n|---:|---|---|---|---|\n| 1 | Tidak ada data | - | Lengkapi data terlebih dahulu. | Memberi dasar analisis yang layak. |",
+                "priority_table": "| Prioritas | Fokus | Penanggung Jawab | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan |\n|---:|---|---|---|---|---|\n| 1 | Tidak ada data | Finance Collection | - | Lengkapi data terlebih dahulu. | Memberi dasar analisis yang layak. |",
                 "meeting_agenda": "1. Pastikan data internal tersedia sebelum rapat dilanjutkan.",
+                "base_profile": {
+                    "data_mode": data_mode,
+                    "total_invoices": 0,
+                    "total_invoice_value": 0,
+                    "delayed_invoice_value": 0,
+                    "high_risk_invoices": 0,
+                    "high_risk_invoice_value": 0,
+                    "expected_realization_base": 0,
+                    "expected_gap_base": 0,
+                    "core_fields_available": 0,
+                    "core_fields_expected": 6,
+                    "missing_core_fields": [
+                        "periode",
+                        "partner",
+                        "layanan",
+                        "kelas pembayaran",
+                        "nilai invoice",
+                        "catatan keterlambatan",
+                    ],
+                    "top_risk_partners": [],
+                },
                 "visual_prompt": "Do not force visuals.",
             }
 
@@ -532,6 +824,17 @@ class FinancialAnalyzer:
         payment_class_column = cls._find_column(working_df, "payment_class")
         invoice_value_column = cls._find_column(working_df, "invoice_value")
         notes_column = cls._find_column(working_df, "notes")
+        core_field_map = {
+            "periode": period_column,
+            "partner": partner_column,
+            "layanan": service_column,
+            "kelas pembayaran": payment_class_column,
+            "nilai invoice": invoice_value_column,
+            "catatan keterlambatan": notes_column,
+        }
+        missing_core_fields = [
+            label for label, column in core_field_map.items() if not column
+        ]
 
         working_df["__period"] = (
             working_df[period_column].astype(str).fillna("Tidak Diketahui")
@@ -852,8 +1155,8 @@ class FinancialAnalyzer:
             f"| Downside | {cls._format_currency(expected_realization_downside)} | {cls._format_currency(expected_gap_downside)} | Terjadi bila siklus anggaran, likuiditas pelanggan, atau dispute memburuk sehingga semakin banyak invoice bergeser ke kelas risiko tinggi. |",
         ]
         priority_table_lines = [
-            "| Prioritas | Fokus | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan |",
-            "|---:|---|---|---|---|",
+            "| Prioritas | Fokus | Penanggung Jawab | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan |",
+            "|---:|---|---|---|---|---|",
         ]
         management_priority_lines = [
             "| Prioritas | Fokus | Kelas | Nilai Invoice | Isu Utama | Aksi Awal | Fungsi Utama |",
@@ -864,7 +1167,7 @@ class FinancialAnalyzer:
                 f"| {item['priority']} | {item['focus']} | {item['payment_class']} | {cls._format_currency(item['invoice_value'])} | {item['issue']} | {item['action']} | {item['owner']} |"
             )
             priority_table_lines.append(
-                f"| {item['priority']} | {item['focus']} | {item['issue']} | {item['action']} | {item['impact']} |"
+                f"| {item['priority']} | {item['focus']} | {item['owner']} | {item['issue']} | {item['action']} | {item['impact']} |"
             )
         meeting_questions = [
             "Segmen partner mana yang paling layak mendapat eskalasi manajemen karena menggabungkan nilai invoice besar dan skor risiko tinggi?",
@@ -891,6 +1194,22 @@ class FinancialAnalyzer:
             "scenario_table": "\n".join(scenario_lines),
             "priority_table": "\n".join(priority_table_lines),
             "meeting_agenda": "\n".join(agenda_lines),
+            "base_profile": {
+                "data_mode": data_mode,
+                "total_invoices": total_invoices,
+                "total_invoice_value": total_invoice_value,
+                "delayed_invoices": delayed_invoices,
+                "delayed_invoice_value": delayed_invoice_value,
+                "high_risk_invoices": high_risk_invoices,
+                "high_risk_invoice_value": high_risk_invoice_value,
+                "expected_realization_base": expected_realization_base,
+                "expected_gap_base": expected_gap_base,
+                "core_fields_available": len(core_field_map) - len(missing_core_fields),
+                "core_fields_expected": len(core_field_map),
+                "missing_core_fields": missing_core_fields,
+                "top_risk_partners": high_risk_partner_df.index.tolist()[:3],
+                "top_risk_services": high_risk_service_df.index.tolist()[:3],
+            },
             "visual_prompt": cls._build_visual_prompt(class_distribution),
         }
 
@@ -1634,14 +1953,19 @@ class DocumentBuilder:
 class ReportGenerator:
     SECTION_PASSES = (
         {
-            "sections": REPORT_SECTION_SEQUENCE[:3],
+            "sections": REPORT_SECTION_SEQUENCE[:1],
+            "include_visuals": False,
+            "label": "executive_confidence",
+        },
+        {
+            "sections": REPORT_SECTION_SEQUENCE[1:3],
             "include_visuals": True,
-            "label": "executive_overview",
+            "label": "diagnostic_evidence",
         },
         {
             "sections": REPORT_SECTION_SEQUENCE[3:],
             "include_visuals": False,
-            "label": "forward_actions",
+            "label": "actions_readiness",
         },
     )
 
@@ -1687,6 +2011,7 @@ class ReportGenerator:
             internal_evidence=report_context["evidence"],
             industry_trends=macro_osint,
             user_focus=(notes or "Tidak ada fokus tambahan."),
+            readiness_signals=report_context["readiness_signals"],
             section_scope=section_scope,
             section_headings=section_headings,
             visual_prompt=report_context["visual_prompt"] if include_visuals else "",
@@ -1702,9 +2027,24 @@ class ReportGenerator:
             return False
 
         table_header_pattern = re.compile(
-            r"\|\s*Prioritas\s*\|\s*Fokus\s*\|\s*Isu Utama\s*\|\s*Aksi 30 Hari\s*\|\s*Dampak yang Diharapkan\s*\|"
+            r"\|\s*Prioritas\s*\|\s*Fokus\s*\|\s*Penanggung Jawab\s*\|\s*Isu Utama\s*\|\s*Aksi 30 Hari\s*\|\s*Dampak yang Diharapkan\s*\|"
         )
         if not table_header_pattern.search(raw_text):
+            return False
+
+        required_subheadings = [
+            "### Dampak Bisnis",
+            "### Tingkat Keyakinan dan Caveat",
+            "### Batasan Data dan Asumsi",
+            "### Konteks OSINT Pendukung",
+            "### Risiko dan Kontrol",
+            "### Prasyarat Implementasi",
+            "### Kesiapan Pelaksanaan",
+        ]
+        if any(subheading not in raw_text for subheading in required_subheadings):
+            return False
+
+        if "[[CHART:" not in raw_text or "[[FLOW:" not in raw_text:
             return False
 
         return True
@@ -1721,25 +2061,103 @@ class ReportGenerator:
                 flow_marker = stripped_line
         return chart_marker, flow_marker
 
+    @staticmethod
+    def _split_top_level_sections(raw_text):
+        matches = list(re.finditer(r"(?m)^# ([^\n]+?)\s*$", raw_text or ""))
+        if not matches:
+            return []
+
+        sections = []
+        for index, match in enumerate(matches):
+            section_title = match.group(1).strip()
+            section_end = matches[index + 1].start() if index + 1 < len(matches) else len(raw_text)
+            section_body = raw_text[match.end():section_end].strip()
+            sections.append({"title": section_title, "body": section_body})
+
+        return sections
+
+    @staticmethod
+    def _join_top_level_sections(sections):
+        blocks = []
+        for section in sections:
+            section_title = section["title"].strip()
+            section_body = section["body"].strip()
+            if section_body:
+                blocks.append(f"# {section_title}\n{section_body}")
+            else:
+                blocks.append(f"# {section_title}")
+        return "\n\n".join(blocks).strip()
+
+    @staticmethod
+    def _inject_subheading_block(section_body, subheading, content, before_subheading=None):
+        if not content or not str(content).strip():
+            return section_body
+
+        subheading_marker = f"### {subheading}"
+        if subheading_marker in section_body:
+            return section_body
+
+        new_block = f"{subheading_marker}\n{str(content).strip()}"
+        if before_subheading:
+            before_match = re.search(rf"(?m)^### {re.escape(before_subheading)}\s*$", section_body)
+            if before_match:
+                section_prefix = section_body[:before_match.start()].rstrip()
+                section_suffix = section_body[before_match.start():].lstrip()
+                return f"{section_prefix}\n\n{new_block}\n\n{section_suffix}".strip()
+
+        return f"{section_body.rstrip()}\n\n{new_block}".strip()
+
+    @staticmethod
+    def _append_marker_block(section_body, marker):
+        marker = str(marker or "").strip()
+        if not marker or marker in section_body:
+            return section_body
+        return f"{section_body.rstrip()}\n\n{marker}".strip()
+
+    def _finalize_report_content(self, raw_text, report_context, macro_osint):
+        sections = self._split_top_level_sections(raw_text)
+        if not sections:
+            return raw_text
+
+        chart_marker, flow_marker = self._extract_visual_markers(report_context.get("visual_prompt", ""))
+        finalized_sections = []
+
+        for section in sections:
+            section_title = section["title"]
+            section_body = section["body"]
+
+            if section_title == "Analisis Deskriptif Cash In":
+                section_body = self._append_marker_block(section_body, chart_marker)
+            elif section_title == "Analisis Diagnostik":
+                section_body = self._inject_subheading_block(
+                    section_body,
+                    "Konteks OSINT Pendukung",
+                    macro_osint or "Tidak ada tren finansial eksternal yang tersedia.",
+                    before_subheading="Risiko dan Kontrol",
+                )
+            elif section_title == "Rekomendasi Preskriptif":
+                section_body = self._append_marker_block(section_body, flow_marker)
+
+            finalized_sections.append({"title": section_title, "body": section_body})
+
+        return self._join_top_level_sections(finalized_sections)
+
     def _build_fallback_report(self, report_context, notes, macro_osint):
         chart_marker, flow_marker = self._extract_visual_markers(report_context.get("visual_prompt", ""))
         focus_block = notes.strip() if notes and notes.strip() else "Tidak ada fokus tambahan dari pengguna."
 
         lines = [
             "# Ringkasan Eksekutif",
-            "### Kesimpulan Utama",
-            "- Laporan ini menempatkan data invoice internal dan catatan penagihan sebagai sumber utama untuk membaca kualitas cash in, tingkat keterlambatan, dan urgensi tindak lanjut.",
-            "- Fokus pengguna tetap dijaga dalam interpretasi, namun angka dan prioritas diturunkan dari bukti internal dan pola historis yang tersedia.",
+            "### Dampak Bisnis",
+            "- Laporan ini digunakan untuk membantu manajemen membaca risiko cash in, memahami prioritas penagihan, dan menentukan tindakan yang paling cepat berdampak pada realisasi invoice.",
+            "- Fokus pengguna tetap dijaga dalam interpretasi, namun narasi dan prioritas diturunkan dari bukti internal, pola historis, serta konteks pelaksanaan yang tersedia saat ini.",
             "",
-            "## Fakta Eksekutif yang Wajib Dijaga Konsisten",
+            "## Fakta Eksekutif",
             report_context["executive_facts"],
             "",
-            "## Agenda Diskusi Manajemen",
-            report_context["meeting_agenda"],
+            "### Tingkat Keyakinan dan Caveat",
+            report_context["confidence_summary"],
         ]
-
-        if chart_marker:
-            lines.extend(["", chart_marker])
 
         lines.extend(
             [
@@ -1748,8 +2166,8 @@ class ReportGenerator:
                 "### Snapshot Portofolio dan Konsentrasi Risiko",
                 report_context["financial_summary"],
                 "",
-                "### Fokus Pengguna",
-                f"- {focus_block}",
+                "### Batasan Data dan Asumsi",
+                report_context["assumptions"],
                 "",
                 "# Analisis Diagnostik",
                 "### Bukti Internal yang Mewakili",
@@ -1758,9 +2176,19 @@ class ReportGenerator:
                 "### Konteks OSINT Pendukung",
                 macro_osint or "Tidak ada tren eksternal yang tersedia.",
                 "",
-                "### Implikasi Diagnostik",
-                "- Hambatan penagihan perlu dibaca per segmen partner, bukan diperlakukan sebagai satu masalah yang sama untuk seluruh portofolio.",
-                "- Invoice berisiko tinggi perlu dipisahkan menurut akar masalah dominan: siklus anggaran, approval, administrasi, likuiditas, atau sengketa.",
+                "### Risiko dan Kontrol",
+                report_context["controls"],
+                "",
+                "### Fokus Pengguna",
+                f"- {focus_block}",
+            ]
+        )
+
+        if chart_marker:
+            lines.extend(["", chart_marker])
+
+        lines.extend(
+            [
                 "",
                 "# Analisis Prediktif",
                 "### Dasar Proyeksi",
@@ -1770,10 +2198,8 @@ class ReportGenerator:
                 "### Skenario 1-2 Kuartal",
                 report_context["scenario_table"],
                 "",
-                "### Trigger Peringatan Dini",
-                "1. Kenaikan porsi invoice Kelas D/E pada partner dengan nilai invoice besar.",
-                "2. Penumpukan hambatan dokumen, approval, atau pencairan anggaran pada periode terbaru.",
-                "3. Munculnya bukti likuiditas pelanggan yang semakin lemah atau dispute yang belum ditutup.",
+                "### Implikasi terhadap Rencana Kas",
+                report_context["cash_plan_implications"],
                 "",
                 "# Rekomendasi Preskriptif",
                 "### Prinsip Tindakan",
@@ -1781,11 +2207,11 @@ class ReportGenerator:
                 "2. Pisahkan treatment untuk isu anggaran, approval, administrasi, likuiditas, dan sengketa agar collection effort tidak tersebar terlalu tipis.",
                 "3. Gunakan bukti internal dan jadwal tindak lanjut yang terdokumentasi agar eskalasi ke manajemen klien lebih kuat.",
                 "",
-                "### Rekomendasi Detail",
-                report_context["executive_facts"],
+                "### Prasyarat Implementasi",
+                report_context["implementation_prerequisites"],
                 "",
-                "### Agenda Keputusan Internal",
-                report_context["meeting_agenda"],
+                "### Kesiapan Pelaksanaan",
+                report_context["organizational_readiness"],
                 "",
                 "# Prioritas Tindakan 30 Hari",
                 "### Tabel Prioritas",
@@ -1799,6 +2225,7 @@ class ReportGenerator:
                 "### Catatan Pelaksanaan",
                 "- Tetapkan owner utama per akun prioritas dan review statusnya minimal mingguan.",
                 "- Gunakan rapat internal untuk memastikan hambatan administratif dan eskalasi ke klien ditutup dengan tenggat yang jelas.",
+                "- Konsolidasikan hasil follow-up ke finance collection, account owner, dan sponsor bisnis agar keputusan rapat langsung dapat dieksekusi.",
             ]
         )
 
@@ -1863,9 +2290,11 @@ class ReportGenerator:
             )
 
         generated_content = "\n\n".join(section for section in generated_sections if section).strip()
+        generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
         if not self._is_acceptable_report(generated_content):
             logger.warning("Generated report failed quality gate. Falling back to deterministic management draft.")
             generated_content = self._build_fallback_report(report_context, notes, macro_osint)
+            generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
 
         document = Document()
         DocumentBuilder.create_cover(document, DEFAULT_COLOR)
