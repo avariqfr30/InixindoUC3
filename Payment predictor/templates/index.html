@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inixindo Cash In Intelligence</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/quill/quill.snow.css') }}">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
         .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; }
@@ -25,17 +26,17 @@
         .spinner.active { display: inline-block; }
         textarea.hidden-input { display: none; }
         .rich-editor-shell { border: 1px solid #cbd5e1; border-radius: 12px; overflow: hidden; background: white; margin-bottom: 8px; }
-        .editor-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; background: #fff7f7; border-bottom: 1px solid #f1d5d5; }
-        .toolbar-group { display: flex; gap: 6px; padding-right: 8px; margin-right: 4px; border-right: 1px solid #f1d5d5; }
-        .toolbar-group:last-child { border-right: none; margin-right: 0; padding-right: 0; }
-        .editor-command { width: auto; min-width: 42px; margin: 0; padding: 8px 12px; font-size: 0.85rem; background: white; color: #991b1b; border: 1px solid #f1b4b4; border-radius: 8px; font-weight: 700; }
-        .editor-command:hover { background: #ffe6e6; border-color: #CC0000; }
-        .rich-editor { min-height: 140px; padding: 14px; font-size: 1rem; line-height: 1.5; outline: none; white-space: pre-wrap; }
-        .rich-editor.is-empty::before { content: attr(data-placeholder); color: #94a3b8; }
-        .rich-editor p, .rich-editor div, .rich-editor h1, .rich-editor h2, .rich-editor h3, .rich-editor h4 { margin: 0 0 10px 0; }
-        .rich-editor ul, .rich-editor ol { margin: 0 0 10px 22px; padding-left: 18px; }
-        .rich-editor li { margin-bottom: 4px; }
-        .rich-editor h3 { font-size: 1rem; color: #0f172a; }
+        .ql-toolbar.ql-snow { border: none; border-bottom: 1px solid #f1d5d5; background: #fff7f7; padding: 10px; }
+        .ql-container.ql-snow { border: none; font-family: 'Segoe UI', sans-serif; font-size: 1rem; }
+        .rich-editor-shell .ql-toolbar button,
+        .rich-editor-shell .ql-toolbar .ql-picker-label { width: auto; margin: 0; padding: 5px; background: transparent; color: #7f1d1d; border: none; box-shadow: none; }
+        .rich-editor-shell .ql-toolbar button:hover,
+        .rich-editor-shell .ql-toolbar .ql-picker-label:hover { background: #ffe6e6; color: #991b1b; }
+        .rich-editor-shell .ql-toolbar .ql-picker { color: #7f1d1d; }
+        .rich-editor-shell .ql-toolbar .ql-active,
+        .rich-editor-shell .ql-toolbar button.ql-active { background: #ffe6e6; color: #991b1b; border-radius: 6px; }
+        .rich-editor-shell .ql-editor { min-height: 160px; line-height: 1.5; color: #334155; }
+        .rich-editor-shell .ql-editor.ql-blank::before { color: #94a3b8; font-style: normal; }
         .editor-hint { color: #64748b; font-size: 0.82rem; margin: 0 0 12px 0; line-height: 1.4; }
         .chip-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
         .chip { background: #f1f5f9; color: #475569; padding: 6px 12px; border-radius: 16px; font-size: 0.85rem; cursor: pointer; transition: 0.2s; border: 1px solid #cbd5e1; }
@@ -56,24 +57,29 @@
             
             <label for="input-notes">Fokus Analisis Tambahan (Opsional)</label>
             <div class="rich-editor-shell">
-                <div class="editor-toolbar" id="notes-toolbar">
-                    <div class="toolbar-group">
-                        <button type="button" class="editor-command" data-command="bold" title="Bold"><strong>B</strong></button>
-                        <button type="button" class="editor-command" data-command="italic" title="Italic"><em>I</em></button>
-                    </div>
-                    <div class="toolbar-group">
-                        <button type="button" class="editor-command" data-command="insertUnorderedList" title="Bullet List">• List</button>
-                        <button type="button" class="editor-command" data-command="insertOrderedList" title="Numbered List">1. List</button>
-                    </div>
-                    <div class="toolbar-group">
-                        <button type="button" class="editor-command" data-block="H3" title="Section Heading">Section</button>
-                        <button type="button" class="editor-command" data-block="P" title="Paragraph">Text</button>
-                        <button type="button" class="editor-command" data-action="clear" title="Clear Formatting">Clear</button>
-                    </div>
+                <div id="notes-toolbar">
+                    <span class="ql-formats">
+                        <select class="ql-header" title="Heading">
+                            <option selected></option>
+                            <option value="3">Section</option>
+                        </select>
+                    </span>
+                    <span class="ql-formats">
+                        <button class="ql-bold" title="Bold"></button>
+                        <button class="ql-italic" title="Italic"></button>
+                        <button class="ql-underline" title="Underline"></button>
+                    </span>
+                    <span class="ql-formats">
+                        <button class="ql-list" value="ordered" title="Numbered List"></button>
+                        <button class="ql-list" value="bullet" title="Bullet List"></button>
+                    </span>
+                    <span class="ql-formats">
+                        <button class="ql-clean" title="Clear Formatting"></button>
+                    </span>
                 </div>
-                <div id="input-notes-editor" class="rich-editor is-empty" contenteditable="true" data-placeholder="Atau klik rekomendasi instruksi makro di bawah ini..."></div>
+                <div id="input-notes-editor"></div>
             </div>
-            <p class="editor-hint">Gunakan toolbar seperti editor dokumen ringan untuk memberi bullet point, numbering, heading sederhana, dan penekanan teks.</p>
+            <p class="editor-hint">Gunakan toolbar editor untuk menyusun catatan tambahan dengan bullet point, numbering, heading sederhana, dan penekanan teks.</p>
             <textarea id="input-notes" class="hidden-input" aria-hidden="true" tabindex="-1"></textarea>
             
             <div id="suggestion-container" class="chip-container"></div>
@@ -100,6 +106,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='vendor/quill/quill.min.js') }}"></script>
     <script>
         const ui = {
             loader: document.getElementById('loader'),
@@ -109,7 +116,6 @@
             successStep: document.getElementById('step-success'),
             
             notesToolbar: document.getElementById('notes-toolbar'),
-            notesEditor: document.getElementById('input-notes-editor'),
             inputNotes: document.getElementById('input-notes'),
             suggestionContainer: document.getElementById('suggestion-container'),
             reviewText: document.getElementById('review-text'),
@@ -127,140 +133,94 @@
             reviewContext: null
         };
 
-        function focusNotesEditor() {
-            ui.notesEditor.focus();
-        }
-
-        function normalizeEditorEmptyState() {
-            const text = ui.notesEditor.textContent.replace(/\u00a0/g, ' ').trim();
-            const html = ui.notesEditor.innerHTML
-                .replace(/<(div|p|h[1-6])[^>]*><br\s*\/?><\/\1>/gi, '')
-                .replace(/<br\s*\/?>/gi, '')
-                .replace(/&nbsp;/gi, '')
-                .trim();
-            const isEmpty = !text && !html;
-            ui.notesEditor.classList.toggle('is-empty', isEmpty);
-            if (isEmpty && ui.notesEditor.innerHTML !== '') {
-                ui.notesEditor.innerHTML = '';
+        const notesEditor = new Quill('#input-notes-editor', {
+            theme: 'snow',
+            placeholder: 'Atau klik rekomendasi instruksi makro di bawah ini...',
+            modules: {
+                toolbar: '#notes-toolbar'
             }
+        });
+
+        function escapeHtml(text) {
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
-        function placeCaretAtEnd(element) {
-            const range = document.createRange();
-            const selection = window.getSelection();
-            range.selectNodeContents(element);
-            range.collapse(false);
-            selection.removeAllRanges();
-            selection.addRange(range);
-        }
+        function serializeNotesDelta() {
+            const lines = [];
+            let currentLine = '';
+            let orderedIndex = 0;
 
-        function appendSuggestionText(text) {
-            if (!ui.notesEditor.textContent.trim()) {
-                const paragraph = document.createElement('p');
-                paragraph.textContent = text;
-                ui.notesEditor.innerHTML = '';
-                ui.notesEditor.appendChild(paragraph);
-            } else {
-                placeCaretAtEnd(ui.notesEditor);
-                const prefix = ui.notesEditor.textContent.trim().endsWith('.') ? ' ' : '. ';
-                document.execCommand('insertText', false, `${prefix}${text}`);
-            }
-            syncNotesValue();
-            normalizeEditorEmptyState();
-            focusNotesEditor();
-        }
+            notesEditor.getContents().ops.forEach(op => {
+                if (typeof op.insert !== 'string') {
+                    return;
+                }
 
-        function serializeEditorHtml() {
-            const clone = ui.notesEditor.cloneNode(true);
+                const parts = op.insert.split('\n');
+                parts.forEach((part, index) => {
+                    currentLine += part;
+                    const isLineBreak = index < parts.length - 1;
+                    if (!isLineBreak) {
+                        return;
+                    }
 
-            clone.querySelectorAll('ol').forEach(list => {
-                Array.from(list.children).forEach((item, index) => {
-                    item.textContent = `${index + 1}. ${item.innerText.trim()}`;
+                    const attributes = op.attributes || {};
+                    const lineText = currentLine.replace(/\u00a0/g, ' ').trimEnd();
+
+                    if (attributes.header) {
+                        lines.push(lineText ? `${lineText}:` : '');
+                        orderedIndex = 0;
+                    } else if (attributes.list === 'bullet') {
+                        lines.push(lineText ? `- ${lineText}` : '-');
+                        orderedIndex = 0;
+                    } else if (attributes.list === 'ordered') {
+                        orderedIndex += 1;
+                        lines.push(lineText ? `${orderedIndex}. ${lineText}` : `${orderedIndex}.`);
+                    } else {
+                        if (lineText) {
+                            lines.push(lineText);
+                        } else if (lines.length > 0 && lines[lines.length - 1] !== '') {
+                            lines.push('');
+                        }
+                        orderedIndex = 0;
+                    }
+
+                    currentLine = '';
                 });
             });
 
-            clone.querySelectorAll('ul').forEach(list => {
-                Array.from(list.children).forEach(item => {
-                    item.textContent = `- ${item.innerText.trim()}`;
-                });
-            });
+            if (currentLine.trim()) {
+                lines.push(currentLine.trim());
+            }
 
-            clone.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(heading => {
-                heading.textContent = `${heading.innerText.trim()}:`;
-            });
-
-            const serialized = (clone.innerText || '')
-                .replace(/\u00a0/g, ' ')
-                .replace(/\n{3,}/g, '\n\n')
-                .split('\n')
-                .map(line => line.trimEnd())
-                .join('\n')
-                .trim();
-
-            return serialized;
+            return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
         }
 
         function syncNotesValue() {
-            ui.inputNotes.value = serializeEditorHtml();
+            ui.inputNotes.value = serializeNotesDelta();
         }
 
-        function applyBlockFormat(blockTag) {
-            focusNotesEditor();
-            document.execCommand('formatBlock', false, blockTag);
+        function appendSuggestionText(text) {
+            const insertionIndex = Math.max(notesEditor.getLength() - 1, 0);
+            const escapedText = escapeHtml(text);
+            notesEditor.focus();
+            notesEditor.clipboard.dangerouslyPasteHTML(insertionIndex, `<p>${escapedText}</p>`);
             syncNotesValue();
-            normalizeEditorEmptyState();
         }
 
-        function clearFormatting() {
-            focusNotesEditor();
-            document.execCommand('removeFormat', false, null);
-            syncNotesValue();
-            normalizeEditorEmptyState();
-        }
-
-        function applyEditorCommand(command) {
-            focusNotesEditor();
-            document.execCommand(command, false, null);
-            syncNotesValue();
-            normalizeEditorEmptyState();
-        }
-
-        function handleToolbarClick(button) {
-            if (button.dataset.command) {
-                applyEditorCommand(button.dataset.command);
-                return;
-            }
-            if (button.dataset.block) {
-                applyBlockFormat(button.dataset.block);
-                return;
-            }
-            if (button.dataset.action === 'clear') {
-                clearFormatting();
-            }
-        }
-
-        ui.notesToolbar.querySelectorAll('button').forEach(button => {
-            button.addEventListener('click', () => handleToolbarClick(button));
-        });
-        ui.notesEditor.addEventListener('input', () => {
-            syncNotesValue();
-            normalizeEditorEmptyState();
-        });
-        ui.notesEditor.addEventListener('paste', event => {
+        notesEditor.on('text-change', syncNotesValue);
+        notesEditor.root.addEventListener('paste', event => {
             event.preventDefault();
             const plainText = (event.clipboardData || window.clipboardData).getData('text/plain');
-            document.execCommand('insertText', false, plainText);
+            const selection = notesEditor.getSelection(true);
+            const index = selection ? selection.index : notesEditor.getLength() - 1;
+            notesEditor.insertText(index, plainText, 'user');
             syncNotesValue();
-            normalizeEditorEmptyState();
         });
-        ui.notesEditor.addEventListener('blur', normalizeEditorEmptyState);
-        ui.notesEditor.addEventListener('keydown', () => {
-            window.setTimeout(() => {
-                syncNotesValue();
-                normalizeEditorEmptyState();
-            }, 0);
-        });
-        normalizeEditorEmptyState();
         syncNotesValue();
         
         function renderSuggestions(suggestionsList) {
@@ -306,6 +266,7 @@
         loadConfig();
         
         ui.btnReview.onclick = () => { 
+            syncNotesValue();
             const reviewContext = appState.reviewContext || {};
             let html = `
                 <div class="review-row"><span>Sumber Data</span><span>${reviewContext.dataSource || 'Sumber data aktif'}</span></div>
@@ -422,6 +383,7 @@
         }
         
         ui.btnGenerate.onclick = () => {
+            syncNotesValue();
             ui.btnGenerate.disabled = true; 
             document.getElementById('spinner').classList.add('active');
             updateJobStatus('Permintaan Anda sedang dikirim ke sistem analisis.');
