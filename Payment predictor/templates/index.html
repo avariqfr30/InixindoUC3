@@ -12,8 +12,8 @@
         h2 { color: #0f172a; margin: 0 0 10px 0; font-size: 1.8rem; }
         p.sub { color: #64748b; margin: 0 0 25px 0; font-size: 1rem; line-height: 1.4; }
         label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.95rem; }
-        textarea, button { width: 100%; padding: 12px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; background: white; box-sizing: border-box; font-family: 'Segoe UI', sans-serif;}
-        textarea:focus { border-color: #CC0000; outline: none; box-shadow: 0 0 0 3px rgba(204,0,0,0.1); }
+        textarea, button, select, input { width: 100%; padding: 12px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 1rem; background: white; box-sizing: border-box; font-family: 'Segoe UI', sans-serif;}
+        textarea:focus, select:focus, input:focus { border-color: #CC0000; outline: none; box-shadow: 0 0 0 3px rgba(204,0,0,0.1); }
         button { background: #CC0000; color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; margin-top: 10px; }
         button:hover { background: #990000; }
         button:disabled { background: #94a3b8; cursor: not-allowed; }
@@ -24,6 +24,8 @@
         .review-row span:last-child { font-weight: 600; color: #0f172a; text-align: right;}
         .spinner { width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; display: none; vertical-align: middle; margin-left: 10px; }
         .spinner.active { display: inline-block; }
+        .control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 8px; }
+        .field-hint { color: #64748b; font-size: 0.82rem; margin: -8px 0 14px 0; line-height: 1.35; }
         textarea.hidden-input { display: none; }
         .rich-editor-shell { border: 1px solid #cbd5e1; border-radius: 12px; overflow: hidden; background: white; margin-bottom: 8px; }
         .ql-toolbar.ql-snow { border: none; border-bottom: 1px solid #f1d5d5; background: #fff7f7; padding: 10px; }
@@ -41,6 +43,26 @@
         .chip-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
         .chip { background: #f1f5f9; color: #475569; padding: 6px 12px; border-radius: 16px; font-size: 0.85rem; cursor: pointer; transition: 0.2s; border: 1px solid #cbd5e1; }
         .chip:hover { background: #fff0f0; border-color: #CC0000; color: #CC0000; }
+        .section-block { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e2e8f0; }
+        .section-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+        .section-block h3 { margin: 0 0 10px 0; font-size: 1rem; color: #0f172a; }
+        .forecast-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+        .forecast-table th, .forecast-table td { border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; vertical-align: top; }
+        .forecast-table th { background: #fff7f7; color: #7f1d1d; font-weight: 700; }
+        .forecast-table td.numeric, .forecast-table th.numeric { text-align: right; }
+        .horizon-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+        .horizon-card { background: white; border: 1px solid #e2e8f0; border-left: 4px solid #CC0000; border-radius: 10px; padding: 14px; }
+        .horizon-card h4 { margin: 0 0 6px 0; font-size: 0.95rem; color: #0f172a; }
+        .metric-pill { display: inline-block; background: #fff0f0; color: #991b1b; border: 1px solid #f1d5d5; border-radius: 999px; padding: 4px 10px; font-size: 0.8rem; font-weight: 700; margin-bottom: 8px; }
+        .bullet-list { margin: 10px 0 0 18px; padding: 0; color: #475569; }
+        .bullet-list li { margin-bottom: 8px; }
+        .mini-note { color: #64748b; font-size: 0.84rem; line-height: 1.45; margin-top: 8px; }
+        @media (max-width: 760px) {
+            .control-grid { grid-template-columns: 1fr; }
+            .horizon-grid { grid-template-columns: 1fr; }
+            .review-row { flex-direction: column; gap: 4px; }
+            .review-row span:last-child { text-align: left; }
+        }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
 </head>
@@ -54,7 +76,20 @@
         <div id="step-config" class="hidden">
             <h2><span style="color: #CC0000;">Inixindo</span> Cash In Intelligence</h2>
             <p class="sub">Sistem AI akan membaca <strong>histori data cash in dan karakter penagihan</strong> untuk membuat laporan yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
-            
+
+            <div class="control-grid">
+                <div>
+                    <label for="period-select">Periode Waktu</label>
+                    <select id="period-select"></select>
+                    <p class="field-hint">Pilih window periode seperti 1-10, 11-20, atau 21-akhir bulan.</p>
+                </div>
+                <div>
+                    <label for="cash-on-hand">Cash In Hand Saat Ini</label>
+                    <input id="cash-on-hand" type="number" min="0" step="1000000" value="500000000" />
+                    <p class="field-hint">Digunakan sebagai starting cash untuk menghitung end cash secara internal.</p>
+                </div>
+            </div>
+
             <label for="input-notes">Fokus Analisis Tambahan (Opsional)</label>
             <div class="rich-editor-shell">
                 <div id="notes-toolbar">
@@ -117,6 +152,8 @@
             
             notesToolbar: document.getElementById('notes-toolbar'),
             inputNotes: document.getElementById('input-notes'),
+            periodSelect: document.getElementById('period-select'),
+            cashOnHandInput: document.getElementById('cash-on-hand'),
             suggestionContainer: document.getElementById('suggestion-container'),
             reviewText: document.getElementById('review-text'),
             jobStatus: document.getElementById('job-status'),
@@ -130,8 +167,49 @@
             currentJobId: null,
             statusTimer: null,
             statusPollIntervalMs: 1500,
-            reviewContext: null
+            reviewContext: null,
+            forecastPeriods: [],
+            forecastSnapshot: null,
+            horizonSnapshot: null,
+            analysisContext: ""
         };
+
+        const currencyFormatter = new Intl.NumberFormat('id-ID', {
+            style: 'currency',
+            currency: 'IDR',
+            maximumFractionDigits: 0,
+        });
+
+        function formatCurrency(value) {
+            return currencyFormatter.format(Number(value || 0));
+        }
+
+        function escapeHtml(text) {
+            return String(text || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function fetchJson(url, options = {}) {
+            return fetch(url, options).then(async response => {
+                const text = await response.text();
+                let data = {};
+                if (text) {
+                    try {
+                        data = JSON.parse(text);
+                    } catch (error) {
+                        data = {};
+                    }
+                }
+                if (!response.ok) {
+                    throw new Error(data.error || `Request failed: ${response.status}`);
+                }
+                return data;
+            });
+        }
 
         const notesEditor = new Quill('#input-notes-editor', {
             theme: 'snow',
@@ -140,15 +218,6 @@
                 toolbar: '#notes-toolbar'
             }
         });
-
-        function escapeHtml(text) {
-            return text
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
 
         function serializeNotesDelta() {
             const lines = [];
@@ -222,6 +291,258 @@
             syncNotesValue();
         });
         syncNotesValue();
+
+        function renderPeriodOptions(periods) {
+            appState.forecastPeriods = periods || [];
+            ui.periodSelect.innerHTML = appState.forecastPeriods
+                .map(period => `<option value="${escapeHtml(period.id)}">${escapeHtml(period.label)}</option>`)
+                .join('');
+        }
+
+        function getSelectedPeriod() {
+            return appState.forecastPeriods.find(period => period.id === ui.periodSelect.value) || null;
+        }
+
+        function buildBehaviorRows(summary) {
+            if (!summary || !summary.length) {
+                return '<tr><td colspan="6">Belum ada estimasi pembayaran pada periode yang dipilih.</td></tr>';
+            }
+
+            return summary
+                .map(item => `
+                    <tr>
+                        <td>${escapeHtml(item.character)}</td>
+                        <td>${escapeHtml(item.customer_characteristic)}</td>
+                        <td class="numeric">${formatCurrency(item.total_amount)}</td>
+                        <td class="numeric">${item.average_retention}%</td>
+                        <td class="numeric">${item.average_satisfaction}%</td>
+                        <td class="numeric">${item.average_days_delay} hari</td>
+                    </tr>
+                `)
+                .join('');
+        }
+
+        function buildOutstandingAgeRows(byAge) {
+            const ageOrder = ['0-30 hari', '31-60 hari', '61-90 hari', '91-180 hari', '>180 hari'];
+            const rows = ageOrder
+                .filter(bucket => byAge && byAge[bucket])
+                .map(bucket => `
+                    <tr>
+                        <td>${escapeHtml(bucket)}</td>
+                        <td class="numeric">${byAge[bucket].count}</td>
+                        <td class="numeric">${formatCurrency(byAge[bucket].total)}</td>
+                    </tr>
+                `)
+                .join('');
+            return rows || '<tr><td colspan="3">Tidak ada outstanding untuk ditampilkan.</td></tr>';
+        }
+
+        function buildOutstandingCharacterRows(byCharacter) {
+            const characterOrder = ['Kelas A', 'Kelas B', 'Kelas C', 'Kelas D', 'Kelas E'];
+            const rows = characterOrder
+                .filter(character => byCharacter && byCharacter[character])
+                .map(character => `
+                    <tr>
+                        <td>${escapeHtml(character)}</td>
+                        <td>${escapeHtml(byCharacter[character].profile.description)}</td>
+                        <td class="numeric">${byCharacter[character].count}</td>
+                        <td class="numeric">${formatCurrency(byCharacter[character].total)}</td>
+                    </tr>
+                `)
+                .join('');
+            return rows || '<tr><td colspan="4">Tidak ada outstanding untuk ditampilkan.</td></tr>';
+        }
+
+        function buildExternalFactorsList(factors) {
+            if (!factors || !factors.length) {
+                return '<li>Belum ada sinyal eksternal yang cukup kuat atau Search API belum aktif.</li>';
+            }
+
+            return factors
+                .map(factor => `
+                    <li>
+                        <strong>${escapeHtml(factor.factor)}</strong>:
+                        ${escapeHtml(factor.impact)}
+                        Potensi dampak waktu: ${factor.potential_delay_days.min}-${factor.potential_delay_days.max} hari.
+                        ${factor.summary ? `${escapeHtml(factor.summary)} ` : ''}
+                        <span class="mini-note">Sumber: ${escapeHtml((factor.source_domains || []).join(', ') || '-')}</span>
+                    </li>
+                `)
+                .join('');
+        }
+
+        function buildRecommendationItems(recommendations) {
+            if (!recommendations || !recommendations.length) {
+                return '<li>Tidak ada rekomendasi otomatis untuk periode ini.</li>';
+            }
+
+            return recommendations
+                .map(item => `
+                    <li>
+                        <strong>[${escapeHtml(item.priority)}]</strong> ${escapeHtml(item.action)}<br>
+                        ${escapeHtml(item.rationale)}<br>
+                        <span class="mini-note">Karakter: ${escapeHtml(item.customer_characteristic || '-')} | Retention: ${escapeHtml(item.retention_signal || '-')} | Satisfaction: ${escapeHtml(item.satisfaction_signal || '-')} | SoP: ${escapeHtml(item.sop || '-')}</span>
+                    </li>
+                `)
+                .join('');
+        }
+
+        function buildHorizonCards(horizonSnapshot) {
+            const horizonOrder = ['short_term', 'mid_term', 'long_term'];
+            return horizonOrder
+                .map(key => {
+                    const item = horizonSnapshot && horizonSnapshot.forecasts ? horizonSnapshot.forecasts[key] : null;
+                    if (!item) {
+                        return '';
+                    }
+                    return `
+                        <div class="horizon-card">
+                            <span class="metric-pill">${escapeHtml(item.time_horizon.label)}</span>
+                            <h4>${escapeHtml(item.time_horizon.focus)}</h4>
+                            <div class="mini-note">Predicted cash in: ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}</div>
+                            <div class="mini-note">Predicted cash out: ${formatCurrency(item.forecast.cash_out.total_cash_out)}</div>
+                            <div class="mini-note">Ending cash: ${formatCurrency(item.forecast.ending_cash)}</div>
+                        </div>
+                    `;
+                })
+                .join('');
+        }
+
+        function buildAnalysisContext(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot) {
+            const behaviorLines = (forecast.forecast.cash_in.behavior_summary || [])
+                .map(item => `- ${item.character}: ${formatCurrency(item.total_amount)}, retention ${item.average_retention}%, satisfaction ${item.average_satisfaction}%, delay ${item.average_days_delay} hari, karakter ${item.customer_characteristic}.`)
+                .join('\n') || '- Tidak ada estimasi pembayaran pada periode yang dipilih.';
+
+            const ageLines = Object.entries(forecast.outstanding.by_age || {})
+                .map(([bucket, row]) => `- ${bucket}: ${row.count} invoice, ${formatCurrency(row.total)}.`)
+                .join('\n') || '- Tidak ada outstanding aging.';
+
+            const characterLines = Object.entries(forecast.outstanding.by_character || {})
+                .map(([character, row]) => `- ${character}: ${row.count} invoice, ${formatCurrency(row.total)}, profil ${row.profile.description}.`)
+                .join('\n') || '- Tidak ada outstanding by character.';
+
+            const factorLines = (forecast.external_factors || [])
+                .map(item => `- ${item.factor}: potensi delay ${item.potential_delay_days.min}-${item.potential_delay_days.max} hari. ${item.impact} Sumber: ${(item.source_domains || []).join(', ') || '-'}.`)
+                .join('\n') || '- Tidak ada sinyal eksternal tambahan.';
+
+            const recommendationLines = (forecast.recommendations || [])
+                .map(item => `- [${item.priority}] ${item.action}. SoP: ${item.sop}. Retention: ${item.retention_signal}. Satisfaction: ${item.satisfaction_signal}.`)
+                .join('\n') || '- Tidak ada rekomendasi tambahan.';
+
+            const horizonLines = ['short_term', 'mid_term', 'long_term']
+                .map(key => {
+                    const item = horizonSnapshot && horizonSnapshot.forecasts ? horizonSnapshot.forecasts[key] : null;
+                    if (!item) {
+                        return null;
+                    }
+                    return `- ${item.time_horizon.label}: fokus ${item.time_horizon.focus}; predicted cash in ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}; predicted cash out ${formatCurrency(item.forecast.cash_out.total_cash_out)}; ending cash ${formatCurrency(item.forecast.ending_cash)}.`;
+                })
+                .filter(Boolean)
+                .join('\n');
+
+            return [
+                '=== INPUT CASHFLOW TERPILIH ===',
+                `- Periode pilihan: ${selectedPeriod.label}`,
+                `- Cash on hand saat ini: ${formatCurrency(cashOnHand)}`,
+                reviewContext && reviewContext.dataSource ? `- Sumber data aktif: ${reviewContext.dataSource}` : null,
+                '',
+                '=== ESTIMASI PEMBAYARAN BERDASARKAN PAYMENT BEHAVIOR ===',
+                behaviorLines,
+                '',
+                '=== TOTAL OUTSTANDING ===',
+                '- Dipisahkan berdasarkan umur outstanding:',
+                ageLines,
+                '- Dipisahkan berdasarkan karakter pembayaran:',
+                characterLines,
+                '',
+                '=== FAKTOR EKSTERNAL YANG BERPOTENSI MEMPENGARUHI WAKTU PEMBAYARAN ===',
+                factorLines,
+                '',
+                '=== REKOMENDASI BERBASIS SOP, RETENTION, DAN SATISFACTION ===',
+                recommendationLines,
+                '',
+                '=== TIGA TIMELINE PREDIKSI ===',
+                horizonLines || '- Ringkasan horizon belum tersedia.',
+                '',
+                '=== FORMULA END CASH (INTERNAL) ===',
+                `- ${forecast.forecast.formula}`,
+            ].filter(Boolean).join('\n');
+        }
+
+        function buildReviewHtml(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot) {
+            return `
+                <div class="section-block">
+                    <div class="review-row"><span>Sumber Data</span><span>${escapeHtml((reviewContext && reviewContext.dataSource) || 'Sumber data aktif')}</span></div>
+                    <div class="review-row"><span>Status Data</span><span>${escapeHtml((reviewContext && reviewContext.dataStatus) || 'Data siap dianalisis')}</span></div>
+                    <div class="review-row"><span>Periode Pilihan</span><span>${escapeHtml(selectedPeriod.label)}</span></div>
+                    <div class="review-row"><span>Cash In Hand</span><span>${formatCurrency(cashOnHand)}</span></div>
+                    <div class="review-row"><span>Predicted Cash In</span><span>${formatCurrency(forecast.forecast.cash_in.total_predicted_cash_in)}</span></div>
+                    <div class="review-row"><span>Predicted Cash Out</span><span>${formatCurrency(forecast.forecast.cash_out.total_cash_out)}</span></div>
+                    <div class="review-row"><span>Ending Cash</span><span>${formatCurrency(forecast.forecast.ending_cash)}</span></div>
+                    <p class="mini-note">Formula internal: ${escapeHtml(forecast.forecast.formula)}</p>
+                    ${reviewContext && reviewContext.readinessCaveat ? `<p class="mini-note"><strong>Catatan kesiapan:</strong> ${escapeHtml(reviewContext.readinessCaveat)}</p>` : ''}
+                    ${reviewContext && reviewContext.controlNote ? `<p class="mini-note"><strong>Catatan kontrol:</strong> ${escapeHtml(reviewContext.controlNote)}</p>` : ''}
+                </div>
+
+                <div class="section-block">
+                    <h3>Estimasi Pembayaran via Payment Behavior</h3>
+                    <table class="forecast-table">
+                        <thead>
+                            <tr>
+                                <th>Character</th>
+                                <th>Customer Characteristic</th>
+                                <th class="numeric">Total Estimasi</th>
+                                <th class="numeric">Retention</th>
+                                <th class="numeric">Satisfaction</th>
+                                <th class="numeric">Delay</th>
+                            </tr>
+                        </thead>
+                        <tbody>${buildBehaviorRows(forecast.forecast.cash_in.behavior_summary)}</tbody>
+                    </table>
+                </div>
+
+                <div class="section-block">
+                    <h3>Total Outstanding by Age</h3>
+                    <table class="forecast-table">
+                        <thead>
+                            <tr>
+                                <th>Age Bucket</th>
+                                <th class="numeric">Invoice</th>
+                                <th class="numeric">Outstanding</th>
+                            </tr>
+                        </thead>
+                        <tbody>${buildOutstandingAgeRows(forecast.outstanding.by_age)}</tbody>
+                    </table>
+                    <h3 style="margin-top: 16px;">Total Outstanding by Character of Payment</h3>
+                    <table class="forecast-table">
+                        <thead>
+                            <tr>
+                                <th>Character</th>
+                                <th>Description</th>
+                                <th class="numeric">Invoice</th>
+                                <th class="numeric">Outstanding</th>
+                            </tr>
+                        </thead>
+                        <tbody>${buildOutstandingCharacterRows(forecast.outstanding.by_character)}</tbody>
+                    </table>
+                </div>
+
+                <div class="section-block">
+                    <h3>External Factors with Potential Payment Delay Impact</h3>
+                    <ul class="bullet-list">${buildExternalFactorsList(forecast.external_factors)}</ul>
+                </div>
+
+                <div class="section-block">
+                    <h3>Rekomendasi</h3>
+                    <ul class="bullet-list">${buildRecommendationItems(forecast.recommendations)}</ul>
+                </div>
+
+                <div class="section-block">
+                    <h3>Tiga Timeline Prediksi</h3>
+                    <div class="horizon-grid">${buildHorizonCards(horizonSnapshot)}</div>
+                </div>
+            `;
+        }
         
         function renderSuggestions(suggestionsList) {
             ui.suggestionContainer.innerHTML = ''; 
@@ -239,23 +560,21 @@
         }
 
         function loadConfig() {
-            fetch('/get-config')
-                .then(response => {
-                    if (!response.ok && response.status !== 500) throw new Error("Flask mati. Pastikan server berjalan.");
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.error) throw new Error(data.error);
-                    
-                    renderSuggestions(data.suggestions);
-                    appState.statusPollIntervalMs = data.statusPollIntervalMs || 1500;
-                    appState.reviewContext = data.reviewContext || null;
-                    
-                    ui.loader.classList.add('hidden'); 
+            Promise.all([
+                fetchJson('/get-config'),
+                fetchJson('/api/forecast/periods'),
+            ])
+                .then(([configData, periodData]) => {
+                    renderSuggestions(configData.suggestions);
+                    renderPeriodOptions(periodData.periods || []);
+                    appState.statusPollIntervalMs = configData.statusPollIntervalMs || 1500;
+                    appState.reviewContext = configData.reviewContext || null;
+
+                    ui.loader.classList.add('hidden');
                     ui.configStep.classList.remove('hidden');
                 })
                 .catch(err => {
-                    if (err.message.includes("Failed to fetch")) {
+                    if (err.message.includes('Failed to fetch')) {
                         ui.loaderText.innerHTML = `<span style="color: #CC0000; font-weight: bold;">Error: Buka http://127.0.0.1:5000</span>`;
                     } else {
                         ui.loaderText.innerHTML = `<span style="color: #CC0000; font-weight: bold;">Error: ${err.message}</span>`;
@@ -265,26 +584,72 @@
         
         loadConfig();
         
-        ui.btnReview.onclick = () => { 
+        ui.btnReview.onclick = async () => { 
             syncNotesValue();
-            const reviewContext = appState.reviewContext || {};
-            let html = `
-                <div class="review-row"><span>Sumber Data</span><span>${reviewContext.dataSource || 'Sumber data aktif'}</span></div>
-                <div class="review-row"><span>Status Data</span><span>${reviewContext.dataStatus || 'Data siap dianalisis'}</span></div>
-                <div class="review-row"><span>Cakupan Operasional</span><span>${reviewContext.operationalScope || 'Analisis cash in dan prioritas penagihan'}</span></div>
-                <div class="review-row"><span>Tujuan Laporan</span><span>${reviewContext.reportPurpose || 'Bahan diskusi internal manajemen'}</span></div>
-            `;
-            if (reviewContext.readinessCaveat) {
-                html += `<p style="margin:16px 0 8px 0; font-weight:600; color:#0f172a;">Catatan Kesiapan</p>
-                    <p style="margin:0 0 12px 0; color:#475569; line-height:1.5;">${reviewContext.readinessCaveat}</p>`;
+            const selectedPeriod = getSelectedPeriod();
+            const cashOnHand = Number(ui.cashOnHandInput.value || 0);
+
+            if (!selectedPeriod) {
+                alert('Pilih periode waktu terlebih dahulu.');
+                return;
             }
-            if (reviewContext.controlNote) {
-                html += `<p style="margin:0; font-weight:600; color:#0f172a;">Catatan Kontrol</p>
-                    <p style="margin:8px 0 0 0; color:#475569; line-height:1.5;">${reviewContext.controlNote}</p>`;
+            if (!Number.isFinite(cashOnHand) || cashOnHand < 0) {
+                alert('Masukkan nilai cash in hand yang valid.');
+                return;
             }
-            ui.reviewText.innerHTML = html; 
-            ui.configStep.classList.add('hidden'); 
-            ui.reviewStep.classList.remove('hidden'); 
+
+            const originalLabel = ui.btnReview.textContent;
+            ui.btnReview.disabled = true;
+            ui.btnReview.textContent = 'Menyusun Preview Forecast...';
+
+            try {
+                const forecastPayload = {
+                    period_id: selectedPeriod.id,
+                    start_date: selectedPeriod.start,
+                    end_date: selectedPeriod.end,
+                    cash_on_hand: cashOnHand,
+                };
+                const [forecastSnapshot, horizonSnapshot] = await Promise.all([
+                    fetchJson('/api/forecast', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(forecastPayload),
+                    }),
+                    fetchJson('/api/forecast/by-horizon', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            cash_on_hand: cashOnHand,
+                            start_date: selectedPeriod.start,
+                        }),
+                    }),
+                ]);
+
+                appState.forecastSnapshot = forecastSnapshot;
+                appState.horizonSnapshot = horizonSnapshot;
+                appState.analysisContext = buildAnalysisContext(
+                    selectedPeriod,
+                    cashOnHand,
+                    appState.reviewContext,
+                    forecastSnapshot,
+                    horizonSnapshot,
+                );
+
+                ui.reviewText.innerHTML = buildReviewHtml(
+                    selectedPeriod,
+                    cashOnHand,
+                    appState.reviewContext,
+                    forecastSnapshot,
+                    horizonSnapshot,
+                );
+                ui.configStep.classList.add('hidden');
+                ui.reviewStep.classList.remove('hidden');
+            } catch (error) {
+                alert(error.message);
+            } finally {
+                ui.btnReview.disabled = false;
+                ui.btnReview.textContent = originalLabel;
+            }
         };
         
         ui.btnBack.onclick = () => { 
@@ -389,7 +754,8 @@
             updateJobStatus('Permintaan Anda sedang dikirim ke sistem analisis.');
             
             const payload = {
-                notes: ui.inputNotes.value
+                notes: ui.inputNotes.value,
+                analysis_context: appState.analysisContext
             };
 
             fetch('/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })

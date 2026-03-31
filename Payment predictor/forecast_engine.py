@@ -20,6 +20,14 @@ class PaymentBehaviorAnalyzer:
         'Kelas D': {'days_delay': 120, 'retention': 30, 'satisfaction': 25, 'description': 'Telat 3-6 Bulan'},
         'Kelas E': {'days_delay': 180, 'retention': 10, 'satisfaction': 5, 'description': 'Telat > 6 Bulan'},
     }
+
+    AGING_BUCKETS = [
+        (0, 30, '0-30 hari'),
+        (31, 60, '31-60 hari'),
+        (61, 90, '61-90 hari'),
+        (91, 180, '91-180 hari'),
+        (181, 10_000, '>180 hari'),
+    ]
     
     @staticmethod
     def extract_kelas(kelas_str: str) -> str:
@@ -55,6 +63,26 @@ class PaymentBehaviorAnalyzer:
         profile = PaymentBehaviorAnalyzer.get_payment_profile(kelas)
         delay_days = profile['days_delay']
         return invoice_date + timedelta(days=delay_days)
+
+    @staticmethod
+    def get_age_bucket(days_delay: int) -> str:
+        """Convert days delay to aging bucket"""
+        for minimum, maximum, label in PaymentBehaviorAnalyzer.AGING_BUCKETS:
+            if minimum <= days_delay <= maximum:
+                return label
+        return '>180 hari'
+
+    @staticmethod
+    def describe_customer_characteristic(kelas: str) -> str:
+        """Narrative characteristic for recommendation framing"""
+        mapping = {
+            'Kelas A': 'Disiplin tinggi dan loyal',
+            'Kelas B': 'Relatif sehat namun perlu ritme follow-up',
+            'Kelas C': 'Mulai rapuh dan sensitif terhadap pengalaman layanan',
+            'Kelas D': 'Risiko penundaan tinggi dan relasi perlu intervensi',
+            'Kelas E': 'Sangat berisiko, perlu eskalasi atau strategi pemulihan khusus',
+        }
+        return mapping.get(kelas, 'Perilaku pembayaran perlu dipantau')
 
 
 class CashOutProjector:
@@ -198,6 +226,13 @@ class CashflowForecaster:
                 'ending_cash': ending_cash,
                 'formula': f'{cash_on_hand:,} + {total_cash_in:,} - {total_cash_out:,} = {ending_cash:,}',
             },
+            'working_capital_signal': self._build_working_capital_signal(
+                cash_on_hand=cash_on_hand,
+                total_cash_in=total_cash_in,
+                total_cash_out=total_cash_out,
+                ending_cash=ending_cash,
+                horizon_key=horizon_key,
+            ),
             'outstanding': outstanding,
             'alerts': alerts,
             'recommendations': recommendations,
@@ -251,11 +286,13 @@ class CashflowForecaster:
                 })
         
         total = sum(p['amount'] for p in predicted_payments)
+        behavior_summary = self._summarize_payment_behavior(predicted_payments)
         
         return {
             'predicted_payments': predicted_payments,
             'total_predicted_cash_in': total,
             'payment_count': len(predicted_payments),
+            'behavior_summary': behavior_summary,
         }
     
     def _analyze_outstanding(self, invoices: List[Dict]) -> Dict:
@@ -263,15 +300,29 @@ class CashflowForecaster:
         
         # Group by Kelas (character)
         by_character = {}
+        by_age = {}
+        by_age_and_character = {}
         for invoice in invoices:
             kelas = invoice['kelas']
+            profile = self.behavior_analyzer.get_payment_profile(kelas)
+            age_bucket = self.behavior_analyzer.get_age_bucket(profile['days_delay'])
             if kelas not in by_character:
                 by_character[kelas] = {'invoices': [], 'total': 0}
             by_character[kelas]['invoices'].append(invoice)
             by_character[kelas]['total'] += invoice['amount']
+
+            if age_bucket not in by_age:
+                by_age[age_bucket] = {'count': 0, 'total': 0}
+            by_age[age_bucket]['count'] += 1
+            by_age[age_bucket]['total'] += invoice['amount']
+
+            if age_bucket not in by_age_and_character:
+                by_age_and_character[age_bucket] = {}
+            if kelas not in by_age_and_character[age_bucket]:
+                by_age_and_character[age_bucket][kelas] = {'count': 0, 'total': 0}
+            by_age_and_character[age_bucket][kelas]['count'] += 1
+            by_age_and_character[age_bucket][kelas]['total'] += invoice['amount']
         
-        # For now, all invoices are "outstanding" (simplification)
-        # In production, would track actual payment dates
         outstanding_by_character = {
             kelas: {
                 'count': len(data['invoices']),
@@ -283,8 +334,10 @@ class CashflowForecaster:
         
         return {
             'by_character': outstanding_by_character,
+            'by_age': by_age,
+            'by_age_and_character': by_age_and_character,
             'total_outstanding': sum(d['total'] for d in by_character.values()),
-            'note': 'Analysis based on payment character and historical behavior patterns',
+            'note': 'Outstanding saat ini dipisahkan berdasarkan karakter pembayaran dan bucket umur keterlambatan berbasis perilaku historis yang tersedia.',
         }
     
     def _generate_alerts(
@@ -352,18 +405,25 @@ class CashflowForecaster:
                 'rationale': 'Ending cash di bawah threshold aman',
                 'estimated_impact': 'Dapat meningkatkan cash in 10-30 hari',
                 'sop': 'Hubungi Client Relations, escalate ke Finance VP',
+                'customer_characteristic': 'Likuiditas internal tertekan',
+                'retention_signal': 'Pertahankan akun yang masih responsif agar cash in tidak makin tertunda',
+                'satisfaction_signal': 'Pastikan komunikasi tetap jelas agar percepatan penagihan tidak menurunkan trust',
             })
         
         # High risk clients
         high_risk = [inv for inv in invoices if inv['kelas'] in ['Kelas D', 'Kelas E']]
         if high_risk:
             high_risk_total = sum(inv['amount'] for inv in high_risk)
+            dominant_class = statistics.mode([inv['kelas'] for inv in high_risk]) if high_risk else 'Kelas D'
             recommendations.append({
                 'priority': 'HIGH',
                 'action': 'Intervensi untuk clients dengan Kelas D-E',
                 'rationale': f'IDR {high_risk_total:,.0f} at high default risk',
                 'estimated_impact': 'Retention improvement, reduce bad debt',
                 'sop': 'Assign dedicated account manager, schedule satisfaction survey, prepare settlement options',
+                'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic(dominant_class),
+                'retention_signal': 'Retention rendah; akun seperti ini butuh intervensi yang lebih personal atau opsi restrukturisasi',
+                'satisfaction_signal': 'Satisfaction score rendah mengindikasikan potensi friksi layanan yang memperpanjang pembayaran',
             })
         
         # Medium risk - retention focus
@@ -375,6 +435,9 @@ class CashflowForecaster:
                 'rationale': f'{len(medium_risk)} invoices dengan delay 1-2 bulan',
                 'estimated_impact': 'Improve retention, reduce future delays',
                 'sop': 'Quarterly check-in call, satisfaction assessment, offer flexible terms',
+                'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic('Kelas C'),
+                'retention_signal': 'Retention berada di level menengah dan masih bisa ditingkatkan dengan ritme hubungan yang lebih baik',
+                'satisfaction_signal': 'Satisfaction menengah berarti pengalaman layanan dan kejelasan dokumen masih berpengaruh pada kecepatan bayar',
             })
         
         # Good performers
@@ -386,6 +449,77 @@ class CashflowForecaster:
                 'rationale': f'Proven payment discipline ({len(good_clients)} invoices)',
                 'estimated_impact': 'Revenue growth, improved pipeline',
                 'sop': 'Schedule business review, identify upsell opportunities, propose longer contracts',
+                'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic('Kelas A'),
+                'retention_signal': 'Retention kuat; akun sehat bisa dijaga untuk menopang kestabilan cash in jangka menengah',
+                'satisfaction_signal': 'Satisfaction tinggi memberi ruang untuk cross-sell tanpa menambah risiko pembayaran berarti',
             })
         
         return recommendations
+
+    def _summarize_payment_behavior(self, predicted_payments: List[Dict]) -> List[Dict]:
+        """Group predicted payments by payment character, retention, and satisfaction"""
+        grouped = {}
+        for payment in predicted_payments:
+            kelas = payment['kelas']
+            group = grouped.setdefault(
+                kelas,
+                {
+                    'character': kelas,
+                    'description': self.behavior_analyzer.get_payment_profile(kelas)['description'],
+                    'count': 0,
+                    'total_amount': 0,
+                    'retention_total': 0,
+                    'satisfaction_total': 0,
+                    'days_delay_total': 0,
+                },
+            )
+            group['count'] += 1
+            group['total_amount'] += payment['amount']
+            group['retention_total'] += payment['retention_probability']
+            group['satisfaction_total'] += payment['satisfaction_score']
+            group['days_delay_total'] += payment['days_delay']
+
+        summary = []
+        for kelas, payload in grouped.items():
+            count = payload['count'] or 1
+            summary.append(
+                {
+                    'character': kelas,
+                    'description': payload['description'],
+                    'count': payload['count'],
+                    'total_amount': payload['total_amount'],
+                    'average_retention': round(payload['retention_total'] / count, 1),
+                    'average_satisfaction': round(payload['satisfaction_total'] / count, 1),
+                    'average_days_delay': round(payload['days_delay_total'] / count, 1),
+                    'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic(kelas),
+                }
+            )
+
+        return sorted(summary, key=lambda row: row['total_amount'], reverse=True)
+
+    def _build_working_capital_signal(
+        self,
+        cash_on_hand: int,
+        total_cash_in: int,
+        total_cash_out: int,
+        ending_cash: int,
+        horizon_key: str = None,
+    ) -> Dict:
+        """Silent operating status that can guide UI without exposing the internal label directly."""
+        gap = ending_cash - self.AMAN_THRESHOLD_IDR
+        if gap >= 150_000_000:
+            label = 'buffer kuat'
+        elif gap >= 0:
+            label = 'buffer tipis'
+        else:
+            label = 'perlu intervensi'
+
+        return {
+            'label': label,
+            'starting_cash': cash_on_hand,
+            'predicted_cash_in': total_cash_in,
+            'predicted_cash_out': total_cash_out,
+            'ending_cash': ending_cash,
+            'gap_to_safe_buffer': gap,
+            'horizon': self.TIME_HORIZONS.get(horizon_key, {}).get('label', 'Custom Period') if horizon_key else 'Custom Period',
+        }

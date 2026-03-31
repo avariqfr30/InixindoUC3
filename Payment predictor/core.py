@@ -1240,6 +1240,33 @@ class Researcher:
         },
     ]
 
+    _DELAY_FACTOR_TOPICS = [
+        {
+            "factor": "Siklus anggaran pemerintah",
+            "query": "siklus pencairan APBN APBD keterlambatan pembayaran vendor Indonesia",
+            "delay_days": (10, 30),
+            "impact": "Potensi mundur tambahan ketika termin pembayaran bergantung pada pencairan anggaran.",
+        },
+        {
+            "factor": "Approval korporasi dan BUMN",
+            "query": "approval internal BUMN korporasi keterlambatan pembayaran invoice Indonesia",
+            "delay_days": (7, 21),
+            "impact": "Potensi penambahan hari tunggu karena approval berlapis, BAST, atau verifikasi akhir.",
+        },
+        {
+            "factor": "Likuiditas pelanggan",
+            "query": "tekanan likuiditas perusahaan Indonesia keterlambatan pembayaran invoice jasa",
+            "delay_days": (14, 45),
+            "impact": "Potensi penundaan tambahan ketika pelanggan sedang menjaga kas atau menahan pengeluaran.",
+        },
+        {
+            "factor": "Regulasi pengadaan dan administrasi kontrak",
+            "query": "regulasi pengadaan pemerintah administrasi kontrak termin pembayaran vendor Indonesia",
+            "delay_days": (5, 20),
+            "impact": "Potensi penambahan waktu akibat revisi dokumen, termin, atau penyesuaian administrasi kontrak.",
+        },
+    ]
+
     _cache = {}
 
     @staticmethod
@@ -1411,6 +1438,55 @@ class Researcher:
             lines.append(f"   Sumber: {source}")
 
         return "\n".join(lines)
+
+    @classmethod
+    def get_payment_delay_risks(cls, extra_context=""):
+        if not cls._is_serper_available():
+            return []
+
+        context_snippet = (extra_context or "").strip()
+        cache_key = f"delay:{context_snippet.lower()}"
+        if cache_key in cls._cache:
+            return cls._cache[cache_key]
+
+        factors = []
+
+        for topic in cls._DELAY_FACTOR_TOPICS:
+            query = topic["query"]
+            if context_snippet:
+                query = f"{query} {context_snippet[:180]}"
+
+            search_results = cls._execute_serper_query(query, mode="search", num_results=4)
+            news_results = cls._execute_serper_query(query, mode="news", num_results=4)
+            combined = cls._deduplicate(search_results + news_results)
+            if not combined:
+                continue
+
+            sources = []
+            snippets = []
+            for item in combined[:2]:
+                source = item.get("domain") or "-"
+                if source not in sources:
+                    sources.append(source)
+                snippet = (item.get("snippet") or "").strip()
+                if snippet:
+                    snippets.append(snippet)
+
+            factors.append(
+                {
+                    "factor": topic["factor"],
+                    "potential_delay_days": {
+                        "min": topic["delay_days"][0],
+                        "max": topic["delay_days"][1],
+                    },
+                    "impact": topic["impact"],
+                    "summary": " ".join(snippets[:2]).strip(),
+                    "source_domains": sources,
+                }
+            )
+
+        cls._cache[cache_key] = factors
+        return factors
 
 
 class StyleEngine:

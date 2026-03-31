@@ -1,4 +1,5 @@
 import argparse
+import calendar
 import concurrent.futures
 import logging
 import os
@@ -399,7 +400,7 @@ def create_app():
         REPORT_STATUS_POLL_INTERVAL_MS,
         SMART_SUGGESTIONS,
     )
-    from core import KnowledgeBase, ReportGenerator
+    from core import KnowledgeBase, ReportGenerator, Researcher
     from forecast_engine import CashflowForecaster
 
     app = Flask(__name__)
@@ -427,6 +428,55 @@ def create_app():
     app.config["min_completeness_score"] = REPORT_MIN_COMPLETENESS_SCORE
     app.config["status_poll_interval_ms"] = REPORT_STATUS_POLL_INTERVAL_MS
 
+    def _build_forecast_periods(month_count=3):
+        base_date = datetime.now().replace(day=1)
+        periods = []
+        windows = [
+            (1, 10, "1-10"),
+            (11, 20, "11-20"),
+            (21, None, "21-akhir bulan"),
+        ]
+
+        for offset in range(month_count):
+            year = base_date.year + ((base_date.month - 1 + offset) // 12)
+            month = ((base_date.month - 1 + offset) % 12) + 1
+            first_day = datetime(year, month, 1)
+            last_day = calendar.monthrange(year, month)[1]
+
+            for start_day, end_day, label in windows:
+                start = first_day.replace(day=start_day)
+                resolved_end_day = last_day if end_day is None else min(end_day, last_day)
+                end = first_day.replace(day=resolved_end_day)
+                periods.append(
+                    {
+                        "id": f"{year}-{month:02d}_{label.replace(' ', '_')}",
+                        "label": f"{label} {first_day.strftime('%B %Y')}",
+                        "start": start.isoformat(),
+                        "end": end.isoformat(),
+                    }
+                )
+
+        return periods
+
+    def _build_external_context(start_date, end_date):
+        dataset = knowledge_base.df
+        partner_types = []
+        if dataset is not None and not dataset.empty and "Tipe Partner" in dataset.columns:
+            partner_types = (
+                dataset["Tipe Partner"]
+                .dropna()
+                .astype(str)
+                .value_counts()
+                .head(3)
+                .index
+                .tolist()
+            )
+        partner_snippet = ", ".join(partner_types)
+        return (
+            f"periode {start_date.strftime('%d %B %Y')} sampai {end_date.strftime('%d %B %Y')} "
+            f"partner {partner_snippet}"
+        ).strip()
+
     @app.route("/")
     def home():
         return render_template("index.html")
@@ -450,6 +500,9 @@ def create_app():
     def generate_doc():
         payload = request.get_json(silent=True) or {}
         notes = payload.get("notes", "")
+        analysis_context = (payload.get("analysis_context") or "").strip()
+        if analysis_context:
+            notes = f"{notes}\n\n{analysis_context}".strip()
         active_job_manager = current_app.config["job_manager"]
         try:
             job_id = active_job_manager.submit(notes)
@@ -510,30 +563,7 @@ def create_app():
     @app.route("/api/forecast/periods", methods=["GET"])
     def get_forecast_periods():
         """Get available date range periods for forecasting"""
-        today = datetime.now()
-        periods = []
-        
-        # Generate week-based periods for current month
-        current_month = today.replace(day=1)
-        next_month = (current_month + timedelta(days=32)).replace(day=1)
-        
-        weeks = [
-            (1, 10, "1-10"),
-            (11, 20, "11-20"),
-            (21, 31, "21-akhir bulan"),
-        ]
-        
-        for week_start, week_end, label in weeks:
-            start = current_month.replace(day=min(week_start, 28))
-            end = current_month.replace(day=min(week_end, 28))
-            periods.append({
-                "id": f"{current_month.strftime('%Y-%m')}_week_{label.split('-')[0]}",
-                "label": f"{label} {current_month.strftime('%B %Y')}",
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-            })
-        
-        return jsonify({"periods": periods})
+        return jsonify({"periods": _build_forecast_periods()})
     
     @app.route("/api/forecast", methods=["POST"])
     def generate_forecast():
@@ -554,7 +584,6 @@ def create_app():
             return jsonify({"error": "Financial data not available"}), 400
         
         # Parse inputs
-        period_id = payload.get("period_id")
         cash_on_hand = int(payload.get("cash_on_hand", 500_000_000))
         monthly_cost = int(payload.get("monthly_operating_cost", 200_000_000))
         
@@ -579,6 +608,9 @@ def create_app():
                 cash_on_hand=cash_on_hand,
                 start_date=start_date,
                 end_date=end_date,
+            )
+            forecast["external_factors"] = Researcher.get_payment_delay_risks(
+                _build_external_context(start_date, end_date)
             )
             return jsonify(forecast)
         except Exception as e:
@@ -624,11 +656,15 @@ def create_app():
                 cash_on_hand=cash_on_hand,
                 start_date=start_date,
             )
+            horizon_end = start_date + timedelta(days=365)
             return jsonify({
                 'start_date': start_date.isoformat(),
                 'cash_on_hand': cash_on_hand,
                 'forecasts': forecasts,
                 'time_horizons': CashflowForecaster.TIME_HORIZONS,
+                'external_factors': Researcher.get_payment_delay_risks(
+                    _build_external_context(start_date, horizon_end)
+                ),
             })
         except Exception as e:
             logger.error(f"Multi-horizon forecast error: {e}", exc_info=True)
@@ -643,47 +679,13 @@ def create_app():
         
         try:
             forecaster = current_app.config["forecaster"]
-            df = knowledge_base.df
-            
-            # Quick outstanding analysis
-            invoices = []
-            for idx, row in df.iterrows():
-                try:
-                    nilai_str = str(row.get('Nilai Invoice', '')).replace('Rp', '').replace('.', '').strip()
-                    nilai = int(nilai_str) if nilai_str else 0
-                    invoices.append({
-                        'partner_type': str(row.get('Tipe Partner', '')),
-                        'service': str(row.get('Layanan', '')),
-                        'kelas': forecaster.behavior_analyzer.extract_kelas(str(row.get('Kelas Pembayaran', ''))),
-                        'amount': nilai,
-                        'note': str(row.get('Catatan Historis Keterlambatan', '')),
-                    })
-                except:
-                    continue
-            
-            # Group by character
-            by_character = {}
-            for inv in invoices:
-                kelas = inv['kelas']
-                if kelas not in by_character:
-                    by_character[kelas] = {'invoices': [], 'total': 0}
-                by_character[kelas]['invoices'].append(inv)
-                by_character[kelas]['total'] += inv['amount']
-            
-            result = {
-                'by_character': {
-                    k: {
-                        'count': len(v['invoices']),
-                        'total': v['total'],
-                        'percentage': (v['total'] / sum(x['total'] for x in by_character.values()) * 100) if by_character else 0,
-                        'profile': forecaster.behavior_analyzer.get_payment_profile(k),
-                    }
-                    for k, v in by_character.items()
-                },
-                'total_outstanding': sum(v['total'] for v in by_character.values()),
-                'invoice_count': len(invoices),
-            }
-            
+            invoices = forecaster._parse_invoices(
+                knowledge_base.df,
+                start_date=datetime.now(),
+                end_date=datetime.now(),
+            )
+            result = forecaster._analyze_outstanding(invoices)
+            result["invoice_count"] = len(invoices)
             return jsonify(result)
         except Exception as e:
             logger.error(f"Outstanding analysis error: {e}", exc_info=True)
