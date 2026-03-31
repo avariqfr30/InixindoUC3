@@ -401,7 +401,7 @@ def create_app():
         SMART_SUGGESTIONS,
     )
     from core import KnowledgeBase, ReportGenerator, Researcher
-    from forecast_engine import CashflowForecaster
+    from forecast_engine import CashflowForecaster, parse_idr_amount
 
     app = Flask(__name__)
     CORS(app)
@@ -476,6 +476,21 @@ def create_app():
             f"periode {start_date.strftime('%d %B %Y')} sampai {end_date.strftime('%d %B %Y')} "
             f"partner {partner_snippet}"
         ).strip()
+
+    def _parse_request_idr_amount(raw_value, field_name, default_value):
+        value = default_value if raw_value is None else raw_value
+        try:
+            return parse_idr_amount(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"{field_name} must be provided in Rupiah (IDR) only. Foreign currencies are not supported."
+            ) from exc
+
+    def _validate_currency_code(payload):
+        currency = str(payload.get("currency", "IDR")).strip().upper()
+        if currency not in {"IDR", "RP", "RUPIAH"}:
+            raise ValueError("This app only accepts Rupiah (IDR) amounts.")
+        return "IDR"
 
     @app.route("/")
     def home():
@@ -584,8 +599,12 @@ def create_app():
             return jsonify({"error": "Financial data not available"}), 400
         
         # Parse inputs
-        cash_on_hand = int(payload.get("cash_on_hand", 500_000_000))
-        monthly_cost = int(payload.get("monthly_operating_cost", 200_000_000))
+        try:
+            currency_code = _validate_currency_code(payload)
+            cash_on_hand = _parse_request_idr_amount(payload.get("cash_on_hand"), "cash_on_hand", 500_000_000)
+            monthly_cost = _parse_request_idr_amount(payload.get("monthly_operating_cost"), "monthly_operating_cost", 200_000_000)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         
         # Parse period dates
         try:
@@ -609,6 +628,7 @@ def create_app():
                 start_date=start_date,
                 end_date=end_date,
             )
+            forecast["currency"] = currency_code
             forecast["external_factors"] = Researcher.get_payment_delay_risks(
                 _build_external_context(start_date, end_date)
             )
@@ -636,8 +656,12 @@ def create_app():
             return jsonify({"error": "Financial data not available"}), 400
         
         # Parse inputs
-        cash_on_hand = int(payload.get("cash_on_hand", 500_000_000))
-        monthly_cost = int(payload.get("monthly_operating_cost", 200_000_000))
+        try:
+            currency_code = _validate_currency_code(payload)
+            cash_on_hand = _parse_request_idr_amount(payload.get("cash_on_hand"), "cash_on_hand", 500_000_000)
+            monthly_cost = _parse_request_idr_amount(payload.get("monthly_operating_cost"), "monthly_operating_cost", 200_000_000)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         start_date_iso = payload.get("start_date")
         
         if not start_date_iso:
@@ -660,6 +684,7 @@ def create_app():
             return jsonify({
                 'start_date': start_date.isoformat(),
                 'cash_on_hand': cash_on_hand,
+                'currency': currency_code,
                 'forecasts': forecasts,
                 'time_horizons': CashflowForecaster.TIME_HORIZONS,
                 'external_factors': Researcher.get_payment_delay_risks(

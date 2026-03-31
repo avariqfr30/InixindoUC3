@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inixindo Cash In Intelligence</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/flatpickr/flatpickr.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/quill/quill.snow.css') }}">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
@@ -26,6 +27,10 @@
         .spinner.active { display: inline-block; }
         .control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 8px; }
         .field-hint { color: #64748b; font-size: 0.82rem; margin: -8px 0 14px 0; line-height: 1.35; }
+        .flatpickr-input[readonly] { background: white; cursor: pointer; }
+        .flatpickr-calendar { font-family: 'Segoe UI', sans-serif; border: 1px solid #e2e8f0; box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12); }
+        .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange { background: #CC0000; border-color: #CC0000; }
+        .flatpickr-day.inRange { background: #ffe6e6; border-color: #ffe6e6; color: #991b1b; box-shadow: none; }
         textarea.hidden-input { display: none; }
         .rich-editor-shell { border: 1px solid #cbd5e1; border-radius: 12px; overflow: hidden; background: white; margin-bottom: 8px; }
         .ql-toolbar.ql-snow { border: none; border-bottom: 1px solid #f1d5d5; background: #fff7f7; padding: 10px; }
@@ -79,14 +84,19 @@
 
             <div class="control-grid">
                 <div>
-                    <label for="period-select">Periode Waktu</label>
-                    <select id="period-select"></select>
-                    <p class="field-hint">Pilih window periode seperti 1-10, 11-20, atau 21-akhir bulan.</p>
+                    <label for="start-date">Tanggal Mulai</label>
+                    <input id="start-date" type="text" placeholder="Pilih tanggal mulai" />
+                    <p class="field-hint">Pilih tanggal mulai analisis dari kalender.</p>
                 </div>
                 <div>
-                    <label for="cash-on-hand">Cash In Hand Saat Ini</label>
+                    <label for="end-date">Tanggal Selesai</label>
+                    <input id="end-date" type="text" placeholder="Pilih tanggal selesai" />
+                    <p class="field-hint">Pilih tanggal akhir analisis secara bebas sesuai kebutuhan.</p>
+                </div>
+                <div>
+                    <label for="cash-on-hand">Cash In Hand Saat Ini (Rupiah / IDR)</label>
                     <input id="cash-on-hand" type="number" min="0" step="1000000" value="500000000" />
-                    <p class="field-hint">Digunakan sebagai starting cash untuk menghitung end cash secara internal.</p>
+                    <p class="field-hint">Masukkan angka Rupiah saja. Aplikasi ini tidak menerima USD, EUR, atau mata uang lain.</p>
                 </div>
             </div>
 
@@ -141,6 +151,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='vendor/flatpickr/flatpickr.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/quill/quill.min.js') }}"></script>
     <script>
         const ui = {
@@ -152,7 +163,8 @@
             
             notesToolbar: document.getElementById('notes-toolbar'),
             inputNotes: document.getElementById('input-notes'),
-            periodSelect: document.getElementById('period-select'),
+            startDateInput: document.getElementById('start-date'),
+            endDateInput: document.getElementById('end-date'),
             cashOnHandInput: document.getElementById('cash-on-hand'),
             suggestionContainer: document.getElementById('suggestion-container'),
             reviewText: document.getElementById('review-text'),
@@ -168,10 +180,11 @@
             statusTimer: null,
             statusPollIntervalMs: 1500,
             reviewContext: null,
-            forecastPeriods: [],
             forecastSnapshot: null,
             horizonSnapshot: null,
-            analysisContext: ""
+            analysisContext: "",
+            startPicker: null,
+            endPicker: null
         };
 
         const currencyFormatter = new Intl.NumberFormat('id-ID', {
@@ -218,6 +231,48 @@
                 toolbar: '#notes-toolbar'
             }
         });
+
+        function formatDateForDisplay(isoDate) {
+            const date = new Date(isoDate);
+            return date.toLocaleDateString('id-ID', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+            });
+        }
+
+        function initializeDatePickers(defaultStart, defaultEnd) {
+            if (appState.startPicker) {
+                appState.startPicker.destroy();
+            }
+            if (appState.endPicker) {
+                appState.endPicker.destroy();
+            }
+
+            appState.startPicker = flatpickr(ui.startDateInput, {
+                dateFormat: 'Y-m-d',
+                altInput: true,
+                altFormat: 'j F Y',
+                defaultDate: defaultStart,
+                onChange: function(selectedDates) {
+                    if (!selectedDates.length || !appState.endPicker) {
+                        return;
+                    }
+                    appState.endPicker.set('minDate', selectedDates[0]);
+                    if (appState.endPicker.selectedDates[0] && appState.endPicker.selectedDates[0] < selectedDates[0]) {
+                        appState.endPicker.setDate(selectedDates[0], true);
+                    }
+                },
+            });
+
+            appState.endPicker = flatpickr(ui.endDateInput, {
+                dateFormat: 'Y-m-d',
+                altInput: true,
+                altFormat: 'j F Y',
+                defaultDate: defaultEnd,
+                minDate: defaultStart,
+            });
+        }
 
         function serializeNotesDelta() {
             const lines = [];
@@ -292,15 +347,17 @@
         });
         syncNotesValue();
 
-        function renderPeriodOptions(periods) {
-            appState.forecastPeriods = periods || [];
-            ui.periodSelect.innerHTML = appState.forecastPeriods
-                .map(period => `<option value="${escapeHtml(period.id)}">${escapeHtml(period.label)}</option>`)
-                .join('');
-        }
-
-        function getSelectedPeriod() {
-            return appState.forecastPeriods.find(period => period.id === ui.periodSelect.value) || null;
+        function getSelectedRange() {
+            const start = ui.startDateInput.value;
+            const end = ui.endDateInput.value;
+            if (!start || !end) {
+                return null;
+            }
+            return {
+                start: `${start}T00:00:00`,
+                end: `${end}T00:00:00`,
+                label: `${formatDateForDisplay(start)} - ${formatDateForDisplay(end)}`,
+            };
         }
 
         function buildBehaviorRows(summary) {
@@ -443,6 +500,7 @@
             return [
                 '=== INPUT CASHFLOW TERPILIH ===',
                 `- Periode pilihan: ${selectedPeriod.label}`,
+                '- Seluruh nilai uang dibaca langsung dalam Rupiah (IDR).',
                 `- Cash on hand saat ini: ${formatCurrency(cashOnHand)}`,
                 reviewContext && reviewContext.dataSource ? `- Sumber data aktif: ${reviewContext.dataSource}` : null,
                 '',
@@ -566,9 +624,12 @@
             ])
                 .then(([configData, periodData]) => {
                     renderSuggestions(configData.suggestions);
-                    renderPeriodOptions(periodData.periods || []);
                     appState.statusPollIntervalMs = configData.statusPollIntervalMs || 1500;
                     appState.reviewContext = configData.reviewContext || null;
+                    const periods = periodData.periods || [];
+                    const defaultStart = periods[0] ? periods[0].start.slice(0, 10) : new Date().toISOString().slice(0, 10);
+                    const defaultEnd = periods[0] ? periods[0].end.slice(0, 10) : defaultStart;
+                    initializeDatePickers(defaultStart, defaultEnd);
 
                     ui.loader.classList.add('hidden');
                     ui.configStep.classList.remove('hidden');
@@ -586,11 +647,11 @@
         
         ui.btnReview.onclick = async () => { 
             syncNotesValue();
-            const selectedPeriod = getSelectedPeriod();
+            const selectedPeriod = getSelectedRange();
             const cashOnHand = Number(ui.cashOnHandInput.value || 0);
 
             if (!selectedPeriod) {
-                alert('Pilih periode waktu terlebih dahulu.');
+                alert('Pilih tanggal mulai dan tanggal selesai terlebih dahulu.');
                 return;
             }
             if (!Number.isFinite(cashOnHand) || cashOnHand < 0) {
@@ -604,6 +665,7 @@
 
             try {
                 const forecastPayload = {
+                    currency: 'IDR',
                     period_id: selectedPeriod.id,
                     start_date: selectedPeriod.start,
                     end_date: selectedPeriod.end,
@@ -619,6 +681,7 @@
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
+                            currency: 'IDR',
                             cash_on_hand: cashOnHand,
                             start_date: selectedPeriod.start,
                         }),

@@ -3,10 +3,34 @@ Cashflow Forecast Engine
 Generates predictions for Cash In, Cash Out, and Safety Status
 """
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 import pandas as pd
 import statistics
+
+
+FOREIGN_CURRENCY_MARKERS = (
+    "usd", "eur", "sgd", "aud", "jpy", "gbp", "cad", "cny", "myr", "$", "€", "£", "¥"
+)
+
+
+def parse_idr_amount(value) -> int:
+    """Parse amounts that must already be in Rupiah/IDR."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 0
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+
+    text = str(value).strip()
+    lowered = text.lower()
+    if any(marker in lowered for marker in FOREIGN_CURRENCY_MARKERS):
+        raise ValueError(f"Non-IDR currency marker detected: {text}")
+    if any(character.isalpha() for character in text) and "rp" not in lowered and "idr" not in lowered:
+        raise ValueError(f"Unsupported currency format: {text}")
+
+    digits = re.sub(r"[^\d]", "", text)
+    return int(digits) if digits else 0
 
 
 class PaymentBehaviorAnalyzer:
@@ -245,8 +269,7 @@ class CashflowForecaster:
         
         for idx, row in df.iterrows():
             try:
-                nilai_str = str(row.get('Nilai Invoice', '')).replace('Rp', '').replace('.', '').strip()
-                nilai = int(nilai_str) if nilai_str else 0
+                nilai = parse_idr_amount(row.get('Nilai Invoice', ''))
                 
                 invoices.append({
                     'index': idx,
