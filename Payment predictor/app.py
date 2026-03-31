@@ -6,10 +6,12 @@ import sqlite3
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, current_app, jsonify, render_template, request, send_file
 from flask_cors import CORS
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -398,6 +400,7 @@ def create_app():
         SMART_SUGGESTIONS,
     )
     from core import KnowledgeBase, ReportGenerator
+    from forecast_engine import CashflowForecaster
 
     app = Flask(__name__)
     CORS(app)
@@ -414,9 +417,13 @@ def create_app():
         job_store=job_store,
         metrics_window_hours=REPORT_METRICS_WINDOW_HOURS,
     )
+    
+    # Initialize forecaster
+    forecaster = CashflowForecaster(monthly_operating_cost_idr=200_000_000)
 
     app.config["knowledge_base"] = knowledge_base
     app.config["job_manager"] = job_manager
+    app.config["forecaster"] = forecaster
     app.config["min_completeness_score"] = REPORT_MIN_COMPLETENESS_SCORE
     app.config["status_poll_interval_ms"] = REPORT_STATUS_POLL_INTERVAL_MS
 
@@ -497,6 +504,190 @@ def create_app():
         )
         health_snapshot["minimumCompletenessScore"] = current_app.config["min_completeness_score"]
         return jsonify(health_snapshot)
+
+    # ==================== CASHFLOW FORECAST ENDPOINTS ====================
+    
+    @app.route("/api/forecast/periods", methods=["GET"])
+    def get_forecast_periods():
+        """Get available date range periods for forecasting"""
+        today = datetime.now()
+        periods = []
+        
+        # Generate week-based periods for current month
+        current_month = today.replace(day=1)
+        next_month = (current_month + timedelta(days=32)).replace(day=1)
+        
+        weeks = [
+            (1, 10, "1-10"),
+            (11, 20, "11-20"),
+            (21, 31, "21-akhir bulan"),
+        ]
+        
+        for week_start, week_end, label in weeks:
+            start = current_month.replace(day=min(week_start, 28))
+            end = current_month.replace(day=min(week_end, 28))
+            periods.append({
+                "id": f"{current_month.strftime('%Y-%m')}_week_{label.split('-')[0]}",
+                "label": f"{label} {current_month.strftime('%B %Y')}",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            })
+        
+        return jsonify({"periods": periods})
+    
+    @app.route("/api/forecast", methods=["POST"])
+    def generate_forecast():
+        """
+        Generate cashflow forecast
+        Request body:
+        {
+            "period_id": "2026-03_week_1",
+            "cash_on_hand": 500000000,
+            "monthly_operating_cost": 200000000
+        }
+        """
+        payload = request.get_json(silent=True) or {}
+        
+        # Get data
+        knowledge_base = current_app.config["knowledge_base"]
+        if knowledge_base.df is None or knowledge_base.df.empty:
+            return jsonify({"error": "Financial data not available"}), 400
+        
+        # Parse inputs
+        period_id = payload.get("period_id")
+        cash_on_hand = int(payload.get("cash_on_hand", 500_000_000))
+        monthly_cost = int(payload.get("monthly_operating_cost", 200_000_000))
+        
+        # Parse period dates
+        try:
+            start_iso = payload.get("start_date")
+            end_iso = payload.get("end_date")
+            
+            if not start_iso or not end_iso:
+                return jsonify({"error": "start_date and end_date required"}), 400
+            
+            start_date = datetime.fromisoformat(start_iso)
+            end_date = datetime.fromisoformat(end_iso)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid date format (use ISO format)"}), 400
+        
+        # Generate forecast
+        try:
+            forecaster = CashflowForecaster(monthly_operating_cost_idr=monthly_cost)
+            forecast = forecaster.forecast(
+                df=knowledge_base.df,
+                cash_on_hand=cash_on_hand,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            return jsonify(forecast)
+        except Exception as e:
+            logger.error(f"Forecast error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @app.route("/api/forecast/by-horizon", methods=["POST"])
+    def generate_forecast_by_horizon():
+        """
+        Generate cashflow forecasts for all time horizons (0-30d, 1-3m, 3-12m)
+        Request body:
+        {
+            "cash_on_hand": 500000000,
+            "monthly_operating_cost": 200000000,
+            "start_date": "2026-03-31"
+        }
+        """
+        payload = request.get_json(silent=True) or {}
+        
+        # Get data
+        knowledge_base = current_app.config["knowledge_base"]
+        if knowledge_base.df is None or knowledge_base.df.empty:
+            return jsonify({"error": "Financial data not available"}), 400
+        
+        # Parse inputs
+        cash_on_hand = int(payload.get("cash_on_hand", 500_000_000))
+        monthly_cost = int(payload.get("monthly_operating_cost", 200_000_000))
+        start_date_iso = payload.get("start_date")
+        
+        if not start_date_iso:
+            start_date = datetime.now()
+        else:
+            try:
+                start_date = datetime.fromisoformat(start_date_iso)
+            except (ValueError, TypeError):
+                return jsonify({"error": "Invalid start_date format (use ISO format)"}), 400
+        
+        # Generate forecasts for all horizons
+        try:
+            forecaster = CashflowForecaster(monthly_operating_cost_idr=monthly_cost)
+            forecasts = forecaster.forecast_by_horizon(
+                df=knowledge_base.df,
+                cash_on_hand=cash_on_hand,
+                start_date=start_date,
+            )
+            return jsonify({
+                'start_date': start_date.isoformat(),
+                'cash_on_hand': cash_on_hand,
+                'forecasts': forecasts,
+                'time_horizons': CashflowForecaster.TIME_HORIZONS,
+            })
+        except Exception as e:
+            logger.error(f"Multi-horizon forecast error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @app.route("/api/forecast/outstanding", methods=["GET"])
+    def get_outstanding():
+        """Get outstanding invoices analysis"""
+        knowledge_base = current_app.config["knowledge_base"]
+        if knowledge_base.df is None or knowledge_base.df.empty:
+            return jsonify({"error": "Financial data not available"}), 400
+        
+        try:
+            forecaster = current_app.config["forecaster"]
+            df = knowledge_base.df
+            
+            # Quick outstanding analysis
+            invoices = []
+            for idx, row in df.iterrows():
+                try:
+                    nilai_str = str(row.get('Nilai Invoice', '')).replace('Rp', '').replace('.', '').strip()
+                    nilai = int(nilai_str) if nilai_str else 0
+                    invoices.append({
+                        'partner_type': str(row.get('Tipe Partner', '')),
+                        'service': str(row.get('Layanan', '')),
+                        'kelas': forecaster.behavior_analyzer.extract_kelas(str(row.get('Kelas Pembayaran', ''))),
+                        'amount': nilai,
+                        'note': str(row.get('Catatan Historis Keterlambatan', '')),
+                    })
+                except:
+                    continue
+            
+            # Group by character
+            by_character = {}
+            for inv in invoices:
+                kelas = inv['kelas']
+                if kelas not in by_character:
+                    by_character[kelas] = {'invoices': [], 'total': 0}
+                by_character[kelas]['invoices'].append(inv)
+                by_character[kelas]['total'] += inv['amount']
+            
+            result = {
+                'by_character': {
+                    k: {
+                        'count': len(v['invoices']),
+                        'total': v['total'],
+                        'percentage': (v['total'] / sum(x['total'] for x in by_character.values()) * 100) if by_character else 0,
+                        'profile': forecaster.behavior_analyzer.get_payment_profile(k),
+                    }
+                    for k, v in by_character.items()
+                },
+                'total_outstanding': sum(v['total'] for v in by_character.values()),
+                'invoice_count': len(invoices),
+            }
+            
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"Outstanding analysis error: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
 
     return app
 
