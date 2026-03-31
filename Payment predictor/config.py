@@ -123,6 +123,14 @@ MANDATORY RULES:
 19. Do not add an introduction before `# Ringkasan Eksekutif`.
 20. If `### Konteks OSINT Pendukung` is included, summarize external signals in business language and mention source domains naturally.
 21. If visual markers are provided, reproduce them verbatim on standalone lines in the most relevant section and do not modify the marker syntax.
+22. If the user focus includes structured cashflow forecast inputs, explicitly weave in:
+   - selected period window,
+   - current cash on hand,
+   - estimated payments by character, retention, and satisfaction,
+   - total outstanding by age and payment character,
+   - external factors that may delay payment,
+   - short-, mid-, and long-term implications.
+23. Do not expose the word `aman` as a visible label unless the source context explicitly asks for it; instead, describe the operating buffer, ending cash, and implications in normal business language.
 
 VISUAL MARKERS:
 {visual_prompt}
