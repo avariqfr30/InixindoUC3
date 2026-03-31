@@ -60,6 +60,7 @@ from config import (
     WAITRESS_THREADS,
     WRITER_FIRM_NAME,
 )
+from forecast_engine import parse_idr_amount
 
 matplotlib.use("Agg")
 logger = logging.getLogger(__name__)
@@ -480,10 +481,7 @@ class FinancialAnalyzer:
 
     @staticmethod
     def _parse_currency(value):
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            return 0
-        digits = re.sub(r"[^\d]", "", str(value))
-        return int(digits) if digits else 0
+        return parse_idr_amount(value)
 
     @classmethod
     def _detect_payment_class(cls, raw_value):
