@@ -9,9 +9,11 @@ import statistics
 import textwrap
 import threading
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import chromadb
+import diskcache as dc
 import markdown
 import matplotlib
 import matplotlib.patches as patches
@@ -26,6 +28,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
+from pydantic import BaseModel, Field
 from ollama import Client
 from sqlalchemy import create_engine
 
@@ -64,6 +67,18 @@ from forecast_engine import parse_idr_amount
 
 matplotlib.use("Agg")
 logger = logging.getLogger(__name__)
+
+
+# ==========================================
+# PYDANTIC SCHEMAS & FAST CACHING
+# ==========================================
+class InsightSchema(BaseModel):
+    insight: str = Field(description="The extracted insight in Indonesian. 'NOT_FOUND' if missing.")
+
+# Initialize ultra-fast disk caching for OSINT (survives server restarts)
+osint_cache_dir = Path(DATA_DIR) / '.osint_cache' if DATA_DIR else Path('./.osint_cache')
+osint_cache = dc.Cache(str(osint_cache_dir))
+# ==========================================
 
 
 class InternalAPIClient:
@@ -1265,8 +1280,6 @@ class Researcher:
         },
     ]
 
-    _cache = {}
-
     @staticmethod
     def _is_serper_available():
         return bool(
@@ -1274,6 +1287,61 @@ class Researcher:
             and SERPER_API_KEY.strip()
             and SERPER_API_KEY != "masukkan_api_key_serper_anda_disini"
         )
+
+    @staticmethod
+    def fetch_full_markdown(url):
+        """Fetches the clean markdown text of any URL using Jina Reader."""
+        if not url: return ""
+        try:
+            jina_url = f"https://r.jina.ai/{url}"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(jina_url, headers=headers, timeout=12)
+            if response.status_code == 200:
+                return response.text[:6000] 
+            return ""
+        except Exception as e:
+            logger.warning("Failed to fetch full markdown for %s: %s", url, e)
+            return ""
+
+    @classmethod
+    def extract_insight_with_llm(cls, url, extraction_goal):
+        """Universal Deep Scraper: Reads a URL and extracts a specific qualitative insight via Pydantic/LLM."""
+        markdown_text = cls.fetch_full_markdown(url)
+        if not markdown_text:
+            return ""
+            
+        prompt = f"""
+        You are an expert business researcher. Read the following source text.
+        Your goal is to extract: {extraction_goal}
+        
+        SOURCE TEXT:
+        {markdown_text}
+        
+        Respond ONLY with a valid JSON object using this schema. If the information is not present, use "NOT_FOUND".
+        {{
+            "insight": "<concise professional summary in Indonesian>"
+        }}
+        """
+        try:
+            client = Client(host=OLLAMA_HOST)
+            res = client.chat(
+                model=LLM_MODEL,
+                messages=[{'role': 'user', 'content': prompt}],
+                options={'temperature': 0.0}
+            )
+            raw_text = res['message']['content']
+            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            parsed_dict = json.loads(match.group(0)) if match else json.loads(raw_text)
+            
+            # Pydantic validation
+            data = InsightSchema.model_validate(parsed_dict)
+            
+            if "NOT_FOUND" in data.insight.upper() or not data.insight:
+                return ""
+            return data.insight
+        except Exception as e:
+            logger.warning("Insight extraction failed for %s: %s", url, e)
+            return ""
 
     @classmethod
     def _execute_serper_query(cls, query, mode="search", num_results=6):
@@ -1367,15 +1435,12 @@ class Researcher:
         return "\n".join(lines)
 
     @classmethod
+    @osint_cache.memoize(expire=86400)
     def get_macro_finance_trends(cls, extra_context=""):
         if not cls._is_serper_available():
             return "Data OSINT eksternal tidak tersedia (SERPER_API_KEY belum dikonfigurasi)."
 
         context_snippet = (extra_context or "").strip()
-        cache_key = context_snippet.lower()
-        if cache_key in cls._cache:
-            return cls._cache[cache_key]
-
         search_jobs = []
         for topic_config in cls._OSINT_TOPICS:
             query = topic_config["query"]
@@ -1398,6 +1463,22 @@ class Researcher:
                 except Exception as exc:
                     logger.warning("OSINT future failed for %s: %s", topic, exc)
 
+        # --- DEEP SCRAPE THE #1 RESULT ---
+        deep_insight_text = ""
+        top_link = None
+        for topic, entries in topic_results.items():
+            if entries and entries[0].get("link"):
+                top_link = entries[0]["link"]
+                break
+                
+        if top_link:
+            logger.info("Deep scraping OSINT for macro finance trends: %s", top_link)
+            goal = "What are the latest macro trends regarding B2B payment behavior, budget cycles, or invoice collection challenges in Indonesia?"
+            insight = cls.extract_insight_with_llm(top_link, goal)
+            if insight:
+                source_domain = urlparse(top_link).netloc.replace("www.", "")
+                deep_insight_text = f"**Insight Mendalam (via {source_domain}):** {insight}\n\n"
+
         blocks = []
         for topic_config in cls._OSINT_TOPICS:
             topic_name = topic_config["topic"]
@@ -1408,10 +1489,10 @@ class Researcher:
         if not combined:
             combined = "Tidak ada data OSINT eksternal yang dapat dipakai."
 
-        cls._cache[cache_key] = combined
-        return combined
+        return deep_insight_text + combined
 
     @classmethod
+    @osint_cache.memoize(expire=86400)
     def get_chapter_signal(cls, chapter_keywords, notes=""):
         if not cls._is_serper_available():
             return "Sinyal OSINT per bab tidak tersedia."
@@ -1438,15 +1519,12 @@ class Researcher:
         return "\n".join(lines)
 
     @classmethod
+    @osint_cache.memoize(expire=86400)
     def get_payment_delay_risks(cls, extra_context=""):
         if not cls._is_serper_available():
             return []
 
         context_snippet = (extra_context or "").strip()
-        cache_key = f"delay:{context_snippet.lower()}"
-        if cache_key in cls._cache:
-            return cls._cache[cache_key]
-
         factors = []
 
         for topic in cls._DELAY_FACTOR_TOPICS:
@@ -1483,7 +1561,6 @@ class Researcher:
                 }
             )
 
-        cls._cache[cache_key] = factors
         return factors
 
 
@@ -2433,7 +2510,7 @@ class ReportGenerator:
         report_context = self.kb.get_report_context(notes)
 
         try:
-            macro_osint = global_osint_future.result(timeout=25)
+            macro_osint = global_osint_future.result(timeout=45)
         except Exception:
             macro_osint = "Tidak ada tren finansial eksternal yang tersedia."
 
