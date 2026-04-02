@@ -140,6 +140,13 @@ class CashflowForecaster:
     """Main forecaster combining Cash In predictions, Cash Out projections, and safety analysis"""
     
     AMAN_THRESHOLD_IDR = 100_000_000  # IDR 100M minimum safe buffer
+    HEALTH_WEIGHTS = {
+        'liquidity': 30,
+        'stability': 20,
+        'conversion': 20,
+        'coverage': 20,
+        'risk': 10,
+    }
     
     # Time horizons per Slide 6
     TIME_HORIZONS = {
@@ -209,20 +216,32 @@ class CashflowForecaster:
         total_cash_in = sum(item['amount'] for item in cash_in_forecast['predicted_payments'])
         total_cash_out = cash_out_forecast['total_cash_out']
         ending_cash = cash_on_hand + total_cash_in - total_cash_out
-        
-        # Safety analysis
-        is_aman = ending_cash >= self.AMAN_THRESHOLD_IDR
-        safety_status = 'Aman' if is_aman else 'Tidak Aman'
-        
+
         # Outstanding analysis
         outstanding = self._analyze_outstanding(invoices)
+
+        cashflow_health = self._build_cashflow_health(
+            cash_on_hand=cash_on_hand,
+            total_cash_in=total_cash_in,
+            total_cash_out=total_cash_out,
+            ending_cash=ending_cash,
+            invoices=invoices,
+            predicted_payments=cash_in_forecast['predicted_payments'],
+            outstanding=outstanding,
+        )
         
         # Alerts
-        alerts = self._generate_alerts(cash_on_hand, ending_cash, outstanding, invoices)
+        alerts = self._generate_alerts(
+            cash_on_hand,
+            ending_cash,
+            outstanding,
+            invoices,
+            cashflow_health,
+        )
         
         # Recommendations
         recommendations = self._generate_recommendations(
-            safety_status, 
+            cashflow_health,
             outstanding, 
             invoices,
             ending_cash
@@ -241,8 +260,7 @@ class CashflowForecaster:
             },
             'current_state': {
                 'cash_on_hand': cash_on_hand,
-                'safety_status': safety_status,
-                'is_aman': is_aman,
+                'buffer_status': cashflow_health['operating_signal'],
             },
             'forecast': {
                 'cash_in': cash_in_forecast,
@@ -250,12 +268,24 @@ class CashflowForecaster:
                 'ending_cash': ending_cash,
                 'formula': f'{cash_on_hand:,} + {total_cash_in:,} - {total_cash_out:,} = {ending_cash:,}',
             },
+            'cashflow_health': cashflow_health,
             'working_capital_signal': self._build_working_capital_signal(
                 cash_on_hand=cash_on_hand,
                 total_cash_in=total_cash_in,
                 total_cash_out=total_cash_out,
                 ending_cash=ending_cash,
                 horizon_key=horizon_key,
+                cashflow_health=cashflow_health,
+            ),
+            'dashboard_snapshot': self._build_dashboard_snapshot(
+                cash_on_hand=cash_on_hand,
+                total_cash_out=total_cash_out,
+                invoices=invoices,
+                predicted_payments=cash_in_forecast['predicted_payments'],
+                ending_cash=ending_cash,
+                cashflow_health=cashflow_health,
+                outstanding=outstanding,
+                start_date=start_date,
             ),
             'outstanding': outstanding,
             'alerts': alerts,
@@ -368,7 +398,8 @@ class CashflowForecaster:
         cash_on_hand: int,
         ending_cash: int,
         outstanding: Dict,
-        invoices: List[Dict]
+        invoices: List[Dict],
+        cashflow_health: Dict,
     ) -> List[Dict]:
         """Generate alerts based on risk indicators"""
         alerts = []
@@ -408,24 +439,41 @@ class CashflowForecaster:
                     'message': f'{pct:.1f}% revenue outstanding dari high-risk clients (Kelas D-E)',
                     'severity': 3,
                 })
+
+        weakest_dimensions = sorted(
+            cashflow_health['dimensions'].values(),
+            key=lambda item: item['score'],
+        )[:2]
+        for dimension in weakest_dimensions:
+            if dimension['score'] >= 60:
+                continue
+            alerts.append({
+                'type': 'WARNING' if dimension['score'] >= 40 else 'CRITICAL',
+                'message': f"{dimension['label']} lemah: {dimension['summary']}",
+                'severity': 4 if dimension['score'] < 40 else 3,
+            })
         
         return alerts
     
     def _generate_recommendations(
         self,
-        safety_status: str,
+        cashflow_health: Dict,
         outstanding: Dict,
         invoices: List[Dict],
         ending_cash: int,
     ) -> List[Dict]:
         """Generate actionable recommendations"""
         recommendations = []
+        dimension_scores = {
+            key: payload['score']
+            for key, payload in cashflow_health['dimensions'].items()
+        }
         
-        if safety_status == 'Tidak Aman':
+        if cashflow_health['internal_status'] != 'aman':
             recommendations.append({
                 'priority': 'HIGH',
                 'action': 'Percepat penagihan dari high-priority clients',
-                'rationale': 'Ending cash di bawah threshold aman',
+                'rationale': 'Buffer operasional menipis dan perlu dijaga agar kewajiban jangka pendek tetap tertutup',
                 'estimated_impact': 'Dapat meningkatkan cash in 10-30 hari',
                 'sop': 'Hubungi Client Relations, escalate ke Finance VP',
                 'customer_characteristic': 'Likuiditas internal tertekan',
@@ -475,6 +523,42 @@ class CashflowForecaster:
                 'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic('Kelas A'),
                 'retention_signal': 'Retention kuat; akun sehat bisa dijaga untuk menopang kestabilan cash in jangka menengah',
                 'satisfaction_signal': 'Satisfaction tinggi memberi ruang untuk cross-sell tanpa menambah risiko pembayaran berarti',
+            })
+
+        if dimension_scores.get('stability', 100) < 60:
+            recommendations.append({
+                'priority': 'HIGH',
+                'action': 'Perkuat visibilitas jadwal cash in mingguan',
+                'rationale': 'Pola masuk kas masih fluktuatif atau terlalu sedikit invoice yang punya timing realisasi yang jelas dalam periode ini',
+                'estimated_impact': 'Meningkatkan akurasi forecast kas dan menurunkan kejutan pada jadwal pembayaran',
+                'sop': 'Buat weekly collection calendar, locking invoice target mingguan, dan review aging tiap awal minggu',
+                'customer_characteristic': 'Timing pembayaran belum cukup predictable untuk kebutuhan operasional',
+                'retention_signal': 'Komunikasi rutin menjaga akun tetap engaged sambil mendorong kepastian jadwal bayar',
+                'satisfaction_signal': 'Kepastian dokumen dan follow-up yang rapi membantu klien membayar lebih terjadwal',
+            })
+
+        if dimension_scores.get('conversion', 100) < 60:
+            recommendations.append({
+                'priority': 'HIGH',
+                'action': 'Percepat konversi invoice menjadi kas',
+                'rationale': 'Rata-rata delay pembayaran masih terlalu panjang dibanding kebutuhan arus kas jangka pendek',
+                'estimated_impact': 'Memendekkan jeda invoice-to-cash dan menurunkan outstanding yang menua',
+                'sop': 'Prioritaskan invoice dengan dokumen lengkap, percepat approval internal, dan gunakan reminder bertahap sebelum jatuh tempo',
+                'customer_characteristic': 'Revenue sudah ada, namun kecepatan konversi ke kas belum sehat',
+                'retention_signal': 'Percepatan harus tetap menjaga hubungan akun yang masih bisa diselamatkan',
+                'satisfaction_signal': 'Hambatan layanan atau administrasi perlu dibersihkan agar klien tidak menunda pembayaran lebih lama',
+            })
+
+        if dimension_scores.get('risk', 100) < 60:
+            recommendations.append({
+                'priority': 'MEDIUM',
+                'action': 'Turunkan konsentrasi risiko pada segmen yang paling dominan',
+                'rationale': 'Eksposur outstanding terlalu terkonsentrasi pada partner/service tertentu atau terlalu berat di kelas D-E',
+                'estimated_impact': 'Mengurangi dampak jika satu segmen besar menunda atau menghentikan pembayaran',
+                'sop': 'Mapping top exposure per partner type dan layanan, lalu susun jalur eskalasi serta diversifikasi pipeline penagihan',
+                'customer_characteristic': 'Risiko saat ini datang dari konsentrasi, bukan hanya dari total outstanding',
+                'retention_signal': 'Retensi akun besar tetap penting, tetapi ketergantungan berlebih perlu dikendalikan',
+                'satisfaction_signal': 'Perlu dibedakan mana isu relasi, mana isu struktur portofolio agar tindakan tidak salah sasaran',
             })
         
         return recommendations
@@ -527,15 +611,26 @@ class CashflowForecaster:
         total_cash_out: int,
         ending_cash: int,
         horizon_key: str = None,
+        cashflow_health: Dict = None,
     ) -> Dict:
         """Silent operating status that can guide UI without exposing the internal label directly."""
         gap = ending_cash - self.AMAN_THRESHOLD_IDR
-        if gap >= 150_000_000:
+        if cashflow_health:
+            label = cashflow_health['operating_signal']
+            weakest_dimensions = cashflow_health['weakest_dimensions']
+            readiness_checks = cashflow_health['readiness_checks']
+        elif gap >= 150_000_000:
             label = 'buffer kuat'
+            weakest_dimensions = []
+            readiness_checks = {}
         elif gap >= 0:
             label = 'buffer tipis'
+            weakest_dimensions = []
+            readiness_checks = {}
         else:
             label = 'perlu intervensi'
+            weakest_dimensions = []
+            readiness_checks = {}
 
         return {
             'label': label,
@@ -545,4 +640,531 @@ class CashflowForecaster:
             'ending_cash': ending_cash,
             'gap_to_safe_buffer': gap,
             'horizon': self.TIME_HORIZONS.get(horizon_key, {}).get('label', 'Custom Period') if horizon_key else 'Custom Period',
+            'weakest_dimensions': weakest_dimensions,
+            'readiness_checks': readiness_checks,
         }
+
+    def _build_cashflow_health(
+        self,
+        cash_on_hand: int,
+        total_cash_in: int,
+        total_cash_out: int,
+        ending_cash: int,
+        invoices: List[Dict],
+        predicted_payments: List[Dict],
+        outstanding: Dict,
+    ) -> Dict:
+        liquidity = self._score_liquidity(cash_on_hand, total_cash_out, ending_cash)
+        stability = self._score_stability(invoices, predicted_payments, total_cash_in, outstanding['total_outstanding'])
+        conversion = self._score_conversion(invoices)
+        coverage = self._score_coverage(total_cash_in, total_cash_out)
+        risk = self._score_risk(invoices, outstanding['total_outstanding'])
+
+        dimensions = {
+            'liquidity': liquidity,
+            'stability': stability,
+            'conversion': conversion,
+            'coverage': coverage,
+            'risk': risk,
+        }
+
+        overall_score = round(
+            sum(
+                payload['score'] * (self.HEALTH_WEIGHTS[key] / 100)
+                for key, payload in dimensions.items()
+            ),
+            1,
+        )
+
+        if overall_score >= 80:
+            internal_status = 'aman'
+            operating_signal = 'buffer operasional terjaga'
+        elif overall_score >= 60:
+            internal_status = 'waspada'
+            operating_signal = 'buffer perlu dipantau ketat'
+        else:
+            internal_status = 'bahaya'
+            operating_signal = 'buffer memerlukan intervensi cepat'
+
+        weakest_dimensions = [
+            payload['label']
+            for payload in sorted(dimensions.values(), key=lambda item: item['score'])[:2]
+        ]
+
+        readiness_checks = {
+            'cash_available_now': {
+                'ok': liquidity['metrics']['current_runway_months'] >= 1,
+                'label': 'Cash tersedia saat ini',
+                'detail': f"Runway saat ini {liquidity['metrics']['current_runway_months']:.1f} bulan.",
+            },
+            'cash_in_visibility': {
+                'ok': stability['metrics']['visibility_ratio'] >= 0.35 and stability['metrics']['predicted_payment_count'] > 0,
+                'label': 'Timing cash in dapat dipetakan',
+                'detail': (
+                    f"{stability['metrics']['visibility_ratio_pct']:.1f}% nilai invoice memiliki proyeksi jatuh ke periode/horizon yang dipilih."
+                ),
+            },
+            'risk_controlled': {
+                'ok': risk['score'] >= 60,
+                'label': 'Risiko cashflow terkendali',
+                'detail': (
+                    f"Eksposur partner terbesar {risk['metrics']['top_partner_share_pct']:.1f}% "
+                    f"dan porsi high-risk {risk['metrics']['high_risk_share_pct']:.1f}%."
+                ),
+            },
+        }
+
+        return {
+            'overall_score': overall_score,
+            'internal_status': internal_status,
+            'operating_signal': operating_signal,
+            'dimensions': dimensions,
+            'weakest_dimensions': weakest_dimensions,
+            'readiness_checks': readiness_checks,
+        }
+
+    def _score_liquidity(self, cash_on_hand: int, total_cash_out: int, ending_cash: int) -> Dict:
+        current_runway_months = (cash_on_hand / self.monthly_cost) if self.monthly_cost else 0
+        projected_runway_months = (max(ending_cash, 0) / self.monthly_cost) if self.monthly_cost else 0
+        cash_vs_obligation_ratio = cash_on_hand / total_cash_out if total_cash_out else 999
+
+        runway_score = self._score_runway(projected_runway_months)
+        obligation_score = self._score_obligation_ratio(cash_vs_obligation_ratio)
+        score = round((runway_score * 0.7) + (obligation_score * 0.3), 1)
+
+        return {
+            'label': 'Likuiditas',
+            'score': score,
+            'weight': self.HEALTH_WEIGHTS['liquidity'],
+            'summary': (
+                f"Runway proyeksi {projected_runway_months:.1f} bulan dengan rasio kas terhadap kewajiban jangka pendek "
+                f"{cash_vs_obligation_ratio:.2f}x."
+            ),
+            'metrics': {
+                'current_runway_months': round(current_runway_months, 2),
+                'projected_runway_months': round(projected_runway_months, 2),
+                'cash_vs_obligation_ratio': round(cash_vs_obligation_ratio, 2),
+            },
+        }
+
+    def _score_stability(
+        self,
+        invoices: List[Dict],
+        predicted_payments: List[Dict],
+        total_cash_in: int,
+        total_outstanding: int,
+    ) -> Dict:
+        payment_date_totals = {}
+        for payment in predicted_payments:
+            payment_date = payment['estimated_payment_date'][:10]
+            payment_date_totals[payment_date] = payment_date_totals.get(payment_date, 0) + payment['amount']
+
+        totals = list(payment_date_totals.values())
+        if len(totals) > 1 and statistics.mean(totals) > 0:
+            coefficient_variation = statistics.pstdev(totals) / statistics.mean(totals)
+        else:
+            coefficient_variation = 0
+
+        total_predicted_amount = sum(payment['amount'] for payment in predicted_payments)
+        low_delay_share = (
+            sum(payment['amount'] for payment in predicted_payments if payment['days_delay'] <= 14) / total_predicted_amount
+            if total_predicted_amount else 0
+        )
+        high_delay_share = (
+            sum(payment['amount'] for payment in predicted_payments if payment['days_delay'] > 30) / total_predicted_amount
+            if total_predicted_amount else 0
+        )
+        visibility_ratio = (total_cash_in / total_outstanding) if total_outstanding else 0
+
+        variability_score = self._score_variability(coefficient_variation)
+        consistency_score = self._score_stability_mix(low_delay_share, high_delay_share)
+        visibility_score = self._score_visibility(visibility_ratio)
+        score = round(
+            (consistency_score * 0.4)
+            + (variability_score * 0.3)
+            + (visibility_score * 0.3),
+            1,
+        )
+
+        return {
+            'label': 'Stabilitas Cashflow',
+            'score': score,
+            'weight': self.HEALTH_WEIGHTS['stability'],
+            'summary': (
+                f"Visibilitas cash in {visibility_ratio * 100:.1f}% dari outstanding dengan variasi realisasi "
+                f"{coefficient_variation:.2f} dan porsi pembayaran cepat {low_delay_share * 100:.1f}%."
+            ),
+            'metrics': {
+                'visibility_ratio': round(visibility_ratio, 3),
+                'visibility_ratio_pct': round(visibility_ratio * 100, 1),
+                'coefficient_variation': round(coefficient_variation, 2),
+                'low_delay_share_pct': round(low_delay_share * 100, 1),
+                'high_delay_share_pct': round(high_delay_share * 100, 1),
+                'predicted_payment_count': len(predicted_payments),
+            },
+        }
+
+    def _score_conversion(self, invoices: List[Dict]) -> Dict:
+        total_amount = sum(invoice['amount'] for invoice in invoices)
+        weighted_delay = sum(
+            self.behavior_analyzer.get_payment_profile(invoice['kelas'])['days_delay'] * invoice['amount']
+            for invoice in invoices
+        )
+        average_delay = (weighted_delay / total_amount) if total_amount else 0
+        quick_conversion_share = (
+            sum(
+                invoice['amount']
+                for invoice in invoices
+                if self.behavior_analyzer.get_payment_profile(invoice['kelas'])['days_delay'] <= 14
+            ) / total_amount
+            if total_amount else 0
+        )
+
+        delay_score = self._score_delay_days(average_delay)
+        quick_share_score = self._score_quick_share(quick_conversion_share)
+        score = round((delay_score * 0.7) + (quick_share_score * 0.3), 1)
+
+        return {
+            'label': 'Konversi Invoice ke Kas',
+            'score': score,
+            'weight': self.HEALTH_WEIGHTS['conversion'],
+            'summary': (
+                f"Rata-rata delay tertimbang {average_delay:.1f} hari dengan porsi konversi cepat "
+                f"{quick_conversion_share * 100:.1f}%."
+            ),
+            'metrics': {
+                'average_delay_days': round(average_delay, 1),
+                'quick_conversion_share_pct': round(quick_conversion_share * 100, 1),
+            },
+        }
+
+    def _score_coverage(self, total_cash_in: int, total_cash_out: int) -> Dict:
+        coverage_ratio = (total_cash_in / total_cash_out) if total_cash_out else 999
+        score = self._score_coverage_ratio(coverage_ratio)
+        return {
+            'label': 'Coverage',
+            'score': score,
+            'weight': self.HEALTH_WEIGHTS['coverage'],
+            'summary': f"Rasio cash in terhadap cash out berada di {coverage_ratio:.2f}x.",
+            'metrics': {
+                'coverage_ratio': round(coverage_ratio, 2),
+            },
+        }
+
+    def _score_risk(self, invoices: List[Dict], total_outstanding: int) -> Dict:
+        partner_totals = {}
+        service_totals = {}
+        high_risk_total = 0
+
+        for invoice in invoices:
+            amount = invoice['amount']
+            partner_totals[invoice['partner_type']] = partner_totals.get(invoice['partner_type'], 0) + amount
+            service_totals[invoice['service']] = service_totals.get(invoice['service'], 0) + amount
+            if invoice['kelas'] in {'Kelas D', 'Kelas E'}:
+                high_risk_total += amount
+
+        top_partner_share = (max(partner_totals.values()) / total_outstanding) if partner_totals and total_outstanding else 0
+        top_service_share = (max(service_totals.values()) / total_outstanding) if service_totals and total_outstanding else 0
+        high_risk_share = (high_risk_total / total_outstanding) if total_outstanding else 0
+
+        concentration_score = self._score_concentration(top_partner_share, top_service_share)
+        overdue_risk_score = self._score_high_risk_share(high_risk_share)
+        score = round((concentration_score * 0.6) + (overdue_risk_score * 0.4), 1)
+
+        return {
+            'label': 'Risk Exposure',
+            'score': score,
+            'weight': self.HEALTH_WEIGHTS['risk'],
+            'summary': (
+                f"Konsentrasi partner terbesar {top_partner_share * 100:.1f}%, layanan terbesar {top_service_share * 100:.1f}%, "
+                f"dan porsi kelas D-E {high_risk_share * 100:.1f}%."
+            ),
+            'metrics': {
+                'top_partner_share_pct': round(top_partner_share * 100, 1),
+                'top_service_share_pct': round(top_service_share * 100, 1),
+                'high_risk_share_pct': round(high_risk_share * 100, 1),
+            },
+        }
+
+    @staticmethod
+    def _score_runway(runway_months: float) -> float:
+        if runway_months >= 3:
+            return 100
+        if runway_months >= 2:
+            return 85
+        if runway_months >= 1.5:
+            return 70
+        if runway_months >= 1:
+            return 45
+        if runway_months >= 0.5:
+            return 25
+        return 10
+
+    @staticmethod
+    def _score_obligation_ratio(ratio: float) -> float:
+        if ratio >= 1.2:
+            return 100
+        if ratio >= 1.0:
+            return 85
+        if ratio >= 0.75:
+            return 60
+        if ratio >= 0.5:
+            return 35
+        return 10
+
+    @staticmethod
+    def _score_variability(coefficient_variation: float) -> float:
+        if coefficient_variation <= 0.35:
+            return 100
+        if coefficient_variation <= 0.6:
+            return 80
+        if coefficient_variation <= 0.9:
+            return 60
+        if coefficient_variation <= 1.2:
+            return 40
+        return 20
+
+    @staticmethod
+    def _score_stability_mix(low_delay_share: float, high_delay_share: float) -> float:
+        if low_delay_share >= 0.6 and high_delay_share <= 0.15:
+            return 100
+        if low_delay_share >= 0.45 and high_delay_share <= 0.25:
+            return 80
+        if low_delay_share >= 0.3 and high_delay_share <= 0.35:
+            return 60
+        if low_delay_share >= 0.2 and high_delay_share <= 0.45:
+            return 40
+        return 20
+
+    @staticmethod
+    def _score_visibility(visibility_ratio: float) -> float:
+        if visibility_ratio >= 0.7:
+            return 100
+        if visibility_ratio >= 0.5:
+            return 80
+        if visibility_ratio >= 0.35:
+            return 60
+        if visibility_ratio >= 0.2:
+            return 40
+        return 20
+
+    @staticmethod
+    def _score_delay_days(delay_days: float) -> float:
+        if delay_days <= 7:
+            return 100
+        if delay_days <= 14:
+            return 75
+        if delay_days <= 30:
+            return 50
+        if delay_days <= 60:
+            return 25
+        return 10
+
+    @staticmethod
+    def _score_quick_share(share: float) -> float:
+        if share >= 0.7:
+            return 100
+        if share >= 0.5:
+            return 80
+        if share >= 0.35:
+            return 60
+        if share >= 0.2:
+            return 40
+        return 20
+
+    @staticmethod
+    def _score_coverage_ratio(ratio: float) -> float:
+        if ratio >= 1.5:
+            return 100
+        if ratio >= 1.2:
+            return 85
+        if ratio >= 1.0:
+            return 70
+        if ratio >= 0.8:
+            return 45
+        return 20
+
+    @staticmethod
+    def _score_concentration(top_partner_share: float, top_service_share: float) -> float:
+        if top_partner_share <= 0.3 and top_service_share <= 0.3:
+            return 100
+        if top_partner_share <= 0.5 and top_service_share <= 0.5:
+            return 70
+        if top_partner_share <= 0.65 and top_service_share <= 0.65:
+            return 45
+        return 20
+
+    @staticmethod
+    def _score_high_risk_share(high_risk_share: float) -> float:
+        if high_risk_share <= 0.15:
+            return 100
+        if high_risk_share <= 0.3:
+            return 70
+        if high_risk_share <= 0.5:
+            return 45
+        return 20
+
+    def _build_dashboard_snapshot(
+        self,
+        cash_on_hand: int,
+        total_cash_out: int,
+        invoices: List[Dict],
+        predicted_payments: List[Dict],
+        ending_cash: int,
+        cashflow_health: Dict,
+        outstanding: Dict,
+        start_date: datetime,
+    ) -> Dict:
+        liquidity = cashflow_health['dimensions']['liquidity']['metrics']
+        coverage = cashflow_health['dimensions']['coverage']['metrics']
+        conversion = cashflow_health['dimensions']['conversion']['metrics']
+        risk = cashflow_health['dimensions']['risk']['metrics']
+
+        ratio_now = liquidity['cash_vs_obligation_ratio']
+        ratio_forecast = coverage['coverage_ratio']
+        projected_runway = liquidity['projected_runway_months']
+
+        delay_distribution = self._build_delay_distribution(invoices)
+        top_overdue_accounts = self._build_top_overdue_accounts(invoices)
+        balance_points = self._build_balance_projection_points(
+            cash_on_hand=cash_on_hand,
+            predicted_payments=predicted_payments,
+            daily_rate=self.out_projector.daily_rate,
+            start_date=start_date,
+        )
+        alert_recommendation_lines = self._build_dashboard_alert_lines(
+            cashflow_health=cashflow_health,
+            top_overdue_accounts=top_overdue_accounts,
+            ending_cash=ending_cash,
+            total_cash_out=total_cash_out,
+            outstanding=outstanding,
+        )
+
+        return {
+            'status': cashflow_health['internal_status'].upper(),
+            'status_label': cashflow_health['operating_signal'],
+            'current_cash': cash_on_hand,
+            'runway_months': projected_runway,
+            'coverage_ratio': ratio_forecast,
+            'average_delay_days': conversion['average_delay_days'],
+            'runway_chart': {
+                'projected_months': projected_runway,
+                'current_months': liquidity['current_runway_months'],
+                'safe_minimum_months': 2,
+                'critical_minimum_months': 1,
+            },
+            'coverage_chart': {
+                'bars': [
+                    {'label': 'Cash now', 'value': round(ratio_now, 2), 'variant': 'current'},
+                    {'label': 'Cash in/out', 'value': round(ratio_forecast, 2), 'variant': 'forecast'},
+                    {'label': 'Target minimum', 'value': 1.2, 'variant': 'target'},
+                    {'label': 'Critical minimum', 'value': 1.0, 'variant': 'danger'},
+                ],
+            },
+            'balance_projection_30d': balance_points,
+            'delay_distribution': delay_distribution,
+            'top_overdue_accounts': top_overdue_accounts,
+            'alert_recommendation_lines': alert_recommendation_lines,
+            'risk_summary': {
+                'top_partner_share_pct': risk['top_partner_share_pct'],
+                'top_service_share_pct': risk['top_service_share_pct'],
+                'high_risk_share_pct': risk['high_risk_share_pct'],
+            },
+        }
+
+    def _build_delay_distribution(self, invoices: List[Dict]) -> List[Dict]:
+        buckets = [
+            {'label': '0-5 hari', 'min': 0, 'max': 5, 'variant': 'good'},
+            {'label': '6-10 hari', 'min': 6, 'max': 10, 'variant': 'watch'},
+            {'label': '> 10 hari', 'min': 11, 'max': 10_000, 'variant': 'risk'},
+        ]
+        total = len(invoices) or 1
+        distribution = []
+        for bucket in buckets:
+            count = 0
+            for invoice in invoices:
+                delay = self.behavior_analyzer.get_payment_profile(invoice['kelas'])['days_delay']
+                if bucket['min'] <= delay <= bucket['max']:
+                    count += 1
+            distribution.append({
+                'label': bucket['label'],
+                'count': count,
+                'percentage': round((count / total) * 100, 1),
+                'variant': bucket['variant'],
+            })
+        return distribution
+
+    def _build_top_overdue_accounts(self, invoices: List[Dict]) -> List[Dict]:
+        ranked = sorted(
+            invoices,
+            key=lambda invoice: (
+                self.behavior_analyzer.get_payment_profile(invoice['kelas'])['days_delay'],
+                invoice['amount'],
+            ),
+            reverse=True,
+        )[:5]
+        accounts = []
+        for invoice in ranked:
+            days_overdue = self.behavior_analyzer.get_payment_profile(invoice['kelas'])['days_delay']
+            account_name = invoice['partner_type']
+            if invoice['service']:
+                account_name = f"{invoice['partner_type']} - {invoice['service']}"
+            accounts.append({
+                'name': account_name,
+                'amount': invoice['amount'],
+                'days_overdue': days_overdue,
+            })
+        return accounts
+
+    def _build_balance_projection_points(
+        self,
+        cash_on_hand: int,
+        predicted_payments: List[Dict],
+        daily_rate: float,
+        start_date: datetime,
+    ) -> List[Dict]:
+        checkpoints = [1, 7, 14, 21, 28, 30]
+        balance_points = []
+        for day in checkpoints:
+            checkpoint = start_date + timedelta(days=day - 1)
+            cumulative_cash_in = sum(
+                payment['amount']
+                for payment in predicted_payments
+                if datetime.fromisoformat(payment['estimated_payment_date']) <= checkpoint
+            )
+            projected_balance = cash_on_hand + cumulative_cash_in - int(daily_rate * day)
+            balance_points.append({
+                'label': f'H{day}',
+                'day': day,
+                'balance': projected_balance,
+            })
+        return balance_points
+
+    def _build_dashboard_alert_lines(
+        self,
+        cashflow_health: Dict,
+        top_overdue_accounts: List[Dict],
+        ending_cash: int,
+        total_cash_out: int,
+        outstanding: Dict,
+    ) -> List[str]:
+        lines = []
+        if ending_cash < self.AMAN_THRESHOLD_IDR:
+            lines.append('Saldo proyeksi mendekati atau berada di bawah buffer minimum operasional.')
+        elif ending_cash < total_cash_out:
+            lines.append('Saldo proyeksi masih positif, tetapi buffer belum cukup nyaman dibanding kebutuhan keluar kas.')
+        else:
+            lines.append('Saldo proyeksi masih berada di atas kebutuhan keluar kas jangka pendek.')
+
+        if top_overdue_accounts:
+            highest_days = top_overdue_accounts[0]['days_overdue']
+            lines.append(f'Paparan overdue tertinggi saat ini berada pada akun dengan delay sekitar {highest_days} hari.')
+
+        if cashflow_health['weakest_dimensions']:
+            weakest = ', '.join(cashflow_health['weakest_dimensions'])
+            lines.append(f'Fokus intervensi utama saat ini ada pada: {weakest}.')
+
+        if outstanding['total_outstanding'] > 0:
+            lines.append('Prioritaskan penagihan dan kontrol expense non-priority bila ada tekanan pada buffer kas.')
+
+        return lines[:4]
