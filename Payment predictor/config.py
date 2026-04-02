@@ -88,6 +88,9 @@ The report must be detailed enough for an internal meeting, numerically consiste
 === USER FOCUS ===
 {user_focus}
 
+=== STRUCTURED CASHFLOW FORECAST CONTEXT ===
+{cashflow_context}
+
 === CONFIDENCE, CONTROL, AND EXECUTION SIGNALS ===
 {readiness_signals}
 
@@ -106,32 +109,34 @@ MANDATORY RULES:
 8. Cite internal evidence naturally by paraphrasing or quoting short anonymized note fragments.
 9. Treat OSINT as supporting context, never as the source of truth for internal financial facts.
 10. Never contradict the provided metrics. If risk score decreases, describe it as improving or lower risk. If risk score increases, describe it as worsening or higher risk.
-11. The report must explicitly cover:
+11. Never copy internal delimiter labels or raw machine blocks verbatim. If source context contains separators, debug-like markers, or structured forecast notes, rewrite them into natural business prose, tables, or bullets.
+12. The report must explicitly cover:
    - current cash-in condition,
    - main collection bottlenecks,
    - short-term forecast or scenarios,
    - management implications,
    - concrete next actions.
-12. If this pass includes `# Ringkasan Eksekutif`, include `### Dampak Bisnis` and `### Tingkat Keyakinan dan Caveat`.
-13. If this pass includes `# Analisis Deskriptif Cash In`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
-14. If this pass includes `# Analisis Diagnostik`, include `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
-15. If this pass includes `# Analisis Prediktif`, include `### Dasar Proyeksi`, `### Skenario 1-2 Kuartal`, and `### Implikasi terhadap Rencana Kas`.
-16. If this pass includes `# Rekomendasi Preskriptif`, include `### Prinsip Tindakan`, `### Prasyarat Implementasi`, and `### Kesiapan Pelaksanaan`.
-17. If this pass includes `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
+13. If this pass includes `# Ringkasan Eksekutif`, include `### Dampak Bisnis` and `### Tingkat Keyakinan dan Caveat`.
+14. If this pass includes `# Analisis Deskriptif Cash In`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
+15. If this pass includes `# Analisis Diagnostik`, include `### Pola Hambatan Utama`, `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
+16. In `# Analisis Diagnostik`, split the explanation by what drives the delay, for example process/document issues, budget/approval issues, and liquidity/relationship issues, instead of dumping one long block of mixed evidence.
+17. If this pass includes `# Analisis Prediktif`, include `### Dasar Proyeksi`, `### Skenario 1-2 Kuartal`, and `### Implikasi terhadap Rencana Kas`.
+18. If this pass includes `# Rekomendasi Preskriptif`, include `### Prinsip Tindakan`, `### Prasyarat Implementasi`, and `### Kesiapan Pelaksanaan`.
+19. If this pass includes `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
    `Prioritas | Fokus | Penanggung Jawab | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan`
-18. Avoid vague phrases such as `perlu perhatian lebih` unless followed by a specific action and expected impact.
-19. Do not add an introduction before `# Ringkasan Eksekutif`.
-20. If `### Konteks OSINT Pendukung` is included, summarize external signals in business language and mention source domains naturally.
-21. If visual markers are provided, reproduce them verbatim on standalone lines in the most relevant section and do not modify the marker syntax.
-22. If the user focus includes structured cashflow forecast inputs, explicitly weave in:
+20. Avoid vague phrases such as `perlu perhatian lebih` unless followed by a specific action and expected impact.
+21. Do not add an introduction before `# Ringkasan Eksekutif`.
+22. If `### Konteks OSINT Pendukung` is included, summarize external signals in business language and mention source domains naturally.
+23. If visual markers are provided, reproduce them verbatim on standalone lines in the most relevant section and do not modify the marker syntax.
+24. If the user focus or forecast context includes structured cashflow forecast inputs, explicitly weave in:
    - selected period window,
    - current cash on hand,
    - estimated payments by character, retention, and satisfaction,
    - total outstanding by age and payment character,
    - external factors that may delay payment,
    - short-, mid-, and long-term implications.
-23. Do not expose the word `aman` as a visible label unless the source context explicitly asks for it; instead, describe the operating buffer, ending cash, and implications in normal business language.
-24. If an internal cashflow health model is present, use it silently to sharpen the analysis around:
+25. Do not expose the word `aman` as a visible label unless the source context explicitly asks for it; instead, describe the operating buffer, ending cash, and implications in normal business language.
+26. If an internal cashflow health model is present, use it silently to sharpen the analysis around:
    - liquidity and operational runway,
    - stability/predictability of cash in timing,
    - speed of invoice-to-cash conversion,

@@ -291,9 +291,10 @@ class ReportJobManager:
             "completenessScore": job["completeness_score"],
         }
 
-    def submit(self, notes):
+    def submit(self, notes, analysis_context=""):
         job_id = uuid.uuid4().hex
-        notes_preview = (notes or "").strip().replace("\n", " ")[:240]
+        preview_source = (notes or "").strip() or (analysis_context or "").strip()
+        notes_preview = preview_source.replace("\n", " ")[:240]
 
         with self.lock:
             self._cleanup_locked()
@@ -302,10 +303,10 @@ class ReportJobManager:
                 raise QueueCapacityError(active_jobs, self.max_pending_jobs)
             self.job_store.create_job(job_id, notes_preview)
 
-        self.executor.submit(self._run_job, job_id, notes)
+        self.executor.submit(self._run_job, job_id, notes, analysis_context)
         return job_id
 
-    def _run_job(self, job_id, notes):
+    def _run_job(self, job_id, notes, analysis_context=""):
         started_at = time.time()
         self.job_store.update_job(
             job_id,
@@ -316,7 +317,7 @@ class ReportJobManager:
         )
 
         try:
-            document, file_name, run_metadata = self.report_generator.run(notes)
+            document, file_name, run_metadata = self.report_generator.run(notes, analysis_context)
             artifact_path = self.artifacts_dir / f"{job_id}_{file_name}.docx"
             document.save(str(artifact_path))
         except Exception as exc:
@@ -516,11 +517,9 @@ def create_app():
         payload = request.get_json(silent=True) or {}
         notes = payload.get("notes", "")
         analysis_context = (payload.get("analysis_context") or "").strip()
-        if analysis_context:
-            notes = f"{notes}\n\n{analysis_context}".strip()
         active_job_manager = current_app.config["job_manager"]
         try:
-            job_id = active_job_manager.submit(notes)
+            job_id = active_job_manager.submit(notes, analysis_context)
         except QueueCapacityError as exc:
             return (
                 jsonify(
