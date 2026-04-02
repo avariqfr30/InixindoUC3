@@ -89,6 +89,15 @@
         .dashboard-panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; min-height: 208px; }
         .dashboard-panel h4 { margin: 0 0 12px 0; color: #334155; font-size: 1rem; }
         .dashboard-chart-body { height: 150px; position: relative; }
+        .dashboard-horizon-block { margin-bottom: 14px; }
+        .dashboard-horizon-title { margin: 0 0 10px 0; color: #0f172a; font-size: 0.95rem; font-weight: 800; letter-spacing: 0.02em; }
+        .dashboard-horizon-strip { position: relative; overflow: hidden; border: 2px solid #94a3b8; background: linear-gradient(90deg, #d9f99d 0%, #dcfce7 100%); clip-path: polygon(0 12%, 88% 12%, 88% 0, 100% 50%, 88% 100%, 88% 88%, 0 88%); padding: 12px 44px 12px 12px; }
+        .dashboard-horizon-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+        .dashboard-horizon-mode { border: none; background: transparent; text-align: left; padding: 14px 18px; border-radius: 14px; cursor: pointer; color: #0f172a; }
+        .dashboard-horizon-mode strong { display: block; font-size: 0.98rem; margin-bottom: 4px; }
+        .dashboard-horizon-mode ul { margin: 0; padding-left: 18px; color: #1f2937; font-size: 0.88rem; line-height: 1.35; }
+        .dashboard-horizon-mode.active { background: rgba(255,255,255,0.62); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.45); }
+        .dashboard-active-mode { margin-top: 10px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.84rem; font-weight: 700; }
         .runway-zone-chart { position: relative; height: 100%; border-radius: 14px; background: linear-gradient(180deg, #86efac 0%, #bbf7d0 30%, #fef08a 66%, #fdba74 100%); overflow: hidden; }
         .runway-zone-chart::before { content: ''; position: absolute; left: 0; right: 0; top: 20%; border-top: 2px dashed rgba(255,255,255,0.7); }
         .runway-zone-chart::after { content: ''; position: absolute; left: 0; right: 0; top: 60%; border-top: 2px dashed rgba(255,255,255,0.7); }
@@ -134,6 +143,8 @@
             .cash-dashboard-header { grid-template-columns: 1fr; }
             .cash-dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .cash-dashboard-grid { grid-template-columns: 1fr; }
+            .dashboard-horizon-grid { grid-template-columns: 1fr; }
+            .dashboard-horizon-strip { clip-path: none; padding-right: 12px; }
         }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
@@ -258,7 +269,8 @@
             horizonSnapshot: null,
             analysisContext: "",
             startPicker: null,
-            endPicker: null
+            endPicker: null,
+            dashboardMode: 'short_term',
         };
 
         const currencyFormatter = new Intl.NumberFormat('id-ID', {
@@ -631,9 +643,48 @@
             return 'status-aman';
         }
 
-        function buildCashHealthDashboard(forecast, horizonSnapshot) {
-            const shortTerm = (horizonSnapshot && horizonSnapshot.forecasts && horizonSnapshot.forecasts.short_term) || forecast;
-            const dashboard = shortTerm && shortTerm.dashboard_snapshot ? shortTerm.dashboard_snapshot : null;
+        function getForecastForMode(forecast, horizonSnapshot, modeKey) {
+            if (modeKey && horizonSnapshot && horizonSnapshot.forecasts && horizonSnapshot.forecasts[modeKey]) {
+                return horizonSnapshot.forecasts[modeKey];
+            }
+            if (horizonSnapshot && horizonSnapshot.forecasts && horizonSnapshot.forecasts.short_term) {
+                return horizonSnapshot.forecasts.short_term;
+            }
+            return forecast;
+        }
+
+        function buildHorizonModeStrip(horizonSnapshot, activeMode) {
+            const horizonConfig = (horizonSnapshot && horizonSnapshot.time_horizons) || {};
+            const order = ['short_term', 'mid_term', 'long_term'];
+            return `
+                <div class="dashboard-horizon-block">
+                    <div class="dashboard-horizon-title">TIME HORIZON</div>
+                    <div class="dashboard-horizon-strip">
+                        <div class="dashboard-horizon-grid">
+                            ${order.map(key => {
+                                const item = horizonConfig[key];
+                                if (!item) {
+                                    return '';
+                                }
+                                const focusParts = String(item.focus || '').split(' - ').filter(Boolean);
+                                return `
+                                    <button type="button" class="dashboard-horizon-mode ${activeMode === key ? 'active' : ''}" data-dashboard-horizon="${key}">
+                                        <strong>${escapeHtml(item.label)}</strong>
+                                        <ul>
+                                            ${focusParts.map(part => `<li>${escapeHtml(part)}</li>`).join('')}
+                                        </ul>
+                                    </button>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function buildCashHealthDashboard(forecast, horizonSnapshot, modeKey) {
+            const activeForecast = getForecastForMode(forecast, horizonSnapshot, modeKey);
+            const dashboard = activeForecast && activeForecast.dashboard_snapshot ? activeForecast.dashboard_snapshot : null;
             if (!dashboard) {
                 return '<div class="cash-dashboard"><p class="mini-note">Dashboard kesehatan kas belum tersedia.</p></div>';
             }
@@ -683,6 +734,7 @@
             `).join('');
 
             return `
+                ${buildHorizonModeStrip(horizonSnapshot, dashboard.horizon_key || modeKey || 'short_term')}
                 <div class="cash-dashboard">
                     <div class="cash-dashboard-header">
                         <div class="cash-dashboard-art" aria-hidden="true"></div>
@@ -707,6 +759,11 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                    <div class="dashboard-active-mode">
+                        <span>${escapeHtml(dashboard.horizon_label || 'Custom Period')}</span>
+                        <span>•</span>
+                        <span>${escapeHtml(dashboard.horizon_focus || 'Review horizon aktif')}</span>
                     </div>
                     <div class="cash-status-bar ${buildDashboardStatusClass(dashboard.status)}">
                         <span>STATUS:</span>
@@ -740,7 +797,7 @@
                         </section>
 
                         <section class="dashboard-panel">
-                            <h4>Prediksi Saldo (30 Hari)</h4>
+                            <h4>Prediksi Saldo (${dashboard.period_days} Hari)</h4>
                             <div class="dashboard-chart-body">
                                 ${buildSparkline(dashboard.balance_projection_30d || [], 100000000)}
                                 <div class="sparkline-axis-labels">
@@ -800,6 +857,18 @@
                     `;
                 })
                 .join('');
+        }
+
+        function renderDashboard() {
+            if (!appState.forecastSnapshot) {
+                ui.cashHealthDashboard.innerHTML = '';
+                return;
+            }
+            ui.cashHealthDashboard.innerHTML = buildCashHealthDashboard(
+                appState.forecastSnapshot,
+                appState.horizonSnapshot,
+                appState.dashboardMode,
+            );
         }
 
         function buildAnalysisContext(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot) {
@@ -1073,14 +1142,15 @@
                             start_date: selectedPeriod.start,
                         }),
                     }),
-                ]);
+	                ]);
 
-                appState.forecastSnapshot = forecastSnapshot;
-                appState.horizonSnapshot = horizonSnapshot;
-                appState.analysisContext = buildAnalysisContext(
-                    selectedPeriod,
-                    cashOnHand,
-                    appState.reviewContext,
+	                appState.forecastSnapshot = forecastSnapshot;
+	                appState.horizonSnapshot = horizonSnapshot;
+                    appState.dashboardMode = 'short_term';
+	                appState.analysisContext = buildAnalysisContext(
+	                    selectedPeriod,
+	                    cashOnHand,
+	                    appState.reviewContext,
                     forecastSnapshot,
                     horizonSnapshot,
                 );
@@ -1089,13 +1159,13 @@
                     selectedPeriod,
                     cashOnHand,
                     appState.reviewContext,
-                    forecastSnapshot,
-                    horizonSnapshot,
-                );
-                ui.cashHealthDashboard.innerHTML = buildCashHealthDashboard(forecastSnapshot, horizonSnapshot);
-                ui.configStep.classList.add('hidden');
-                ui.reviewStep.classList.remove('hidden');
-                ui.rootCard.classList.add('review-mode');
+	                    forecastSnapshot,
+	                    horizonSnapshot,
+	                );
+                    renderDashboard();
+	                ui.configStep.classList.add('hidden');
+	                ui.reviewStep.classList.remove('hidden');
+	                ui.rootCard.classList.add('review-mode');
             } catch (error) {
                 alert(error.message);
             } finally {
@@ -1115,6 +1185,19 @@
             ui.configStep.classList.remove('hidden');
             ui.rootCard.classList.remove('review-mode');
         };
+
+        ui.cashHealthDashboard.addEventListener('click', event => {
+            const modeButton = event.target.closest('[data-dashboard-horizon]');
+            if (!modeButton) {
+                return;
+            }
+            const nextMode = modeButton.getAttribute('data-dashboard-horizon');
+            if (!nextMode || nextMode === appState.dashboardMode) {
+                return;
+            }
+            appState.dashboardMode = nextMode;
+            renderDashboard();
+        });
 
         function updateJobStatus(message) {
             ui.jobStatus.textContent = message;
