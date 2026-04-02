@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/quill/quill.snow.css') }}">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
-        .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; transition: width 0.25s ease; }
+        .card { position: relative; background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; transition: width 0.25s ease; }
         .card.review-mode { width: min(1320px, 98vw); }
         .hidden { display: none; }
         h2 { color: #0f172a; margin: 0 0 10px 0; font-size: 1.8rem; }
@@ -64,7 +64,8 @@
         .bullet-list { margin: 10px 0 0 18px; padding: 0; color: #475569; }
         .bullet-list li { margin-bottom: 8px; }
         .mini-note { color: #64748b; font-size: 0.84rem; line-height: 1.45; margin-top: 8px; }
-        .inline-success-banner { background: linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%); border: 1px solid #bbf7d0; color: #166534; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.92rem; font-weight: 600; }
+        .toast-notification { position: absolute; top: 18px; right: 18px; min-width: 300px; max-width: min(420px, calc(100% - 36px)); background: linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%); border: 1px solid #86efac; color: #166534; border-radius: 14px; padding: 14px 16px; box-shadow: 0 12px 24px rgba(22, 101, 52, 0.12); z-index: 30; font-size: 0.92rem; font-weight: 600; line-height: 1.4; }
+        .toast-notification.hidden { display: none; }
         .review-dashboard-stack { display: grid; gap: 18px; align-items: start; }
         .review-action-buttons { display: flex; gap: 15px; align-items: stretch; }
         .review-action-buttons button { margin-bottom: 0; flex: 1; }
@@ -146,12 +147,14 @@
             .cash-dashboard-grid { grid-template-columns: 1fr; }
             .dashboard-horizon-grid { grid-template-columns: 1fr; }
             .dashboard-horizon-strip { clip-path: none; padding-right: 12px; }
+            .toast-notification { left: 18px; right: 18px; min-width: 0; max-width: none; }
         }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
 </head>
-<body>
+    <body>
     <div class="card">
+        <div id="toast-notification" class="toast-notification hidden" role="status" aria-live="polite"></div>
         <div id="loader" style="text-align:center; padding: 40px;">
             <div style="border:4px solid #e2e8f0; border-top:4px solid #CC0000; border-radius:50%; width:40px; height:40px; animation: spin 1s linear infinite; margin: 0 auto 20px auto;"></div>
             <p id="loader-text">Memuat data finansial dan konteks analisis cash in...</p>
@@ -214,7 +217,6 @@
 
         <div id="step-review" class="hidden">
             <h2>Konfirmasi Laporan Cash In</h2>
-            <div id="inline-success-banner" class="inline-success-banner hidden">Laporan berhasil diunduh. Dashboard tetap tersedia untuk ditinjau atau generate ulang.</div>
             <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
             <div class="review-dashboard-stack">
@@ -250,6 +252,7 @@
             jobStatus: document.getElementById('job-status'),
             rootCard: document.querySelector('.card'),
             cashHealthDashboard: document.getElementById('cash-health-dashboard'),
+            toastNotification: document.getElementById('toast-notification'),
             
             btnReview: document.getElementById('btn-review'),
             btnGenerate: document.getElementById('btn-generate'),
@@ -267,6 +270,7 @@
             startPicker: null,
             endPicker: null,
             dashboardMode: 'short_term',
+            toastTimer: null,
         };
 
         const currencyFormatter = new Intl.NumberFormat('id-ID', {
@@ -913,38 +917,38 @@
                 .join('\n');
 
             return [
-                '=== INPUT CASHFLOW TERPILIH ===',
+                'Parameter forecast dan ruang lingkup:',
                 `- Periode pilihan: ${selectedPeriod.label}`,
                 '- Seluruh nilai uang dibaca langsung dalam Rupiah (IDR).',
                 `- Cash on hand saat ini: ${formatCurrency(cashOnHand)}`,
                 reviewContext && reviewContext.dataSource ? `- Sumber data aktif: ${reviewContext.dataSource}` : null,
                 '',
-                '=== ESTIMASI PEMBAYARAN BERDASARKAN PAYMENT BEHAVIOR ===',
+                'Estimasi pembayaran berdasarkan payment behavior:',
                 behaviorLines,
                 '',
-                '=== TOTAL OUTSTANDING ===',
+                'Total outstanding:',
                 '- Dipisahkan berdasarkan umur outstanding:',
                 ageLines,
                 '- Dipisahkan berdasarkan karakter pembayaran:',
                 characterLines,
                 '',
-                '=== FAKTOR EKSTERNAL YANG BERPOTENSI MEMPENGARUHI WAKTU PEMBAYARAN ===',
+                'Faktor eksternal yang berpotensi mempengaruhi waktu pembayaran:',
                 factorLines,
                 '',
-                '=== REKOMENDASI BERBASIS SOP, RETENTION, DAN SATISFACTION ===',
+                'Rekomendasi berbasis SoP, retention, dan satisfaction:',
                 recommendationLines,
                 '',
-                '=== TIGA TIMELINE PREDIKSI ===',
+                'Tiga timeline prediksi:',
                 horizonLines || '- Ringkasan horizon belum tersedia.',
                 '',
-                '=== FORMULA END CASH (INTERNAL) ===',
+                'Formula end cash internal:',
                 `- ${forecast.forecast.formula}`,
                 '',
-                '=== INTERNAL CASHFLOW HEALTH MODEL ===',
+                'Ringkasan kesehatan cashflow internal:',
                 `- Sinyal operasional: ${health.operating_signal || '-'}`,
                 healthDimensionLines,
                 '',
-                '=== TIGA CEK AMAN (INTERNAL) ===',
+                'Tiga cek kesiapan kas internal:',
                 readinessLines,
             ].filter(Boolean).join('\n');
         }
@@ -1200,14 +1204,27 @@
             ui.jobStatus.classList.remove('hidden');
         }
 
-        function showInlineSuccess(message) {
-            ui.inlineSuccessBanner.textContent = message;
-            ui.inlineSuccessBanner.classList.remove('hidden');
+        function showToast(message) {
+            if (appState.toastTimer) {
+                clearTimeout(appState.toastTimer);
+                appState.toastTimer = null;
+            }
+            ui.toastNotification.textContent = message;
+            ui.toastNotification.classList.remove('hidden');
+            appState.toastTimer = setTimeout(() => {
+                ui.toastNotification.classList.add('hidden');
+                ui.toastNotification.textContent = '';
+                appState.toastTimer = null;
+            }, 5000);
         }
 
-        function clearInlineSuccess() {
-            ui.inlineSuccessBanner.classList.add('hidden');
-            ui.inlineSuccessBanner.textContent = '';
+        function clearToast() {
+            if (appState.toastTimer) {
+                clearTimeout(appState.toastTimer);
+                appState.toastTimer = null;
+            }
+            ui.toastNotification.classList.add('hidden');
+            ui.toastNotification.textContent = '';
         }
 
         function resetGenerateState() {
@@ -1246,7 +1263,7 @@
                     resetGenerateState();
                     ui.jobStatus.classList.add('hidden');
                     ui.jobStatus.textContent = '';
-                    showInlineSuccess('Laporan berhasil diunduh. Dashboard tetap tersedia untuk ditinjau atau generate ulang.');
+                    showToast('Laporan berhasil diunduh. Dashboard tetap tersedia untuk ditinjau atau generate ulang.');
                 })
                 .catch(err => {
                     alert(err.message);
@@ -1292,7 +1309,7 @@
         
         ui.btnGenerate.onclick = () => {
             syncNotesValue();
-            clearInlineSuccess();
+            clearToast();
             ui.btnGenerate.disabled = true; 
             document.getElementById('spinner').classList.add('active');
             updateJobStatus('Permintaan Anda sedang dikirim ke sistem analisis.');

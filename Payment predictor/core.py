@@ -555,14 +555,41 @@ class FinancialAnalyzer:
         return selected_theme, action_plan
 
     @staticmethod
+    def _format_evidence_chunk(chunk):
+        normalized = re.sub(r"\s+", " ", str(chunk or "")).strip()
+        if not normalized:
+            return ""
+
+        pattern = re.compile(
+            r"Periode Laporan:\s*(?P<period>.*?)\s*\|\s*"
+            r"Tipe Partner:\s*(?P<partner>.*?)\s*\|\s*"
+            r"Layanan:\s*(?P<service>.*?)\s*\|\s*"
+            r"Kelas Pembayaran:\s*(?P<payment_class>.*?)\s*\|\s*"
+            r"Nilai Invoice:\s*(?P<invoice_value>.*?)\s*\|\s*"
+            r"Catatan Historis Keterlambatan:\s*(?P<note>.*)$"
+        )
+        match = pattern.match(normalized)
+        if not match:
+            return f"- {normalized}"
+
+        parts = match.groupdict()
+        return "\n".join(
+            [
+                f"- {parts['period']} | {parts['partner']} | {parts['service']}",
+                f"  - Kelas pembayaran: {parts['payment_class']}",
+                f"  - Nilai invoice: {parts['invoice_value']}",
+                f"  - Catatan utama: {parts['note']}",
+            ]
+        )
+
+    @staticmethod
     def normalize_evidence_text(raw_text):
         lines = []
         chunks = [chunk.strip() for chunk in str(raw_text or "").split("\n---\n") if chunk.strip()]
 
         if len(chunks) > 1 or any("Periode Laporan:" in chunk for chunk in chunks):
             for chunk in chunks[:10]:
-                single_line = re.sub(r"\s+", " ", chunk).strip()
-                lines.append(f"- {single_line}")
+                lines.append(FinancialAnalyzer._format_evidence_chunk(chunk))
             return "\n".join(lines) if lines else "- Tidak ada catatan historis yang cukup untuk dikutip."
 
         for raw_line in str(raw_text or "").splitlines():
@@ -802,6 +829,7 @@ class FinancialAnalyzer:
             return {
                 "financial_summary": "Tidak ada data finansial internal yang tersedia.",
                 "evidence": "Tidak ada catatan historis yang tersedia.",
+                "diagnostic_breakdown": "- Belum ada pola hambatan yang dapat dijelaskan karena data masih kosong.",
                 "management_brief": "Tidak ada management brief yang dapat disusun dari data kosong.",
                 "executive_facts": "- Tidak ada fakta eksekutif yang tersedia.",
                 "scenario_table": "| Skenario | Estimasi Realisasi Cash In | Gap terhadap Total Invoice | Narasi Manajemen |\n|---|---:|---:|---|\n| Base Case | Rp 0 | Rp 0 | Data kosong. |",
@@ -1051,6 +1079,30 @@ class FinancialAnalyzer:
 
         top_risk_partner_names = ", ".join(high_risk_partner_df.index.tolist()[:3]) if not high_risk_partner_df.empty else "-"
         top_risk_service_names = ", ".join(high_risk_service_df.index.tolist()[:3]) if not high_risk_service_df.empty else "-"
+        top_theme_map = {theme: count for theme, count in top_themes}
+        process_issue_count = top_theme_map.get("Dokumen dan administrasi", 0) + top_theme_map.get("Sengketa atau klarifikasi", 0)
+        budget_issue_count = top_theme_map.get("Siklus anggaran", 0) + top_theme_map.get("Persetujuan internal klien", 0)
+        liquidity_issue_count = top_theme_map.get("Likuiditas pelanggan", 0)
+
+        diagnostic_breakdown_lines = []
+        if process_issue_count:
+            diagnostic_breakdown_lines.append(
+                f"1. Hambatan proses, dokumen, dan klarifikasi masih dominan dengan {process_issue_count} sinyal historis; ini biasanya menahan invoice yang sebetulnya sudah siap ditagih tetapi belum lolos kelengkapan atau sign-off."
+            )
+        if budget_issue_count:
+            diagnostic_breakdown_lines.append(
+                f"2. Hambatan anggaran dan persetujuan internal klien muncul pada {budget_issue_count} catatan; dampaknya paling terasa pada akun pemerintah, BUMN, dan partner dengan approval berlapis."
+            )
+        if liquidity_issue_count:
+            diagnostic_breakdown_lines.append(
+                f"3. Tekanan likuiditas pelanggan muncul pada {liquidity_issue_count} catatan; risiko ini perlu dibedakan dari isu administratif karena membutuhkan pola negosiasi dan komitmen bayar yang lebih aktif."
+            )
+        if top_risk_partner_names != "-":
+            diagnostic_breakdown_lines.append(
+                f"4. Eksposur dampak terbesar saat ini terkonsentrasi pada {top_risk_partner_names}, sehingga setiap bottleneck di segmen tersebut memberi pengaruh paling besar ke realisasi cash in."
+            )
+        if not diagnostic_breakdown_lines:
+            diagnostic_breakdown_lines.append("1. Belum ada pola hambatan dominan yang cukup kuat untuk dipisahkan dari catatan historis.")
 
         financial_summary_lines = [
             "## Snapshot Cash In",
@@ -1147,7 +1199,14 @@ class FinancialAnalyzer:
                 continue
             trimmed_note = note[:180] + ("..." if len(note) > 180 else "")
             evidence_lines.append(
-                f"- {row['__period']} | {row['__partner']} | {row['__service']} | {row['__payment_class']} | {cls._format_currency(int(row['__invoice_value']))} | {trimmed_note}"
+                "\n".join(
+                    [
+                        f"- {row['__period']} | {row['__partner']} | {row['__service']}",
+                        f"  - Kelas pembayaran: {row['__payment_class']}",
+                        f"  - Nilai invoice: {cls._format_currency(int(row['__invoice_value']))}",
+                        f"  - Catatan utama: {trimmed_note}",
+                    ]
+                )
             )
         if not evidence_lines:
             evidence_lines.append("- Tidak ada catatan historis yang cukup untuk dikutip.")
@@ -1203,6 +1262,7 @@ class FinancialAnalyzer:
         return {
             "financial_summary": "\n".join(financial_summary_lines),
             "evidence": "\n".join(evidence_lines),
+            "diagnostic_breakdown": "\n".join(diagnostic_breakdown_lines),
             "management_brief": "\n".join(management_brief_lines),
             "executive_facts": "\n".join(executive_fact_lines),
             "scenario_table": "\n".join(scenario_lines),
@@ -2153,9 +2213,10 @@ class ReportGenerator:
         )
         return section_scope, section_headings
 
-    def _build_report_prompt(self, report_context, notes, macro_osint, active_sections, include_visuals):
+    def _build_report_prompt(self, report_context, notes, analysis_context, macro_osint, active_sections, include_visuals):
         persona = PERSONAS.get("default", "Chief Financial Officer")
         section_scope, section_headings = self._build_section_scope(active_sections)
+        structured_context = self._format_structured_context_block(analysis_context)
         return FINANCE_SYSTEM_PROMPT.format(
             persona=persona,
             financial_summary=report_context["financial_summary"],
@@ -2163,6 +2224,7 @@ class ReportGenerator:
             internal_evidence=report_context["evidence"],
             industry_trends=macro_osint,
             user_focus=(notes or "Tidak ada fokus tambahan."),
+            cashflow_context=(structured_context or "Tidak ada konteks forecast terstruktur tambahan."),
             readiness_signals=report_context["readiness_signals"],
             section_scope=section_scope,
             section_headings=section_headings,
@@ -2352,7 +2414,34 @@ class ReportGenerator:
             return section_body
         return f"{section_body.rstrip()}\n\n{marker}".strip()
 
+    @staticmethod
+    def _format_structured_context_block(raw_text):
+        lines = []
+        for raw_line in str(raw_text or "").splitlines():
+            cleaned_line = raw_line.strip()
+            if not cleaned_line:
+                if lines and lines[-1] != "":
+                    lines.append("")
+                continue
+            if cleaned_line.startswith("===") and cleaned_line.endswith("==="):
+                cleaned_line = cleaned_line.strip("= ").strip()
+            if cleaned_line.endswith(":") and not cleaned_line.startswith("-"):
+                lines.append(f"#### {cleaned_line[:-1].strip()}")
+            else:
+                lines.append(cleaned_line)
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def _sanitize_generated_report_text(cls, raw_text):
+        sanitized = str(raw_text or "")
+        sanitized = re.sub(r"(?<!\n)(===\s*[^\n=]+?\s*===)", r"\n\n\1", sanitized)
+        sanitized = re.sub(r"\n?===\s*([^\n=]+?)\s*===\n?", lambda match: f"\n\n### {match.group(1).strip()}\n", sanitized)
+        sanitized = re.sub(r"[ \t]+\n", "\n", sanitized)
+        sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+        return sanitized.strip()
+
     def _finalize_report_content(self, raw_text, report_context, macro_osint):
+        raw_text = self._sanitize_generated_report_text(raw_text)
         sections = self._split_top_level_sections(raw_text)
         if not sections:
             return raw_text
@@ -2380,9 +2469,10 @@ class ReportGenerator:
 
         return self._join_top_level_sections(finalized_sections)
 
-    def _build_fallback_report(self, report_context, notes, macro_osint):
+    def _build_fallback_report(self, report_context, notes, analysis_context, macro_osint):
         chart_marker, flow_marker = self._extract_visual_markers(report_context.get("visual_prompt", ""))
         focus_block = notes.strip() if notes and notes.strip() else "Tidak ada fokus tambahan dari pengguna."
+        structured_context_block = self._format_structured_context_block(analysis_context)
 
         lines = [
             "# Ringkasan Eksekutif",
@@ -2408,6 +2498,9 @@ class ReportGenerator:
                 report_context["assumptions"],
                 "",
                 "# Analisis Diagnostik",
+                "### Pola Hambatan Utama",
+                report_context["diagnostic_breakdown"],
+                "",
                 "### Bukti Internal yang Mewakili",
                 report_context["evidence"],
                 "",
@@ -2421,6 +2514,15 @@ class ReportGenerator:
                 f"- {focus_block}",
             ]
         )
+
+        if structured_context_block:
+            lines.extend(
+                [
+                    "",
+                    "### Parameter Forecast dan Ruang Lingkup",
+                    structured_context_block,
+                ]
+            )
 
         if chart_marker:
             lines.extend(["", chart_marker])
@@ -2472,10 +2574,11 @@ class ReportGenerator:
 
         return "\n".join(lines)
 
-    def _run_generation_pass(self, report_context, notes, macro_osint, active_sections, include_visuals, label):
+    def _run_generation_pass(self, report_context, notes, analysis_context, macro_osint, active_sections, include_visuals, label):
         prompt = self._build_report_prompt(
             report_context,
             notes,
+            analysis_context,
             macro_osint,
             active_sections,
             include_visuals,
@@ -2503,7 +2606,7 @@ class ReportGenerator:
         )
         return response["message"]["content"]
 
-    def run(self, notes=""):
+    def run(self, notes="", analysis_context=""):
         logger.info("Starting cash-in intelligence report generation.")
 
         global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, notes)
@@ -2521,6 +2624,7 @@ class ReportGenerator:
                 self._run_generation_pass(
                     report_context,
                     notes,
+                    analysis_context,
                     macro_osint,
                     section_pass["sections"],
                     section_pass["include_visuals"],
@@ -2538,7 +2642,7 @@ class ReportGenerator:
         if not completeness_result["passed"]:
             logger.warning("Generated report failed quality gate. Falling back to deterministic management draft.")
             fallback_used = True
-            generated_content = self._build_fallback_report(report_context, notes, macro_osint)
+            generated_content = self._build_fallback_report(report_context, notes, analysis_context, macro_osint)
             generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
             completeness_result = self._score_report_completeness(generated_content)
             logger.info(
