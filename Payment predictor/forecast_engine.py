@@ -286,6 +286,8 @@ class CashflowForecaster:
                 cashflow_health=cashflow_health,
                 outstanding=outstanding,
                 start_date=start_date,
+                end_date=end_date,
+                horizon_key=horizon_key,
             ),
             'outstanding': outstanding,
             'alerts': alerts,
@@ -1014,6 +1016,8 @@ class CashflowForecaster:
         cashflow_health: Dict,
         outstanding: Dict,
         start_date: datetime,
+        end_date: datetime,
+        horizon_key: str = None,
     ) -> Dict:
         liquidity = cashflow_health['dimensions']['liquidity']['metrics']
         coverage = cashflow_health['dimensions']['coverage']['metrics']
@@ -1023,6 +1027,8 @@ class CashflowForecaster:
         ratio_now = liquidity['cash_vs_obligation_ratio']
         ratio_forecast = coverage['coverage_ratio']
         projected_runway = liquidity['projected_runway_months']
+        horizon_days = self.TIME_HORIZONS.get(horizon_key, {}).get('days')
+        dashboard_days = int(horizon_days or max((end_date - start_date).days + 1, 1))
 
         delay_distribution = self._build_delay_distribution(invoices)
         top_overdue_accounts = self._build_top_overdue_accounts(invoices)
@@ -1031,6 +1037,7 @@ class CashflowForecaster:
             predicted_payments=predicted_payments,
             daily_rate=self.out_projector.daily_rate,
             start_date=start_date,
+            total_days=dashboard_days,
         )
         alert_recommendation_lines = self._build_dashboard_alert_lines(
             cashflow_health=cashflow_health,
@@ -1047,6 +1054,10 @@ class CashflowForecaster:
             'runway_months': projected_runway,
             'coverage_ratio': ratio_forecast,
             'average_delay_days': conversion['average_delay_days'],
+            'horizon_key': horizon_key or 'custom',
+            'horizon_label': self.TIME_HORIZONS.get(horizon_key, {}).get('label', 'Custom Period') if horizon_key else 'Custom Period',
+            'horizon_focus': self.TIME_HORIZONS.get(horizon_key, {}).get('focus', '') if horizon_key else '',
+            'period_days': dashboard_days,
             'runway_chart': {
                 'projected_months': projected_runway,
                 'current_months': liquidity['current_runway_months'],
@@ -1122,10 +1133,26 @@ class CashflowForecaster:
         predicted_payments: List[Dict],
         daily_rate: float,
         start_date: datetime,
+        total_days: int,
     ) -> List[Dict]:
-        checkpoints = [1, 7, 14, 21, 28, 30]
-        balance_points = []
+        if total_days <= 30:
+            checkpoints = [1, 7, 14, 21, 28, total_days]
+        elif total_days <= 90:
+            checkpoints = [1, 14, 30, 45, 60, total_days]
+        else:
+            checkpoints = [1, 30, 90, 180, 270, total_days]
+
+        normalized = []
+        seen = set()
         for day in checkpoints:
+            bounded = min(max(int(day), 1), total_days)
+            if bounded in seen:
+                continue
+            seen.add(bounded)
+            normalized.append(bounded)
+
+        balance_points = []
+        for day in normalized:
             checkpoint = start_date + timedelta(days=day - 1)
             cumulative_cash_in = sum(
                 payment['amount']
