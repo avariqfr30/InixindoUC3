@@ -9,7 +9,7 @@
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
         .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; transition: width 0.25s ease; }
-        .card.review-mode { width: min(1120px, 96vw); }
+        .card.review-mode { width: min(1320px, 98vw); }
         .hidden { display: none; }
         h2 { color: #0f172a; margin: 0 0 10px 0; font-size: 1.8rem; }
         p.sub { color: #64748b; margin: 0 0 25px 0; font-size: 1rem; line-height: 1.4; }
@@ -22,6 +22,7 @@
         button.secondary { background: white; color: #475569; border: 1px solid #cbd5e1; }
         button.secondary:hover { background: #f8fafc; border-color: #94a3b8; }
         .review-box { background: #f8fafc; padding: 25px; border-radius: 12px; margin-bottom: 25px; border: 1px solid #e2e8f0; font-size: 0.95rem; border-left: 4px solid #CC0000; }
+        .review-box.compact-summary { max-width: 980px; }
         .review-row { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px dashed #e2e8f0; padding-bottom: 5px;}
         .review-row span:last-child { font-weight: 600; color: #0f172a; text-align: right;}
         .spinner { width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; display: none; vertical-align: middle; margin-left: 10px; }
@@ -63,9 +64,9 @@
         .bullet-list { margin: 10px 0 0 18px; padding: 0; color: #475569; }
         .bullet-list li { margin-bottom: 8px; }
         .mini-note { color: #64748b; font-size: 0.84rem; line-height: 1.45; margin-top: 8px; }
-        .review-action-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; align-items: start; }
-        .review-action-buttons { display: flex; gap: 15px; align-items: stretch; flex-direction: column; }
-        .review-action-buttons button { margin-bottom: 0; }
+        .review-dashboard-stack { display: grid; gap: 18px; align-items: start; }
+        .review-action-buttons { display: flex; gap: 15px; align-items: stretch; }
+        .review-action-buttons button { margin-bottom: 0; flex: 1; }
         .dashboard-shell { background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%); border: 1px solid #dbe4ef; border-radius: 18px; padding: 16px; }
         .cash-dashboard { background: white; border-radius: 18px; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08); padding: 18px; border: 1px solid #e2e8f0; }
         .cash-dashboard-header { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 14px; align-items: center; margin-bottom: 12px; }
@@ -138,7 +139,6 @@
             .horizon-grid { grid-template-columns: 1fr; }
             .review-row { flex-direction: column; gap: 4px; }
             .review-row span:last-child { text-align: left; }
-            .review-action-layout { grid-template-columns: 1fr; }
             .review-action-buttons { flex-direction: column; }
             .cash-dashboard-header { grid-template-columns: 1fr; }
             .cash-dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -213,16 +213,16 @@
 
         <div id="step-review" class="hidden">
             <h2>Konfirmasi Laporan Cash In</h2>
-            <div class="review-box" id="review-text"></div>
+            <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
-            <div class="review-action-layout">
+            <div class="review-dashboard-stack">
+                <aside class="dashboard-shell">
+                    <div id="cash-health-dashboard"></div>
+                </aside>
                 <div class="review-action-buttons">
                     <button type="button" id="btn-back">Kembali</button>
                     <button type="button" id="btn-generate">Generate Report <span id="spinner" class="spinner"></span></button>
                 </div>
-                <aside class="dashboard-shell">
-                    <div id="cash-health-dashboard"></div>
-                </aside>
             </div>
         </div>
 
