@@ -8,7 +8,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/quill/quill.snow.css') }}">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; color: #334155; }
-        .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; }
+        .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; transition: width 0.25s ease; }
+        .card.review-mode { width: min(1120px, 96vw); }
         .hidden { display: none; }
         h2 { color: #0f172a; margin: 0 0 10px 0; font-size: 1.8rem; }
         p.sub { color: #64748b; margin: 0 0 25px 0; font-size: 1rem; line-height: 1.4; }
@@ -62,11 +63,77 @@
         .bullet-list { margin: 10px 0 0 18px; padding: 0; color: #475569; }
         .bullet-list li { margin-bottom: 8px; }
         .mini-note { color: #64748b; font-size: 0.84rem; line-height: 1.45; margin-top: 8px; }
+        .review-action-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; align-items: start; }
+        .review-action-buttons { display: flex; gap: 15px; align-items: stretch; flex-direction: column; }
+        .review-action-buttons button { margin-bottom: 0; }
+        .dashboard-shell { background: linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%); border: 1px solid #dbe4ef; border-radius: 18px; padding: 16px; }
+        .cash-dashboard { background: white; border-radius: 18px; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08); padding: 18px; border: 1px solid #e2e8f0; }
+        .cash-dashboard-header { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 14px; align-items: center; margin-bottom: 12px; }
+        .cash-dashboard-art { height: 92px; border-radius: 16px; background: linear-gradient(135deg, #dff6e9 0%, #ecfeff 100%); border: 1px solid #cce7d7; position: relative; overflow: hidden; }
+        .cash-dashboard-art::before { content: '💵'; position: absolute; font-size: 54px; left: 14px; top: 14px; }
+        .cash-dashboard-art::after { content: '🪙'; position: absolute; font-size: 34px; right: 12px; bottom: 10px; }
+        .cash-dashboard-title h3 { margin: 0 0 10px 0; font-size: 1.9rem; color: #203152; letter-spacing: 0.01em; }
+        .cash-dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+        .cash-metric-card { border: 1px solid #e2e8f0; border-radius: 14px; background: white; padding: 14px 16px; }
+        .cash-metric-card.primary { background: linear-gradient(135deg, #dbeafe 0%, #eef2ff 100%); }
+        .cash-metric-label { display: flex; align-items: center; gap: 8px; color: #334155; font-size: 0.95rem; font-weight: 600; }
+        .cash-metric-value { margin-top: 6px; font-size: 2rem; font-weight: 800; color: #0f172a; line-height: 1; }
+        .cash-metric-unit { font-size: 1rem; font-weight: 500; color: #475569; margin-left: 4px; }
+        .cash-status-bar { margin-top: 12px; border-radius: 12px; padding: 12px 18px; background: linear-gradient(90deg, #ecfeff 0%, #f0fdf4 100%); border: 1px solid #d1fae5; display: flex; justify-content: center; gap: 10px; align-items: center; font-weight: 800; color: #1e293b; text-transform: uppercase; letter-spacing: 0.03em; }
+        .cash-status-bar.status-waspada { background: linear-gradient(90deg, #fff7ed 0%, #fef3c7 100%); border-color: #fcd34d; }
+        .cash-status-bar.status-bahaya { background: linear-gradient(90deg, #fef2f2 0%, #fee2e2 100%); border-color: #fca5a5; }
+        .cash-status-bar .status-value { color: #059669; }
+        .cash-status-bar.status-waspada .status-value { color: #b45309; }
+        .cash-status-bar.status-bahaya .status-value { color: #dc2626; }
+        .cash-dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+        .dashboard-panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; min-height: 208px; }
+        .dashboard-panel h4 { margin: 0 0 12px 0; color: #334155; font-size: 1rem; }
+        .dashboard-chart-body { height: 150px; position: relative; }
+        .runway-zone-chart { position: relative; height: 100%; border-radius: 14px; background: linear-gradient(180deg, #86efac 0%, #bbf7d0 30%, #fef08a 66%, #fdba74 100%); overflow: hidden; }
+        .runway-zone-chart::before { content: ''; position: absolute; left: 0; right: 0; top: 20%; border-top: 2px dashed rgba(255,255,255,0.7); }
+        .runway-zone-chart::after { content: ''; position: absolute; left: 0; right: 0; top: 60%; border-top: 2px dashed rgba(255,255,255,0.7); }
+        .runway-marker { position: absolute; left: 8%; right: 8%; height: 22px; background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%); border-radius: 999px; display: flex; justify-content: flex-end; align-items: center; padding-right: 12px; color: white; font-weight: 700; font-size: 0.88rem; box-shadow: 0 8px 18px rgba(34,197,94,0.25); }
+        .runway-threshold { position: absolute; bottom: 18%; right: 12%; border-right: 2px dashed #ef4444; height: 45%; }
+        .runway-axis { display: flex; justify-content: space-between; color: #64748b; font-size: 0.8rem; margin-top: 10px; }
+        .coverage-bars { display: flex; align-items: end; gap: 12px; height: 145px; padding-top: 8px; }
+        .coverage-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; }
+        .coverage-bar { width: 56px; border-radius: 12px 12px 6px 6px; position: relative; min-height: 24px; display: flex; align-items: flex-start; justify-content: center; padding-top: 8px; font-weight: 700; color: #334155; background: linear-gradient(180deg, #4ade80 0%, #16a34a 100%); }
+        .coverage-bar.forecast { background: linear-gradient(180deg, #bef264 0%, #84cc16 100%); }
+        .coverage-bar.target { background: linear-gradient(180deg, #fde68a 0%, #fbbf24 100%); }
+        .coverage-bar.danger { background: linear-gradient(180deg, #fdba74 0%, #fb923c 100%); }
+        .coverage-bar-label { font-size: 0.78rem; color: #64748b; text-align: center; }
+        .coverage-benchmark { margin-top: 8px; font-size: 0.8rem; color: #94a3b8; text-align: right; }
+        .sparkline-svg { width: 100%; height: 150px; }
+        .sparkline-grid { stroke: #dbe4ef; stroke-width: 1; stroke-dasharray: 4 4; }
+        .sparkline-threshold { stroke: #ef4444; stroke-width: 2; stroke-dasharray: 6 4; }
+        .sparkline-area { fill: rgba(96, 165, 250, 0.18); }
+        .sparkline-line { fill: none; stroke: #2563eb; stroke-width: 3; }
+        .sparkline-point { fill: white; stroke: #2563eb; stroke-width: 3; }
+        .sparkline-axis-labels { display: flex; justify-content: space-between; color: #64748b; font-size: 0.78rem; margin-top: 6px; }
+        .delay-list { display: grid; gap: 12px; }
+        .delay-row { display: grid; grid-template-columns: 80px minmax(0, 1fr) 52px; gap: 10px; align-items: center; font-size: 0.9rem; }
+        .delay-bar-track { height: 18px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+        .delay-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #4ade80 0%, #facc15 100%); }
+        .delay-bar-fill.risk { background: linear-gradient(90deg, #f97316 0%, #ef4444 100%); }
+        .overdue-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+        .overdue-table th, .overdue-table td { padding: 7px 6px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+        .overdue-table th { color: #64748b; font-weight: 700; }
+        .overdue-table td.numeric { text-align: right; }
+        .overdue-table td.delay-risk { color: #b91c1c; font-weight: 700; white-space: nowrap; }
+        .alerts-panel { display: grid; gap: 12px; }
+        .alerts-panel h4 { display: flex; align-items: center; gap: 8px; }
+        .alert-line { display: flex; gap: 10px; align-items: start; font-size: 0.95rem; color: #334155; }
+        .alert-line .icon { width: 20px; line-height: 1.1; }
         @media (max-width: 760px) {
             .control-grid { grid-template-columns: 1fr; }
             .horizon-grid { grid-template-columns: 1fr; }
             .review-row { flex-direction: column; gap: 4px; }
             .review-row span:last-child { text-align: left; }
+            .review-action-layout { grid-template-columns: 1fr; }
+            .review-action-buttons { flex-direction: column; }
+            .cash-dashboard-header { grid-template-columns: 1fr; }
+            .cash-dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .cash-dashboard-grid { grid-template-columns: 1fr; }
         }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
@@ -137,9 +204,14 @@
             <h2>Konfirmasi Laporan Cash In</h2>
             <div class="review-box" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
-            <div style="display:flex; gap:15px;">
-                <button type="button" id="btn-back" class="secondary" style="width:35%">Kembali</button>
-                <button type="button" id="btn-generate" style="width:65%">Generate Report <span id="spinner" class="spinner"></span></button>
+            <div class="review-action-layout">
+                <div class="review-action-buttons">
+                    <button type="button" id="btn-back">Kembali</button>
+                    <button type="button" id="btn-generate">Generate Report <span id="spinner" class="spinner"></span></button>
+                </div>
+                <aside class="dashboard-shell">
+                    <div id="cash-health-dashboard"></div>
+                </aside>
             </div>
         </div>
 
@@ -169,6 +241,8 @@
             suggestionContainer: document.getElementById('suggestion-container'),
             reviewText: document.getElementById('review-text'),
             jobStatus: document.getElementById('job-status'),
+            rootCard: document.querySelector('.card'),
+            cashHealthDashboard: document.getElementById('cash-health-dashboard'),
             
             btnReview: document.getElementById('btn-review'),
             btnGenerate: document.getElementById('btn-generate'),
@@ -444,6 +518,268 @@
                 .join('');
         }
 
+        function formatPercent(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return '-';
+            }
+            return `${Number(value).toFixed(1)}%`;
+        }
+
+        function buildHealthDimensionRows(health) {
+            if (!health || !health.dimensions) {
+                return '<tr><td colspan="3">Snapshot kesehatan kas belum tersedia.</td></tr>';
+            }
+
+            const order = ['liquidity', 'stability', 'conversion', 'coverage', 'risk'];
+            return order
+                .map(key => {
+                    const dimension = health.dimensions[key];
+                    if (!dimension) {
+                        return '';
+                    }
+                    return `
+                        <tr>
+                            <td>${escapeHtml(dimension.label)}</td>
+                            <td class="numeric">${dimension.weight}%</td>
+                            <td>${escapeHtml(dimension.summary)}</td>
+                        </tr>
+                    `;
+                })
+                .join('');
+        }
+
+        function buildReadinessCheckItems(health) {
+            if (!health || !health.readiness_checks) {
+                return '<li>Belum ada sinyal kesiapan kas yang dapat dirangkum.</li>';
+            }
+
+            return Object.values(health.readiness_checks)
+                .map(check => `
+                    <li>
+                        <strong>${escapeHtml(check.label)}</strong>:
+                        ${check.ok ? 'terjaga' : 'perlu tindak lanjut'}.
+                        <span class="mini-note">${escapeHtml(check.detail)}</span>
+                    </li>
+                `)
+                .join('');
+        }
+
+        function formatShortCurrency(value) {
+            const amount = Number(value || 0);
+            if (Math.abs(amount) >= 1_000_000_000) {
+                return `Rp ${(amount / 1_000_000_000).toFixed(1)}M`;
+            }
+            if (Math.abs(amount) >= 1_000_000) {
+                return `Rp ${(amount / 1_000_000).toFixed(0)} juta`;
+            }
+            return formatCurrency(amount);
+        }
+
+        function buildSparkline(points, threshold) {
+            if (!points || !points.length) {
+                return '';
+            }
+
+            const width = 320;
+            const height = 150;
+            const topPadding = 14;
+            const bottomPadding = 24;
+            const leftPadding = 10;
+            const rightPadding = 10;
+            const balances = points.map(point => Number(point.balance || 0));
+            const minBalance = Math.min(...balances, threshold);
+            const maxBalance = Math.max(...balances, threshold);
+            const range = Math.max(maxBalance - minBalance, 1);
+            const usableHeight = height - topPadding - bottomPadding;
+            const usableWidth = width - leftPadding - rightPadding;
+
+            const mapX = (index) => leftPadding + ((usableWidth * index) / Math.max(points.length - 1, 1));
+            const mapY = (value) => topPadding + usableHeight - (((value - minBalance) / range) * usableHeight);
+
+            const linePoints = points
+                .map((point, index) => `${mapX(index)},${mapY(Number(point.balance || 0))}`)
+                .join(' ');
+
+            const areaPoints = [
+                `${mapX(0)},${height - bottomPadding}`,
+                ...points.map((point, index) => `${mapX(index)},${mapY(Number(point.balance || 0))}`),
+                `${mapX(points.length - 1)},${height - bottomPadding}`,
+            ].join(' ');
+
+            const thresholdY = mapY(threshold);
+
+            return `
+                <svg class="sparkline-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+                    <line class="sparkline-grid" x1="${leftPadding}" y1="${topPadding + (usableHeight * 0.25)}" x2="${width - rightPadding}" y2="${topPadding + (usableHeight * 0.25)}"></line>
+                    <line class="sparkline-grid" x1="${leftPadding}" y1="${topPadding + (usableHeight * 0.55)}" x2="${width - rightPadding}" y2="${topPadding + (usableHeight * 0.55)}"></line>
+                    <line class="sparkline-threshold" x1="${leftPadding}" y1="${thresholdY}" x2="${width - rightPadding}" y2="${thresholdY}"></line>
+                    <polygon class="sparkline-area" points="${areaPoints}"></polygon>
+                    <polyline class="sparkline-line" points="${linePoints}"></polyline>
+                    ${points.map((point, index) => `<circle class="sparkline-point" cx="${mapX(index)}" cy="${mapY(Number(point.balance || 0))}" r="4"></circle>`).join('')}
+                </svg>
+            `;
+        }
+
+        function buildDashboardStatusClass(status) {
+            const normalized = String(status || '').toLowerCase();
+            if (normalized === 'bahaya') {
+                return 'status-bahaya';
+            }
+            if (normalized === 'waspada') {
+                return 'status-waspada';
+            }
+            return 'status-aman';
+        }
+
+        function buildCashHealthDashboard(forecast, horizonSnapshot) {
+            const shortTerm = (horizonSnapshot && horizonSnapshot.forecasts && horizonSnapshot.forecasts.short_term) || forecast;
+            const dashboard = shortTerm && shortTerm.dashboard_snapshot ? shortTerm.dashboard_snapshot : null;
+            if (!dashboard) {
+                return '<div class="cash-dashboard"><p class="mini-note">Dashboard kesehatan kas belum tersedia.</p></div>';
+            }
+
+            const runwayChart = dashboard.runway_chart || {};
+            const projectedMonths = Number(runwayChart.projected_months || 0);
+            const runwayTop = Math.min(120, Math.max(10, 100 - ((Math.min(projectedMonths, 5) / 5) * 100)));
+            const coverageBars = (dashboard.coverage_chart && dashboard.coverage_chart.bars) || [];
+            const maxCoverage = Math.max(...coverageBars.map(bar => Number(bar.value || 0)), 1.5);
+            const coverageMarkup = coverageBars.map(bar => {
+                const value = Number(bar.value || 0);
+                const height = Math.max(24, (value / maxCoverage) * 120);
+                return `
+                    <div class="coverage-bar-wrap">
+                        <div class="coverage-bar ${escapeHtml(bar.variant || '')}" style="height:${height}px;">
+                            ${value.toFixed(2)}
+                        </div>
+                        <div class="coverage-bar-label">${escapeHtml(bar.label)}</div>
+                    </div>
+                `;
+            }).join('');
+
+            const delayMarkup = (dashboard.delay_distribution || []).map(row => `
+                <div class="delay-row">
+                    <span>${escapeHtml(row.label)}</span>
+                    <div class="delay-bar-track">
+                        <div class="delay-bar-fill ${row.variant === 'risk' ? 'risk' : ''}" style="width:${Math.max(8, row.percentage)}%;"></div>
+                    </div>
+                    <strong>${row.percentage.toFixed(1)}%</strong>
+                </div>
+            `).join('');
+
+            const overdueMarkup = (dashboard.top_overdue_accounts || []).map((row, index) => `
+                <tr>
+                    <td>${index + 1}</td>
+                    <td>${escapeHtml(row.name)}</td>
+                    <td class="numeric">${formatShortCurrency(row.amount)}</td>
+                    <td class="delay-risk">${row.days_overdue} hari</td>
+                </tr>
+            `).join('');
+
+            const alertsMarkup = (dashboard.alert_recommendation_lines || []).map(line => `
+                <div class="alert-line">
+                    <span class="icon">⚠️</span>
+                    <span>${escapeHtml(line)}</span>
+                </div>
+            `).join('');
+
+            return `
+                <div class="cash-dashboard">
+                    <div class="cash-dashboard-header">
+                        <div class="cash-dashboard-art" aria-hidden="true"></div>
+                        <div class="cash-dashboard-title">
+                            <h3>CASHFLOW HEALTH DASHBOARD</h3>
+                            <div class="cash-dashboard-metrics">
+                                <div class="cash-metric-card primary">
+                                    <div class="cash-metric-label">💼 Cash</div>
+                                    <div class="cash-metric-value">${formatShortCurrency(dashboard.current_cash)}</div>
+                                </div>
+                                <div class="cash-metric-card">
+                                    <div class="cash-metric-label">📈 Runway</div>
+                                    <div class="cash-metric-value">${Number(dashboard.runway_months || 0).toFixed(1)}<span class="cash-metric-unit">bulan</span></div>
+                                </div>
+                                <div class="cash-metric-card">
+                                    <div class="cash-metric-label">⚖️ Coverage</div>
+                                    <div class="cash-metric-value">${Number(dashboard.coverage_ratio || 0).toFixed(2)}</div>
+                                </div>
+                                <div class="cash-metric-card">
+                                    <div class="cash-metric-label">🕒 Delay</div>
+                                    <div class="cash-metric-value">${Number(dashboard.average_delay_days || 0).toFixed(0)}<span class="cash-metric-unit">hari</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="cash-status-bar ${buildDashboardStatusClass(dashboard.status)}">
+                        <span>STATUS:</span>
+                        <span class="status-value">${escapeHtml(dashboard.status || '-')}</span>
+                        <span>✅</span>
+                    </div>
+
+                    <div class="cash-dashboard-grid">
+                        <section class="dashboard-panel">
+                            <h4>Cash Runway (bulan)</h4>
+                            <div class="dashboard-chart-body">
+                                <div class="runway-zone-chart">
+                                    <div class="runway-marker" style="top:${runwayTop}%;">${Number(dashboard.runway_months || 0).toFixed(1)} bulan</div>
+                                    <div class="runway-threshold" aria-hidden="true"></div>
+                                </div>
+                                <div class="runway-axis">
+                                    <span>5 bulan</span>
+                                    <span>4 bulan</span>
+                                    <span>2 bulan</span>
+                                    <span>1 bulan</span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="dashboard-panel">
+                            <h4>Cash Coverage Ratio</h4>
+                            <div class="dashboard-chart-body">
+                                <div class="coverage-bars">${coverageMarkup}</div>
+                                <div class="coverage-benchmark">Current minimum 1.2</div>
+                            </div>
+                        </section>
+
+                        <section class="dashboard-panel">
+                            <h4>Prediksi Saldo (30 Hari)</h4>
+                            <div class="dashboard-chart-body">
+                                ${buildSparkline(dashboard.balance_projection_30d || [], 100000000)}
+                                <div class="sparkline-axis-labels">
+                                    ${(dashboard.balance_projection_30d || []).map(point => `<span>${escapeHtml(point.label)}</span>`).join('')}
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="dashboard-panel">
+                            <h4>Average Payment Delay</h4>
+                            <div class="delay-list">${delayMarkup}</div>
+                        </section>
+
+                        <section class="dashboard-panel">
+                            <h4>Top Overdue Clients</h4>
+                            <table class="overdue-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Client</th>
+                                        <th class="numeric">Amount</th>
+                                        <th>Overdue</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${overdueMarkup || '<tr><td colspan="4">Belum ada overdue utama.</td></tr>'}</tbody>
+                            </table>
+                        </section>
+
+                        <section class="dashboard-panel">
+                            <div class="alerts-panel">
+                                <h4>🚨 ALERTS &amp; RECOMMENDATIONS</h4>
+                                ${alertsMarkup || '<div class="alert-line"><span class="icon">✅</span><span>Belum ada alert tambahan.</span></div>'}
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            `;
+        }
+
         function buildHorizonCards(horizonSnapshot) {
             const horizonOrder = ['short_term', 'mid_term', 'long_term'];
             return horizonOrder
@@ -459,6 +795,7 @@
                             <div class="mini-note">Predicted cash in: ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}</div>
                             <div class="mini-note">Predicted cash out: ${formatCurrency(item.forecast.cash_out.total_cash_out)}</div>
                             <div class="mini-note">Ending cash: ${formatCurrency(item.forecast.ending_cash)}</div>
+                            <div class="mini-note">Sinyal operasional: ${escapeHtml((item.cashflow_health && item.cashflow_health.operating_signal) || '-')}</div>
                         </div>
                     `;
                 })
@@ -486,13 +823,26 @@
                 .map(item => `- [${item.priority}] ${item.action}. SoP: ${item.sop}. Retention: ${item.retention_signal}. Satisfaction: ${item.satisfaction_signal}.`)
                 .join('\n') || '- Tidak ada rekomendasi tambahan.';
 
+            const health = forecast.cashflow_health || {};
+            const healthDimensionLines = health.dimensions
+                ? Object.values(health.dimensions)
+                    .map(item => `- ${item.label} (bobot ${item.weight}%): skor internal ${item.score}/100. ${item.summary}`)
+                    .join('\n')
+                : '- Snapshot kesehatan kas internal belum tersedia.';
+
+            const readinessLines = health.readiness_checks
+                ? Object.values(health.readiness_checks)
+                    .map(item => `- ${item.label}: ${item.ok ? 'terjaga' : 'perlu tindak lanjut'}. ${item.detail}`)
+                    .join('\n')
+                : '- Belum ada sinyal kesiapan kas.';
+
             const horizonLines = ['short_term', 'mid_term', 'long_term']
                 .map(key => {
                     const item = horizonSnapshot && horizonSnapshot.forecasts ? horizonSnapshot.forecasts[key] : null;
                     if (!item) {
                         return null;
                     }
-                    return `- ${item.time_horizon.label}: fokus ${item.time_horizon.focus}; predicted cash in ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}; predicted cash out ${formatCurrency(item.forecast.cash_out.total_cash_out)}; ending cash ${formatCurrency(item.forecast.ending_cash)}.`;
+                    return `- ${item.time_horizon.label}: fokus ${item.time_horizon.focus}; predicted cash in ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}; predicted cash out ${formatCurrency(item.forecast.cash_out.total_cash_out)}; ending cash ${formatCurrency(item.forecast.ending_cash)}; sinyal operasional ${item.cashflow_health ? item.cashflow_health.operating_signal : '-'}.`;
                 })
                 .filter(Boolean)
                 .join('\n');
@@ -524,10 +874,23 @@
                 '',
                 '=== FORMULA END CASH (INTERNAL) ===',
                 `- ${forecast.forecast.formula}`,
+                '',
+                '=== INTERNAL CASHFLOW HEALTH MODEL ===',
+                `- Sinyal operasional: ${health.operating_signal || '-'}`,
+                healthDimensionLines,
+                '',
+                '=== TIGA CEK AMAN (INTERNAL) ===',
+                readinessLines,
             ].filter(Boolean).join('\n');
         }
 
         function buildReviewHtml(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot) {
+            const health = forecast.cashflow_health || {};
+            const liquidity = health.dimensions ? health.dimensions.liquidity : null;
+            const stability = health.dimensions ? health.dimensions.stability : null;
+            const conversion = health.dimensions ? health.dimensions.conversion : null;
+            const coverage = health.dimensions ? health.dimensions.coverage : null;
+            const risk = health.dimensions ? health.dimensions.risk : null;
             return `
                 <div class="section-block">
                     <div class="review-row"><span>Sumber Data</span><span>${escapeHtml((reviewContext && reviewContext.dataSource) || 'Sumber data aktif')}</span></div>
@@ -540,6 +903,29 @@
                     <p class="mini-note">Formula internal: ${escapeHtml(forecast.forecast.formula)}</p>
                     ${reviewContext && reviewContext.readinessCaveat ? `<p class="mini-note"><strong>Catatan kesiapan:</strong> ${escapeHtml(reviewContext.readinessCaveat)}</p>` : ''}
                     ${reviewContext && reviewContext.controlNote ? `<p class="mini-note"><strong>Catatan kontrol:</strong> ${escapeHtml(reviewContext.controlNote)}</p>` : ''}
+                </div>
+
+                <div class="section-block">
+                    <h3>Buffer, Predictability, dan Control Snapshot</h3>
+                    <div class="review-row"><span>Sinyal Operasional</span><span>${escapeHtml(health.operating_signal || '-')}</span></div>
+                    <div class="review-row"><span>Runway Saat Ini</span><span>${liquidity ? `${liquidity.metrics.current_runway_months.toFixed(1)} bulan` : '-'}</span></div>
+                    <div class="review-row"><span>Runway Proyeksi</span><span>${liquidity ? `${liquidity.metrics.projected_runway_months.toFixed(1)} bulan` : '-'}</span></div>
+                    <div class="review-row"><span>Cash Coverage</span><span>${coverage ? `${coverage.metrics.coverage_ratio.toFixed(2)}x` : '-'}</span></div>
+                    <div class="review-row"><span>Rata-rata Delay</span><span>${conversion ? `${conversion.metrics.average_delay_days.toFixed(1)} hari` : '-'}</span></div>
+                    <div class="review-row"><span>Eksposur Partner Terbesar</span><span>${risk ? formatPercent(risk.metrics.top_partner_share_pct) : '-'}</span></div>
+                    <div class="review-row"><span>Visibilitas Cash In</span><span>${stability ? formatPercent(stability.metrics.visibility_ratio_pct) : '-'}</span></div>
+                    <table class="forecast-table" style="margin-top: 16px;">
+                        <thead>
+                            <tr>
+                                <th>Dimensi</th>
+                                <th class="numeric">Bobot</th>
+                                <th>Ringkasan</th>
+                            </tr>
+                        </thead>
+                        <tbody>${buildHealthDimensionRows(health)}</tbody>
+                    </table>
+                    <h3 style="margin-top: 16px;">Tiga Cek Kesiapan Kas</h3>
+                    <ul class="bullet-list">${buildReadinessCheckItems(health)}</ul>
                 </div>
 
                 <div class="section-block">
@@ -633,6 +1019,7 @@
 
                     ui.loader.classList.add('hidden');
                     ui.configStep.classList.remove('hidden');
+                    ui.rootCard.classList.remove('review-mode');
                 })
                 .catch(err => {
                     if (err.message.includes('Failed to fetch')) {
@@ -705,8 +1092,10 @@
                     forecastSnapshot,
                     horizonSnapshot,
                 );
+                ui.cashHealthDashboard.innerHTML = buildCashHealthDashboard(forecastSnapshot, horizonSnapshot);
                 ui.configStep.classList.add('hidden');
                 ui.reviewStep.classList.remove('hidden');
+                ui.rootCard.classList.add('review-mode');
             } catch (error) {
                 alert(error.message);
             } finally {
@@ -723,7 +1112,8 @@
             ui.jobStatus.classList.add('hidden');
             ui.jobStatus.textContent = '';
             ui.reviewStep.classList.add('hidden'); 
-            ui.configStep.classList.remove('hidden'); 
+            ui.configStep.classList.remove('hidden');
+            ui.rootCard.classList.remove('review-mode');
         };
 
         function updateJobStatus(message) {
@@ -767,6 +1157,7 @@
                     resetGenerateState();
                     ui.reviewStep.classList.add('hidden');
                     ui.successStep.classList.remove('hidden');
+                    ui.rootCard.classList.remove('review-mode');
                 })
                 .catch(err => {
                     alert(err.message);

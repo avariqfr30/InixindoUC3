@@ -131,6 +131,17 @@ MANDATORY RULES:
    - external factors that may delay payment,
    - short-, mid-, and long-term implications.
 23. Do not expose the word `aman` as a visible label unless the source context explicitly asks for it; instead, describe the operating buffer, ending cash, and implications in normal business language.
+24. If an internal cashflow health model is present, use it silently to sharpen the analysis around:
+   - liquidity and operational runway,
+   - stability/predictability of cash in timing,
+   - speed of invoice-to-cash conversion,
+   - cash coverage versus outflow,
+   - concentration and overdue risk.
+   Also reflect the three internal readiness checks in normal business language:
+   - whether cash is available now,
+   - whether incoming cash timing is clear enough,
+   - whether cashflow risk is under control.
+   Do not present these as a branded framework or maturity scorecard.
 
 VISUAL MARKERS:
 {visual_prompt}
