@@ -22,7 +22,7 @@
         button.secondary { background: white; color: #475569; border: 1px solid #cbd5e1; }
         button.secondary:hover { background: #f8fafc; border-color: #94a3b8; }
         .review-box { background: #f8fafc; padding: 25px; border-radius: 12px; margin-bottom: 25px; border: 1px solid #e2e8f0; font-size: 0.95rem; border-left: 4px solid #CC0000; }
-        .review-box.compact-summary { max-width: 980px; }
+        .review-box.compact-summary { width: 100%; max-width: 1180px; }
         .review-row { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px dashed #e2e8f0; padding-bottom: 5px;}
         .review-row span:last-child { font-weight: 600; color: #0f172a; text-align: right;}
         .spinner { width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; display: none; vertical-align: middle; margin-left: 10px; }
@@ -64,6 +64,7 @@
         .bullet-list { margin: 10px 0 0 18px; padding: 0; color: #475569; }
         .bullet-list li { margin-bottom: 8px; }
         .mini-note { color: #64748b; font-size: 0.84rem; line-height: 1.45; margin-top: 8px; }
+        .inline-success-banner { background: linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%); border: 1px solid #bbf7d0; color: #166534; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.92rem; font-weight: 600; }
         .review-dashboard-stack { display: grid; gap: 18px; align-items: start; }
         .review-action-buttons { display: flex; gap: 15px; align-items: stretch; }
         .review-action-buttons button { margin-bottom: 0; flex: 1; }
@@ -213,6 +214,7 @@
 
         <div id="step-review" class="hidden">
             <h2>Konfirmasi Laporan Cash In</h2>
+            <div id="inline-success-banner" class="inline-success-banner hidden">Laporan berhasil diunduh. Dashboard tetap tersedia untuk ditinjau atau generate ulang.</div>
             <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
             <div class="review-dashboard-stack">
@@ -226,12 +228,6 @@
             </div>
         </div>
 
-        <div id="step-success" class="hidden" style="text-align:center; padding: 20px;">
-            <div style="font-size: 60px; margin-bottom: 20px; color: #CC0000;">✅</div>
-            <h2>Selesai!</h2>
-            <p class="sub">Laporan analisis cash in telah diunduh.</p>
-            <button type="button" onclick="location.reload()" class="secondary">Buat Laporan Baru</button>
-        </div>
     </div>
 
     <script src="{{ url_for('static', filename='vendor/flatpickr/flatpickr.min.js') }}"></script>
@@ -242,7 +238,7 @@
             loaderText: document.getElementById('loader-text'),
             configStep: document.getElementById('step-config'),
             reviewStep: document.getElementById('step-review'),
-            successStep: document.getElementById('step-success'),
+            inlineSuccessBanner: document.getElementById('inline-success-banner'),
             
             notesToolbar: document.getElementById('notes-toolbar'),
             inputNotes: document.getElementById('input-notes'),
@@ -1204,6 +1200,16 @@
             ui.jobStatus.classList.remove('hidden');
         }
 
+        function showInlineSuccess(message) {
+            ui.inlineSuccessBanner.textContent = message;
+            ui.inlineSuccessBanner.classList.remove('hidden');
+        }
+
+        function clearInlineSuccess() {
+            ui.inlineSuccessBanner.classList.add('hidden');
+            ui.inlineSuccessBanner.textContent = '';
+        }
+
         function resetGenerateState() {
             ui.btnGenerate.disabled = false;
             document.getElementById('spinner').classList.remove('active');
@@ -1238,9 +1244,9 @@
                     a.download = `Inixindo_Cash_In_Intelligence_Report.docx`;
                     a.click();
                     resetGenerateState();
-                    ui.reviewStep.classList.add('hidden');
-                    ui.successStep.classList.remove('hidden');
-                    ui.rootCard.classList.remove('review-mode');
+                    ui.jobStatus.classList.add('hidden');
+                    ui.jobStatus.textContent = '';
+                    showInlineSuccess('Laporan berhasil diunduh. Dashboard tetap tersedia untuk ditinjau atau generate ulang.');
                 })
                 .catch(err => {
                     alert(err.message);
@@ -1286,6 +1292,7 @@
         
         ui.btnGenerate.onclick = () => {
             syncNotesValue();
+            clearInlineSuccess();
             ui.btnGenerate.disabled = true; 
             document.getElementById('spinner').classList.add('active');
             updateJobStatus('Permintaan Anda sedang dikirim ke sistem analisis.');
