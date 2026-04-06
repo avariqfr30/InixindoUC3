@@ -60,14 +60,14 @@ class UserStore:
     def validate_username(cls, username):
         normalized = str(username or "").strip()
         if not cls.USERNAME_PATTERN.fullmatch(normalized):
-            raise ValueError("Username must be 3-32 characters and use only letters, numbers, or underscores.")
+            raise ValueError("Nama pengguna harus 3-32 karakter dan hanya boleh berisi huruf, angka, atau garis bawah.")
         return normalized
 
     @staticmethod
     def validate_password(password):
         normalized = str(password or "")
         if len(normalized) < 8:
-            raise ValueError("Password must be at least 8 characters.")
+            raise ValueError("Kata sandi harus minimal 8 karakter.")
         return normalized
 
     def create_user(self, username, password):
@@ -86,7 +86,7 @@ class UserStore:
                 )
                 connection.commit()
             except sqlite3.IntegrityError as exc:
-                raise ValueError("Username is already registered.") from exc
+                raise ValueError("Nama pengguna sudah terdaftar.") from exc
 
         return normalized_username
 
@@ -547,7 +547,7 @@ def create_app():
             return None
 
         if _is_api_request():
-            return jsonify({"error": "Authentication required.", "loginUrl": url_for("login")}), 401
+            return jsonify({"error": "Autentikasi diperlukan.", "loginUrl": url_for("login")}), 401
         return redirect(url_for("login"))
 
     def _render_auth(mode="login", error=None, username=""):
@@ -573,7 +573,7 @@ def create_app():
         if not authenticated_username:
             return _render_auth(
                 mode="login",
-                error="Username or password is incorrect.",
+                error="Nama pengguna atau kata sandi salah.",
                 username=username,
             ), 401
 
@@ -596,7 +596,7 @@ def create_app():
         if password != confirm_password:
             return _render_auth(
                 mode="signup",
-                error="Password confirmation does not match.",
+                error="Konfirmasi kata sandi tidak cocok.",
                 username=username,
             ), 400
 

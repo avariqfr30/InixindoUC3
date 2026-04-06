@@ -161,11 +161,11 @@
     <div class="card">
         <div class="app-header">
             <div class="user-chip">
-                <span>Signed in as</span>
+                <span>Masuk sebagai</span>
                 <strong>{{ current_username }}</strong>
             </div>
             <form class="logout-form" method="post" action="{{ url_for('logout') }}">
-                <button type="submit" class="logout-button">Log Out</button>
+                <button type="submit" class="logout-button">Keluar</button>
             </form>
         </div>
         <div id="toast-notification" class="toast-notification hidden" role="status" aria-live="polite"></div>
@@ -319,7 +319,7 @@
                 }
                 if (response.status === 401) {
                     window.location.href = (data && data.loginUrl) || '/login';
-                    throw new Error('Authentication required.');
+                    throw new Error('Autentikasi diperlukan.');
                 }
                 if (!response.ok) {
                     throw new Error(data.error || `Request failed: ${response.status}`);
@@ -1277,7 +1277,7 @@
                                 // Keep the default message if the response is not JSON.
                             }
                             if (handleUnauthorizedResponse(response, data)) {
-                                throw new Error('Authentication required.');
+                                throw new Error('Autentikasi diperlukan.');
                             }
                             throw new Error(message);
                         });
@@ -1314,7 +1314,7 @@
                             }
                         }
                         if (handleUnauthorizedResponse(response, data)) {
-                            throw new Error('Authentication required.');
+                            throw new Error('Autentikasi diperlukan.');
                         }
                         if (!response.ok) {
                             throw new Error(data.error || "Status generate tidak tersedia.");
@@ -1377,7 +1377,7 @@
                             // Keep the default message if the response is not JSON.
                         }
                         if (handleUnauthorizedResponse(response, data)) {
-                            throw new Error('Authentication required.');
+                            throw new Error('Autentikasi diperlukan.');
                         }
                         throw new Error(message);
                     });
