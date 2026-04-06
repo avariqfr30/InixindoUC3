@@ -1,9 +1,13 @@
 import os
+from datetime import timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 DATA_ACQUISITION_MODE = os.getenv("DATA_ACQUISITION_MODE", "demo").strip().lower()
+APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret-key-in-production")
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes"}
+SESSION_LIFETIME_HOURS = int(os.getenv("SESSION_LIFETIME_HOURS", "12"))
 APP_SERVER = os.getenv("APP_SERVER", "flask").strip().lower()
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip()
 APP_PORT = int(os.getenv("APP_PORT", "5000"))
@@ -36,6 +40,7 @@ REPORT_NUM_PREDICT = int(os.getenv("REPORT_NUM_PREDICT", "2200"))
 REPORT_TEMPERATURE = float(os.getenv("REPORT_TEMPERATURE", "0.2"))
 REPORT_TOP_P = float(os.getenv("REPORT_TOP_P", "0.85"))
 REPORT_REPEAT_PENALTY = float(os.getenv("REPORT_REPEAT_PENALTY", "1.1"))
+PERMANENT_SESSION_LIFETIME = timedelta(hours=SESSION_LIFETIME_HOURS)
 
 INTERNAL_API_BASE_URL = os.getenv("INTERNAL_API_BASE_URL", "").strip()
 INTERNAL_API_DATASET_PATH = os.getenv(

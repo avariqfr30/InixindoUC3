@@ -11,6 +11,11 @@
         .card { position: relative; background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); width: 680px; max-height: 95vh; overflow-y: auto; border-top: 6px solid #CC0000; transition: width 0.25s ease; }
         .card.review-mode { width: min(1320px, 98vw); }
         .hidden { display: none; }
+        .app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
+        .user-chip { display: inline-flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 999px; background: #fff7f7; border: 1px solid #f1d5d5; color: #7f1d1d; font-size: 0.88rem; font-weight: 700; }
+        .logout-form { margin: 0; }
+        .logout-button { width: auto; margin: 0; padding: 9px 14px; font-size: 0.88rem; background: white; color: #7f1d1d; border: 1px solid #f1d5d5; }
+        .logout-button:hover { background: #fff0f0; }
         h2 { color: #0f172a; margin: 0 0 10px 0; font-size: 1.8rem; }
         p.sub { color: #64748b; margin: 0 0 25px 0; font-size: 1rem; line-height: 1.4; }
         label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.95rem; }
@@ -154,6 +159,15 @@
 </head>
     <body>
     <div class="card">
+        <div class="app-header">
+            <div class="user-chip">
+                <span>Signed in as</span>
+                <strong>{{ current_username }}</strong>
+            </div>
+            <form class="logout-form" method="post" action="{{ url_for('logout') }}">
+                <button type="submit" class="logout-button">Log Out</button>
+            </form>
+        </div>
         <div id="toast-notification" class="toast-notification hidden" role="status" aria-live="polite"></div>
         <div id="loader" style="text-align:center; padding: 40px;">
             <div style="border:4px solid #e2e8f0; border-top:4px solid #CC0000; border-radius:50%; width:40px; height:40px; animation: spin 1s linear infinite; margin: 0 auto 20px auto;"></div>
@@ -303,11 +317,23 @@
                         data = {};
                     }
                 }
+                if (response.status === 401) {
+                    window.location.href = (data && data.loginUrl) || '/login';
+                    throw new Error('Authentication required.');
+                }
                 if (!response.ok) {
                     throw new Error(data.error || `Request failed: ${response.status}`);
                 }
                 return data;
             });
+        }
+
+        function handleUnauthorizedResponse(response, data = {}) {
+            if (response.status === 401) {
+                window.location.href = (data && data.loginUrl) || '/login';
+                return true;
+            }
+            return false;
         }
 
         const notesEditor = new Quill('#input-notes-editor', {
@@ -1243,11 +1269,15 @@
                     if (!response.ok) {
                         return response.text().then(text => {
                             let message = "Gagal mengunduh dokumen hasil generate.";
+                            let data = {};
                             try {
-                                const data = JSON.parse(text);
+                                data = JSON.parse(text);
                                 message = data.error || message;
                             } catch (error) {
                                 // Keep the default message if the response is not JSON.
+                            }
+                            if (handleUnauthorizedResponse(response, data)) {
+                                throw new Error('Authentication required.');
                             }
                             throw new Error(message);
                         });
@@ -1274,8 +1304,23 @@
         function pollJobStatus(jobId) {
             fetch(`/jobs/${jobId}`)
                 .then(response => {
-                    if (!response.ok) throw new Error("Status generate tidak tersedia.");
-                    return response.json();
+                    return response.text().then(text => {
+                        let data = {};
+                        if (text) {
+                            try {
+                                data = JSON.parse(text);
+                            } catch (error) {
+                                data = {};
+                            }
+                        }
+                        if (handleUnauthorizedResponse(response, data)) {
+                            throw new Error('Authentication required.');
+                        }
+                        if (!response.ok) {
+                            throw new Error(data.error || "Status generate tidak tersedia.");
+                        }
+                        return data;
+                    });
                 })
                 .then(data => {
                     if (data.status === 'queued') {
@@ -1324,11 +1369,15 @@
                 if (!response.ok) {
                     return response.text().then(text => {
                         let message = "Gagal memulai generate dokumen. Pastikan layanan AI aktif.";
+                        let data = {};
                         try {
-                            const data = JSON.parse(text);
+                            data = JSON.parse(text);
                             message = data.error || message;
                         } catch (error) {
                             // Keep the default message if the response is not JSON.
+                        }
+                        if (handleUnauthorizedResponse(response, data)) {
+                            throw new Error('Authentication required.');
                         }
                         throw new Error(message);
                     });
@@ -1346,7 +1395,14 @@
         };
         
         document.getElementById('btn-refresh').onclick = () => {
-            fetch('/refresh-knowledge', {method: 'POST'}).then(() => location.reload());
+            fetch('/refresh-knowledge', {method: 'POST'})
+                .then(response => {
+                    if (response.status === 401) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    location.reload();
+                });
         };
     </script>
 </body>

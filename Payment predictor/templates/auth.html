@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inixindo Cash In Intelligence | Access</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #f8fafc 0%, #fee2e2 100%);
+            font-family: "Segoe UI", sans-serif;
+            color: #1f2937;
+        }
+        .auth-shell {
+            width: min(960px, 94vw);
+            display: grid;
+            grid-template-columns: minmax(280px, 0.95fr) minmax(360px, 1.05fr);
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 22px 40px rgba(15, 23, 42, 0.12);
+            overflow: hidden;
+        }
+        .auth-brand {
+            padding: 42px 36px;
+            background: linear-gradient(160deg, #7f1d1d 0%, #cc0000 55%, #ef4444 100%);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 24px;
+        }
+        .auth-brand h1 {
+            margin: 0;
+            font-size: 2rem;
+            line-height: 1.1;
+        }
+        .auth-brand p {
+            margin: 0;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        .auth-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            width: fit-content;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.24);
+            font-size: 0.86rem;
+            font-weight: 700;
+        }
+        .auth-panel {
+            padding: 42px 38px;
+        }
+        .auth-tabs {
+            display: inline-flex;
+            gap: 8px;
+            padding: 6px;
+            border-radius: 999px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 22px;
+        }
+        .auth-tab {
+            padding: 10px 16px;
+            border-radius: 999px;
+            text-decoration: none;
+            color: #475569;
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+        .auth-tab.active {
+            background: #cc0000;
+            color: white;
+        }
+        .auth-panel h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.8rem;
+            color: #0f172a;
+        }
+        .auth-panel p {
+            margin: 0 0 22px 0;
+            color: #64748b;
+            line-height: 1.5;
+        }
+        .error-banner {
+            margin-bottom: 18px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #b91c1c;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+        form {
+            display: grid;
+            gap: 16px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 700;
+            color: #334155;
+        }
+        input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 13px 14px;
+            border-radius: 12px;
+            border: 1px solid #cbd5e1;
+            font-size: 1rem;
+            font-family: "Segoe UI", sans-serif;
+        }
+        input:focus {
+            outline: none;
+            border-color: #cc0000;
+            box-shadow: 0 0 0 4px rgba(204, 0, 0, 0.12);
+        }
+        .field-hint {
+            margin-top: 8px;
+            font-size: 0.82rem;
+            color: #64748b;
+        }
+        button {
+            width: 100%;
+            border: none;
+            border-radius: 12px;
+            padding: 14px 16px;
+            background: #cc0000;
+            color: white;
+            font-size: 1rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        button:hover {
+            background: #a80000;
+        }
+        .auth-footer {
+            margin-top: 16px;
+            font-size: 0.88rem;
+            color: #64748b;
+        }
+        .auth-footer a {
+            color: #b91c1c;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        @media (max-width: 860px) {
+            .auth-shell {
+                grid-template-columns: 1fr;
+            }
+            .auth-brand,
+            .auth-panel {
+                padding: 30px 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-shell">
+        <section class="auth-brand">
+            <div>
+                <div class="auth-badge">Internal Access</div>
+                <h1>Inixindo Cash In Intelligence</h1>
+            </div>
+            <div>
+                <p>Use a simple internal account to access the dashboard, forecast review, and report generation flow.</p>
+                <p>This is a lightweight access layer for shared testing. It is intentionally basic, but passwords are stored as hashes instead of plain text.</p>
+            </div>
+        </section>
+
+        <section class="auth-panel">
+            <div class="auth-tabs">
+                <a href="{{ url_for('login') }}" class="auth-tab {% if mode == 'login' %}active{% endif %}">Login</a>
+                <a href="{{ url_for('signup') }}" class="auth-tab {% if mode == 'signup' %}active{% endif %}">Sign Up</a>
+            </div>
+
+            <h2>{% if mode == 'signup' %}Create Account{% else %}Welcome Back{% endif %}</h2>
+            <p>
+                {% if mode == 'signup' %}
+                Create a basic internal username and password to access the app.
+                {% else %}
+                Sign in with your internal testing account to continue.
+                {% endif %}
+            </p>
+
+            {% if error %}
+            <div class="error-banner">{{ error }}</div>
+            {% endif %}
+
+            {% if mode == 'signup' %}
+            <form method="post" action="{{ url_for('signup') }}">
+                <div>
+                    <label for="username">Username</label>
+                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username or '' }}">
+                    <div class="field-hint">Use 3-32 characters, letters, numbers, or underscores only.</div>
+                </div>
+                <div>
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password" required autocomplete="new-password">
+                    <div class="field-hint">Use at least 8 characters.</div>
+                </div>
+                <div>
+                    <label for="confirm_password">Confirm Password</label>
+                    <input id="confirm_password" name="confirm_password" type="password" required autocomplete="new-password">
+                </div>
+                <button type="submit">Create Account</button>
+            </form>
+            <div class="auth-footer">
+                Already have an account? <a href="{{ url_for('login') }}">Log in here</a>.
+            </div>
+            {% else %}
+            <form method="post" action="{{ url_for('login') }}">
+                <div>
+                    <label for="username">Username</label>
+                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username or '' }}">
+                </div>
+                <div>
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password" required autocomplete="current-password">
+                </div>
+                <button type="submit">Log In</button>
+            </form>
+            <div class="auth-footer">
+                Need an account? <a href="{{ url_for('signup') }}">Create one here</a>.
+            </div>
+            {% endif %}
+        </section>
+    </div>
+</body>
+</html>
