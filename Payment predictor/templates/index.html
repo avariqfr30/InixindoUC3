@@ -287,6 +287,12 @@
             toastTimer: null,
         };
 
+        window.addEventListener('pageshow', (event) => {
+            if (event.persisted) {
+                window.location.reload();
+            }
+        });
+
         const currencyFormatter = new Intl.NumberFormat('id-ID', {
             style: 'currency',
             currency: 'IDR',
