@@ -531,6 +531,12 @@ def create_app():
             "/refresh-knowledge",
         }
 
+    def _attach_no_store_headers(response):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
     @app.before_request
     def require_authentication():
         allowed_endpoints = {
@@ -549,6 +555,12 @@ def create_app():
         if _is_api_request():
             return jsonify({"error": "Autentikasi diperlukan.", "loginUrl": url_for("login")}), 401
         return redirect(url_for("login"))
+
+    @app.after_request
+    def apply_security_headers(response):
+        if request.endpoint == "static" or request.endpoint == "health":
+            return response
+        return _attach_no_store_headers(response)
 
     def _render_auth(mode="login", error=None, username=""):
         return render_template(
@@ -613,7 +625,16 @@ def create_app():
     @app.route("/logout", methods=["POST"])
     def logout():
         session.clear()
-        return redirect(url_for("login"))
+        response = redirect(url_for("login"))
+        response.delete_cookie(
+            app.config.get("SESSION_COOKIE_NAME", "session"),
+            path=app.config.get("SESSION_COOKIE_PATH", "/"),
+            domain=app.config.get("SESSION_COOKIE_DOMAIN"),
+            secure=app.config.get("SESSION_COOKIE_SECURE", False),
+            samesite=app.config.get("SESSION_COOKIE_SAMESITE", "Lax"),
+            httponly=app.config.get("SESSION_COOKIE_HTTPONLY", True),
+        )
+        return response
 
     def _build_forecast_periods(month_count=3):
         base_date = datetime.now().replace(day=1)
