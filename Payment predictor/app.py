@@ -3,6 +3,7 @@ import calendar
 import concurrent.futures
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -10,9 +11,10 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, current_app, jsonify, render_template, request, send_file
+from flask import Flask, current_app, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_cors import CORS
 import pandas as pd
+from werkzeug.security import check_password_hash, generate_password_hash
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -25,6 +27,86 @@ class QueueCapacityError(Exception):
         super().__init__(
             f"Queue is full ({active_jobs}/{max_pending_jobs} active jobs). Please try again in a few minutes."
         )
+
+
+class UserStore:
+    USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+
+    def __init__(self, db_path):
+        self.db_path = str(db_path)
+        self.lock = threading.Lock()
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self):
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            connection.commit()
+
+    @classmethod
+    def validate_username(cls, username):
+        normalized = str(username or "").strip()
+        if not cls.USERNAME_PATTERN.fullmatch(normalized):
+            raise ValueError("Username must be 3-32 characters and use only letters, numbers, or underscores.")
+        return normalized
+
+    @staticmethod
+    def validate_password(password):
+        normalized = str(password or "")
+        if len(normalized) < 8:
+            raise ValueError("Password must be at least 8 characters.")
+        return normalized
+
+    def create_user(self, username, password):
+        normalized_username = self.validate_username(username)
+        normalized_password = self.validate_password(password)
+        password_hash = generate_password_hash(normalized_password, method="pbkdf2:sha256")
+
+        with self.lock, self._connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO users (username, password_hash, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (normalized_username, password_hash, time.time()),
+                )
+                connection.commit()
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("Username is already registered.") from exc
+
+        return normalized_username
+
+    def authenticate(self, username, password):
+        normalized_username = str(username or "").strip()
+        normalized_password = str(password or "")
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT username, password_hash FROM users WHERE username = ?",
+                (normalized_username,),
+            ).fetchone()
+
+        if not row or not check_password_hash(row["password_hash"], normalized_password):
+            return None
+        return row["username"]
+
+    def has_users(self):
+        with self.lock, self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()
+        return bool(row and row["total"] > 0)
 
 
 class ReportJobStore:
@@ -390,8 +472,10 @@ class ReportJobManager:
 
 def create_app():
     from config import (
+        APP_SECRET_KEY,
         DB_URI,
         JOB_STATE_DB_PATH,
+        PERMANENT_SESSION_LIFETIME,
         REPORT_ARTIFACTS_DIR,
         REPORT_JOB_RETENTION_SECONDS,
         REPORT_MAX_CONCURRENT_JOBS,
@@ -399,17 +483,24 @@ def create_app():
         REPORT_MIN_COMPLETENESS_SCORE,
         REPORT_METRICS_WINDOW_HOURS,
         REPORT_STATUS_POLL_INTERVAL_MS,
+        SESSION_COOKIE_SECURE,
         SMART_SUGGESTIONS,
     )
     from core import KnowledgeBase, ReportGenerator, Researcher
     from forecast_engine import CashflowForecaster, parse_idr_amount
 
     app = Flask(__name__)
+    app.secret_key = APP_SECRET_KEY
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = SESSION_COOKIE_SECURE
+    app.config["PERMANENT_SESSION_LIFETIME"] = PERMANENT_SESSION_LIFETIME
     CORS(app)
 
     knowledge_base = KnowledgeBase(DB_URI)
     report_generator = ReportGenerator(knowledge_base)
     job_store = ReportJobStore(JOB_STATE_DB_PATH, REPORT_ARTIFACTS_DIR)
+    user_store = UserStore(JOB_STATE_DB_PATH)
     job_manager = ReportJobManager(
         report_generator=report_generator,
         max_workers=REPORT_MAX_CONCURRENT_JOBS,
@@ -426,8 +517,103 @@ def create_app():
     app.config["knowledge_base"] = knowledge_base
     app.config["job_manager"] = job_manager
     app.config["forecaster"] = forecaster
+    app.config["user_store"] = user_store
     app.config["min_completeness_score"] = REPORT_MIN_COMPLETENESS_SCORE
     app.config["status_poll_interval_ms"] = REPORT_STATUS_POLL_INTERVAL_MS
+
+    def _is_authenticated():
+        return bool(session.get("username"))
+
+    def _is_api_request():
+        return request.path.startswith("/api/") or request.path.startswith("/jobs/") or request.path in {
+            "/get-config",
+            "/generate",
+            "/refresh-knowledge",
+        }
+
+    @app.before_request
+    def require_authentication():
+        allowed_endpoints = {
+            "static",
+            "login",
+            "signup",
+            "logout",
+            "health",
+        }
+        if request.endpoint in allowed_endpoints:
+            return None
+
+        if _is_authenticated():
+            return None
+
+        if _is_api_request():
+            return jsonify({"error": "Authentication required.", "loginUrl": url_for("login")}), 401
+        return redirect(url_for("login"))
+
+    def _render_auth(mode="login", error=None, username=""):
+        return render_template(
+            "auth.html",
+            mode=mode,
+            error=error,
+            username=username,
+            has_users=user_store.has_users(),
+        )
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if _is_authenticated():
+            return redirect(url_for("home"))
+
+        if request.method == "GET":
+            return _render_auth(mode="login")
+
+        username = str(request.form.get("username", "")).strip()
+        password = request.form.get("password", "")
+        authenticated_username = user_store.authenticate(username, password)
+        if not authenticated_username:
+            return _render_auth(
+                mode="login",
+                error="Username or password is incorrect.",
+                username=username,
+            ), 401
+
+        session.clear()
+        session.permanent = True
+        session["username"] = authenticated_username
+        return redirect(url_for("home"))
+
+    @app.route("/signup", methods=["GET", "POST"])
+    def signup():
+        if _is_authenticated():
+            return redirect(url_for("home"))
+
+        if request.method == "GET":
+            return _render_auth(mode="signup")
+
+        username = str(request.form.get("username", "")).strip()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        if password != confirm_password:
+            return _render_auth(
+                mode="signup",
+                error="Password confirmation does not match.",
+                username=username,
+            ), 400
+
+        try:
+            created_username = user_store.create_user(username, password)
+        except ValueError as exc:
+            return _render_auth(mode="signup", error=str(exc), username=username), 400
+
+        session.clear()
+        session.permanent = True
+        session["username"] = created_username
+        return redirect(url_for("home"))
+
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
 
     def _build_forecast_periods(month_count=3):
         base_date = datetime.now().replace(day=1)
@@ -495,7 +681,7 @@ def create_app():
 
     @app.route("/")
     def home():
-        return render_template("index.html")
+        return render_template("index.html", current_username=session.get("username", ""))
 
     @app.route("/get-config")
     def get_config():
