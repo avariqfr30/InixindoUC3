@@ -43,6 +43,8 @@ from config import (
     INTERNAL_API_AUTH_TOKEN,
     INTERNAL_API_BASE_URL,
     INTERNAL_API_DATASET_PATH,
+    INTERNAL_API_ENDPOINT_URL,
+    INTERNAL_API_FIELD_MAP_JSON,
     INTERNAL_API_HEADERS_JSON,
     INTERNAL_API_QUERY_PARAMS_JSON,
     INTERNAL_API_RECORDS_KEY,
@@ -62,6 +64,13 @@ from config import (
     SERPER_API_KEY,
     WAITRESS_THREADS,
     WRITER_FIRM_NAME,
+)
+from data_contract import (
+    build_internal_data_summary,
+    extract_records_from_payload,
+    get_internal_api_contract,
+    normalize_financial_dataframe,
+    parse_internal_api_field_map,
 )
 from forecast_engine import parse_idr_amount
 
@@ -83,6 +92,7 @@ osint_cache = dc.Cache(str(osint_cache_dir))
 
 class InternalAPIClient:
     def __init__(self):
+        self.endpoint_url = INTERNAL_API_ENDPOINT_URL.strip()
         self.base_url = INTERNAL_API_BASE_URL.rstrip("/")
         self.dataset_path = INTERNAL_API_DATASET_PATH.strip() or "/api/finance/invoices"
         self.records_key = INTERNAL_API_RECORDS_KEY.strip()
@@ -90,6 +100,7 @@ class InternalAPIClient:
         self.timeout = INTERNAL_API_TIMEOUT
         self.verify_ssl = INTERNAL_API_VERIFY_SSL
         self.headers = self._parse_json_object(INTERNAL_API_HEADERS_JSON, "headers")
+        self.field_map = parse_internal_api_field_map(INTERNAL_API_FIELD_MAP_JSON)
         self.query_params = self._parse_json_object(
             INTERNAL_API_QUERY_PARAMS_JSON,
             "query params",
@@ -110,28 +121,24 @@ class InternalAPIClient:
 
         return parsed
 
-    @staticmethod
-    def _extract_nested_value(payload, path):
-        current = payload
-        for key in path.split("."):
-            if not isinstance(current, dict) or key not in current:
-                raise KeyError(path)
-            current = current[key]
-        return current
-
     def is_configured(self):
-        return bool(self.base_url)
+        return bool(self.endpoint_url or self.base_url)
+
+    def get_dataset_url(self):
+        if self.endpoint_url:
+            return self.endpoint_url
+        return urljoin(f"{self.base_url}/", self.dataset_path.lstrip("/"))
 
     def fetch_records(self):
         if not self.is_configured():
-            raise RuntimeError("Internal API base URL is not configured.")
+            raise RuntimeError("Internal API endpoint is not configured.")
 
         headers = {"Accept": "application/json"}
         headers.update(self.headers)
         if self.auth_token:
             headers.setdefault("Authorization", f"Bearer {self.auth_token}")
 
-        dataset_url = urljoin(f"{self.base_url}/", self.dataset_path.lstrip("/"))
+        dataset_url = self.get_dataset_url()
         response = requests.get(
             dataset_url,
             headers=headers,
@@ -142,21 +149,12 @@ class InternalAPIClient:
         response.raise_for_status()
 
         payload = response.json()
-        records = payload
-
-        if self.records_key:
-            records = self._extract_nested_value(payload, self.records_key)
-        elif isinstance(payload, dict):
-            for candidate_key in ("records", "items", "results", "data", "invoices"):
-                candidate_value = payload.get(candidate_key)
-                if isinstance(candidate_value, list):
-                    records = candidate_value
-                    break
-
-        if not isinstance(records, list):
-            raise ValueError("Internal API response must resolve to a list of records.")
-
-        return records
+        records, extraction_summary = extract_records_from_payload(
+            payload,
+            explicit_records_path=self.records_key or None,
+        )
+        extraction_summary["datasetUrl"] = dataset_url
+        return records, extraction_summary
 
 
 class KnowledgeBase:
@@ -177,6 +175,7 @@ class KnowledgeBase:
         )
         self.df = None
         self.report_context_cache = None
+        self.data_contract_summary = build_internal_data_summary(None)
         self.cache_lock = threading.Lock()
         self.refresh_data()
 
@@ -198,7 +197,7 @@ class KnowledgeBase:
 
     def _load_demo_data(self):
         try:
-            return pd.read_sql(f"SELECT * FROM {self.table_name}", self.engine)
+            data_frame = pd.read_sql(f"SELECT * FROM {self.table_name}", self.engine)
         except Exception:
             csv_path = DEMO_CSV_PATH
             if not os.path.exists(csv_path):
@@ -207,8 +206,12 @@ class KnowledgeBase:
 
             raw_df = pd.read_csv(csv_path)
             raw_df.columns = [column.strip() for column in raw_df.columns]
-            raw_df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
-            return raw_df
+            data_frame = raw_df
+
+        normalized_df, data_summary = normalize_financial_dataframe(data_frame)
+        self.data_contract_summary = data_summary
+        normalized_df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
+        return normalized_df
 
     def _load_internal_api_data(self):
         if not self.internal_api_client.is_configured():
@@ -216,18 +219,34 @@ class KnowledgeBase:
             return None
 
         try:
-            records = self.internal_api_client.fetch_records()
+            records, extraction_summary = self.internal_api_client.fetch_records()
         except Exception as exc:
             logger.error("Internal data sync failed: %s", exc)
             return None
 
-        data_frame = self._normalize_records(records)
-        if data_frame.empty:
+        raw_data_frame = self._normalize_records(records)
+        if raw_data_frame.empty:
             logger.error("Internal data source returned no records.")
             return None
 
-        data_frame.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
-        return data_frame
+        normalized_df, _ = normalize_financial_dataframe(
+            raw_data_frame,
+            explicit_field_map=self.internal_api_client.field_map,
+        )
+        self.data_contract_summary = build_internal_data_summary(
+            normalized_df,
+            explicit_field_map=self.internal_api_client.field_map,
+            extraction_summary=extraction_summary,
+        )
+
+        if self.data_contract_summary["missingRequiredFields"]:
+            logger.warning(
+                "Internal data source is missing required fields after normalization: %s",
+                ", ".join(self.data_contract_summary["missingRequiredFields"]),
+            )
+
+        normalized_df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
+        return normalized_df
 
     def _load_source_data(self):
         if self.data_mode == "internal_api":
@@ -325,6 +344,14 @@ class KnowledgeBase:
     def get_review_context(self):
         report_context = self.get_report_context("")
         return report_context.get("review_context", {})
+
+    def get_internal_data_contract(self):
+        contract = get_internal_api_contract()
+        contract["currentSummary"] = self.data_contract_summary
+        contract["dataMode"] = self.data_mode
+        contract["internalApiConfigured"] = self.internal_api_client.is_configured()
+        contract["datasetUrl"] = self.internal_api_client.get_dataset_url() if self.internal_api_client.is_configured() else None
+        return contract
 
 
 class FinancialAnalyzer:
