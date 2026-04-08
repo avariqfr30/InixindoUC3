@@ -64,13 +64,55 @@ python3 app.py --data-mode demo
 Mode internal API mengambil data finansial internal dari endpoint API, lalu memproses OSINT hanya sebagai konteks eksternal:
 ```bash
 DATA_ACQUISITION_MODE=internal_api \
+INTERNAL_API_ENDPOINT_URL=https://internal.example.com/api/finance/invoices \
+INTERNAL_API_AUTH_TOKEN=your_token \
+python3 app.py
+```
+
+Jika Anda lebih suka memisahkan host dan path seperti sebelumnya, mode lama masih didukung:
+```bash
+DATA_ACQUISITION_MODE=internal_api \
 INTERNAL_API_BASE_URL=https://internal.example.com \
 INTERNAL_API_DATASET_PATH=/api/finance/invoices \
 INTERNAL_API_AUTH_TOKEN=your_token \
 python3 app.py
 ```
 
-Jika response API dibungkus object, Anda bisa menambahkan `INTERNAL_API_RECORDS_KEY`, misalnya `data.items`.
+Jika response API dibungkus object atau array utama tidak ada di root JSON, Anda bisa menambahkan `INTERNAL_API_RECORDS_KEY`, misalnya `data.items` atau `payload.data[0].rows`.
+
+Jika nama field dari API internal berbeda dengan schema demo saat ini, Anda tidak perlu mengubah kode aplikasi. Cukup isi mapping field:
+```bash
+INTERNAL_API_FIELD_MAP_JSON='{"period":"report_period","partner_type":"customer_segment","service":"service_name","payment_class":"collection_bucket","invoice_value":"amount_idr","delay_note":"delay_reason"}'
+```
+
+Kalau tidak diisi, app sekarang akan mencoba menebak sendiri:
+* array/object record mana yang paling relevan dari JSON response
+* field mana yang tampaknya mewakili periode, partner, layanan, kelas pembayaran, nilai invoice, dan catatan keterlambatan
+
+Dengan kata lain, untuk banyak endpoint internal nanti alurnya cukup:
+1. isi `INTERNAL_API_ENDPOINT_URL`
+2. cek `GET /api/internal-data/contract`
+3. tambahkan `INTERNAL_API_RECORDS_KEY` atau `INTERNAL_API_FIELD_MAP_JSON` hanya jika inference belum tepat
+
+Cara termudah untuk tim internal nanti adalah mengikuti key canonical berikut langsung di response API:
+* `period`
+* `partner_type`
+* `service`
+* `payment_class`
+* `invoice_value`
+* `delay_note`
+
+App juga sekarang menyediakan kontrak schema yang bisa dibuka setelah login:
+* `GET /api/internal-data/contract`
+
+Endpoint ini menampilkan:
+* field yang wajib
+* alias yang masih diterima
+* contoh response
+* template `INTERNAL_API_FIELD_MAP_JSON`
+* endpoint env var yang bisa dipakai
+* ringkasan apakah dataset aktif saat ini sudah memenuhi kontrak atau belum
+* path record JSON yang terdeteksi dari payload aktif
 
 Untuk sesi uji bersama di jaringan internal perusahaan, gunakan Waitress dan bind aplikasi ke semua interface:
 ```bash

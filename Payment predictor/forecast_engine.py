@@ -9,6 +9,8 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import statistics
 
+from data_contract import resolve_financial_columns
+
 
 FOREIGN_CURRENCY_MARKERS = (
     "usd", "eur", "sgd", "aud", "jpy", "gbp", "cad", "cny", "myr", "$", "€", "£", "¥"
@@ -298,18 +300,24 @@ class CashflowForecaster:
     def _parse_invoices(self, df: pd.DataFrame, start_date: datetime, end_date: datetime) -> List[Dict]:
         """Parse invoice data from DataFrame"""
         invoices = []
+        resolved_columns = resolve_financial_columns(df)
+        partner_column = resolved_columns.get('partner_type')
+        service_column = resolved_columns.get('service')
+        payment_class_column = resolved_columns.get('payment_class')
+        invoice_value_column = resolved_columns.get('invoice_value')
+        delay_note_column = resolved_columns.get('delay_note')
         
         for idx, row in df.iterrows():
             try:
-                nilai = parse_idr_amount(row.get('Nilai Invoice', ''))
+                nilai = parse_idr_amount(row.get(invoice_value_column, '')) if invoice_value_column else 0
                 
                 invoices.append({
                     'index': idx,
-                    'partner_type': str(row.get('Tipe Partner', '')),
-                    'service': str(row.get('Layanan', '')),
-                    'kelas': self.behavior_analyzer.extract_kelas(str(row.get('Kelas Pembayaran', ''))),
+                    'partner_type': str(row.get(partner_column, '')) if partner_column else '',
+                    'service': str(row.get(service_column, '')) if service_column else '',
+                    'kelas': self.behavior_analyzer.extract_kelas(str(row.get(payment_class_column, ''))) if payment_class_column else 'Kelas C',
                     'amount': nilai,
-                    'note': str(row.get('Catatan Historis Keterlambatan', '')),
+                    'note': str(row.get(delay_note_column, '')) if delay_note_column else '',
                 })
             except (ValueError, TypeError):
                 continue

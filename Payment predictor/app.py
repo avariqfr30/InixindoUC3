@@ -772,12 +772,20 @@ def create_app():
     @app.route("/health")
     def health():
         health_snapshot = current_app.config["job_manager"].get_health()
+        internal_data_contract = current_app.config["knowledge_base"].get_internal_data_contract()
         health_snapshot["dataReady"] = bool(
             current_app.config["knowledge_base"].df is not None
             and not current_app.config["knowledge_base"].df.empty
         )
+        health_snapshot["internalDataContractReady"] = bool(
+            internal_data_contract.get("currentSummary", {}).get("isReady")
+        )
         health_snapshot["minimumCompletenessScore"] = current_app.config["min_completeness_score"]
         return jsonify(health_snapshot)
+
+    @app.route("/api/internal-data/contract", methods=["GET"])
+    def get_internal_data_contract():
+        return jsonify(current_app.config["knowledge_base"].get_internal_data_contract())
 
     # ==================== CASHFLOW FORECAST ENDPOINTS ====================
     
@@ -937,6 +945,10 @@ def parse_args():
         help="Optional override for the internal API base URL.",
     )
     parser.add_argument(
+        "--internal-api-url",
+        help="Optional override for the full internal API endpoint URL.",
+    )
+    parser.add_argument(
         "--host",
         help="Bind host for shared access, for example 0.0.0.0.",
     )
@@ -963,6 +975,9 @@ def apply_runtime_overrides(args):
         os.environ["DATA_ACQUISITION_MODE"] = args.data_mode
     if args.internal_api_base_url:
         os.environ["INTERNAL_API_BASE_URL"] = args.internal_api_base_url
+        os.environ.setdefault("DATA_ACQUISITION_MODE", "internal_api")
+    if args.internal_api_url:
+        os.environ["INTERNAL_API_ENDPOINT_URL"] = args.internal_api_url
         os.environ.setdefault("DATA_ACQUISITION_MODE", "internal_api")
     if args.host:
         os.environ["APP_HOST"] = args.host
