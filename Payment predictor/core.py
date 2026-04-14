@@ -42,10 +42,14 @@ from config import (
     FINANCE_SYSTEM_PROMPT,
     INTERNAL_API_AUTH_TOKEN,
     INTERNAL_API_BASE_URL,
+    INTERNAL_API_BASIC_PASSWORD,
+    INTERNAL_API_BASIC_USERNAME,
+    INTERNAL_API_BODY_JSON,
     INTERNAL_API_DATASET_PATH,
     INTERNAL_API_ENDPOINT_URL,
     INTERNAL_API_FIELD_MAP_JSON,
     INTERNAL_API_HEADERS_JSON,
+    INTERNAL_API_METHOD,
     INTERNAL_API_QUERY_PARAMS_JSON,
     INTERNAL_API_RECORDS_KEY,
     INTERNAL_API_TIMEOUT,
@@ -95,11 +99,15 @@ class InternalAPIClient:
         self.endpoint_url = INTERNAL_API_ENDPOINT_URL.strip()
         self.base_url = INTERNAL_API_BASE_URL.rstrip("/")
         self.dataset_path = INTERNAL_API_DATASET_PATH.strip() or "/api/finance/invoices"
+        self.method = (INTERNAL_API_METHOD or "GET").strip().upper()
         self.records_key = INTERNAL_API_RECORDS_KEY.strip()
         self.auth_token = INTERNAL_API_AUTH_TOKEN.strip()
+        self.basic_username = INTERNAL_API_BASIC_USERNAME.strip()
+        self.basic_password = INTERNAL_API_BASIC_PASSWORD
         self.timeout = INTERNAL_API_TIMEOUT
         self.verify_ssl = INTERNAL_API_VERIFY_SSL
         self.headers = self._parse_json_object(INTERNAL_API_HEADERS_JSON, "headers")
+        self.body = self._parse_optional_json_value(INTERNAL_API_BODY_JSON, "body")
         self.field_map = parse_internal_api_field_map(INTERNAL_API_FIELD_MAP_JSON)
         self.query_params = self._parse_json_object(
             INTERNAL_API_QUERY_PARAMS_JSON,
@@ -121,6 +129,15 @@ class InternalAPIClient:
 
         return parsed
 
+    @staticmethod
+    def _parse_optional_json_value(raw_value, label):
+        if not raw_value:
+            return None
+        try:
+            return json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid INTERNAL_API_{label.upper()}_JSON: {exc}") from exc
+
     def is_configured(self):
         return bool(self.endpoint_url or self.base_url)
 
@@ -135,25 +152,54 @@ class InternalAPIClient:
 
         headers = {"Accept": "application/json"}
         headers.update(self.headers)
+        auth = None
+        if self.basic_username:
+            auth = (self.basic_username, self.basic_password)
         if self.auth_token:
             headers.setdefault("Authorization", f"Bearer {self.auth_token}")
 
         dataset_url = self.get_dataset_url()
-        response = requests.get(
+        request_kwargs = {
+            "headers": headers,
+            "params": self.query_params,
+            "timeout": self.timeout,
+            "verify": self.verify_ssl,
+        }
+        if auth:
+            request_kwargs["auth"] = auth
+        if self.method != "GET" and self.body is not None:
+            request_kwargs["json"] = self.body
+            headers.setdefault("Content-Type", "application/json")
+
+        response = requests.request(
+            self.method,
             dataset_url,
-            headers=headers,
-            params=self.query_params,
-            timeout=self.timeout,
-            verify=self.verify_ssl,
+            **request_kwargs,
         )
         response.raise_for_status()
 
         payload = response.json()
+        if isinstance(payload, dict) and payload.get("success") is False:
+            message = payload.get("message") or "Internal API returned an authorization or business error."
+            raise RuntimeError(message)
+        if (
+            isinstance(payload, dict)
+            and payload.get("success") is True
+            and "data" in payload
+            and payload.get("data") is None
+        ):
+            raise RuntimeError(
+                "Internal API returned `data: null`. The endpoint is reachable and credentials are valid, "
+                "but it still needs the correct POST payload. Set INTERNAL_API_BODY_JSON once the company "
+                "shares the required request body."
+            )
         records, extraction_summary = extract_records_from_payload(
             payload,
             explicit_records_path=self.records_key or None,
         )
         extraction_summary["datasetUrl"] = dataset_url
+        extraction_summary["requestMethod"] = self.method
+        extraction_summary["authMode"] = "basic" if auth else ("bearer" if self.auth_token else "none")
         return records, extraction_summary
 
 

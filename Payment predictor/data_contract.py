@@ -623,8 +623,12 @@ def get_internal_api_contract():
 
     return {
         "endpointUrlEnvVar": "INTERNAL_API_ENDPOINT_URL",
+        "methodEnvVar": "INTERNAL_API_METHOD",
         "recordsEnvelopeCandidates": list(INTERNAL_API_ENVELOPE_CANDIDATES),
         "recordsKeyEnvVar": "INTERNAL_API_RECORDS_KEY",
+        "basicUsernameEnvVar": "INTERNAL_API_BASIC_USERNAME",
+        "basicPasswordEnvVar": "INTERNAL_API_BASIC_PASSWORD",
+        "bodyJsonEnvVar": "INTERNAL_API_BODY_JSON",
         "fieldMapEnvVar": "INTERNAL_API_FIELD_MAP_JSON",
         "fieldMapTemplate": field_map_template,
         "fields": fields,
@@ -633,6 +637,9 @@ def get_internal_api_contract():
         },
         "notes": [
             "Cara paling mudah: arahkan app ke endpoint JSON apa pun melalui INTERNAL_API_ENDPOINT_URL.",
+            "Jika endpoint perusahaan memakai POST, isi INTERNAL_API_METHOD=POST.",
+            "Jika endpoint perusahaan memakai Basic Auth, isi INTERNAL_API_BASIC_USERNAME dan INTERNAL_API_BASIC_PASSWORD.",
+            "Jika endpoint perlu body JSON, isi INTERNAL_API_BODY_JSON sesuai request yang diminta backend internal.",
             "App akan mencoba mendeteksi sendiri path array/object record yang paling relevan dari JSON response.",
             "App juga akan mencoba menebak field penting berdasarkan nama kolom dan pola nilainya, lalu memakai INTERNAL_API_FIELD_MAP_JSON hanya bila inference perlu dibantu.",
             "Jika payload bersarang dan auto-detect salah, isi INTERNAL_API_RECORDS_KEY dengan path seperti `payload.data.items` atau `payload.data[0].rows`.",

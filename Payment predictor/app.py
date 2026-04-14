@@ -949,6 +949,10 @@ def parse_args():
         help="Optional override for the full internal API endpoint URL.",
     )
     parser.add_argument(
+        "--internal-api-method",
+        help="Optional override for the internal API HTTP method, for example POST.",
+    )
+    parser.add_argument(
         "--host",
         help="Bind host for shared access, for example 0.0.0.0.",
     )
@@ -979,6 +983,8 @@ def apply_runtime_overrides(args):
     if args.internal_api_url:
         os.environ["INTERNAL_API_ENDPOINT_URL"] = args.internal_api_url
         os.environ.setdefault("DATA_ACQUISITION_MODE", "internal_api")
+    if args.internal_api_method:
+        os.environ["INTERNAL_API_METHOD"] = args.internal_api_method.upper()
     if args.host:
         os.environ["APP_HOST"] = args.host
     if args.port:

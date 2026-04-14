@@ -4,6 +4,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import pandas as pd
@@ -101,6 +102,65 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertIn("Kelas Pembayaran", normalized_df.columns)
         self.assertIn("Nilai Invoice", normalized_df.columns)
         self.assertTrue(summary["isReady"])
+
+    def test_post_basic_auth_client_supports_body_json(self):
+        old_env = {
+            "INTERNAL_API_ENDPOINT_URL": os.environ.get("INTERNAL_API_ENDPOINT_URL"),
+            "INTERNAL_API_METHOD": os.environ.get("INTERNAL_API_METHOD"),
+            "INTERNAL_API_BASIC_USERNAME": os.environ.get("INTERNAL_API_BASIC_USERNAME"),
+            "INTERNAL_API_BASIC_PASSWORD": os.environ.get("INTERNAL_API_BASIC_PASSWORD"),
+            "INTERNAL_API_BODY_JSON": os.environ.get("INTERNAL_API_BODY_JSON"),
+        }
+        try:
+            os.environ["INTERNAL_API_ENDPOINT_URL"] = "https://example.com/api/Resource/dataset"
+            os.environ["INTERNAL_API_METHOD"] = "POST"
+            os.environ["INTERNAL_API_BASIC_USERNAME"] = "demo-user"
+            os.environ["INTERNAL_API_BASIC_PASSWORD"] = "demo-pass"
+            os.environ["INTERNAL_API_BODY_JSON"] = json.dumps({"tag": "cashin"})
+
+            for module_name in ("core", "config"):
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
+
+            import core as core_module
+
+            fake_response = mock.Mock()
+            fake_response.raise_for_status.return_value = None
+            fake_response.json.return_value = {
+                "success": True,
+                "code": 200,
+                "message": "OK",
+                "data": [
+                    {
+                        "period": "Q1 2026",
+                        "partner_type": "Instansi Pemerintah",
+                        "service": "Audit SPBE",
+                        "payment_class": "Kelas B (Telat 1-2 Minggu)",
+                        "invoice_value": "Rp 200.000.000",
+                    }
+                ],
+            }
+
+            with mock.patch.object(core_module.requests, "request", return_value=fake_response) as request_mock:
+                client = core_module.InternalAPIClient()
+                records, extraction_summary = client.fetch_records()
+
+            self.assertEqual(records[0]["period"], "Q1 2026")
+            self.assertEqual(extraction_summary["requestMethod"], "POST")
+            self.assertEqual(extraction_summary["authMode"], "basic")
+            request_mock.assert_called_once()
+            _, kwargs = request_mock.call_args
+            self.assertEqual(kwargs["auth"], ("demo-user", "demo-pass"))
+            self.assertEqual(kwargs["json"], {"tag": "cashin"})
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            for module_name in ("core", "config"):
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
 
 
 class InternalDataContractRouteTest(unittest.TestCase):
