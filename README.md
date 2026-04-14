@@ -69,6 +69,17 @@ INTERNAL_API_AUTH_TOKEN=your_token \
 python3 app.py
 ```
 
+Jika endpoint perusahaan memakai method selain `GET`, Basic Auth, atau butuh body JSON, gunakan env var berikut:
+```bash
+DATA_ACQUISITION_MODE=internal_api \
+INTERNAL_API_ENDPOINT_URL=https://internal.example.com/api/Resource/dataset \
+INTERNAL_API_METHOD=POST \
+INTERNAL_API_BASIC_USERNAME=your_username \
+INTERNAL_API_BASIC_PASSWORD=your_password \
+INTERNAL_API_BODY_JSON='{"tag":"cashin"}' \
+python3 app.py
+```
+
 Jika Anda lebih suka memisahkan host dan path seperti sebelumnya, mode lama masih didukung:
 ```bash
 DATA_ACQUISITION_MODE=internal_api \
@@ -111,6 +122,7 @@ Endpoint ini menampilkan:
 * contoh response
 * template `INTERNAL_API_FIELD_MAP_JSON`
 * endpoint env var yang bisa dipakai
+* env var method/auth/body untuk endpoint non-GET
 * ringkasan apakah dataset aktif saat ini sudah memenuhi kontrak atau belum
 * path record JSON yang terdeteksi dari payload aktif
 
@@ -162,6 +174,7 @@ Arti singkatnya:
 * **Ollama Connection Refused**: Pastikan aplikasi Ollama berjalan di latar belakang (cek ikon tray di Windows/Mac).
 * **KeyError saat Generate**: Hapus file `.db` (SQLite) di folder `data/` dan *restart* `app.py`. Ini terjadi jika CSV Anda memiliki nama kolom yang berbeda dengan format lama.
 * **Financial data unavailable**: Pastikan mode data sesuai, lalu cek `INTERNAL_API_BASE_URL`, `INTERNAL_API_DATASET_PATH`, token, dan bentuk JSON response bila menggunakan internal API.
+* **Internal API mengembalikan `data: null`**: artinya endpoint dan kredensial sudah benar, tetapi backend internal masih menunggu body POST yang spesifik. Isi `INTERNAL_API_BODY_JSON` sesuai payload yang diberikan tim backend.
 * **Generate terasa lambat saat banyak user**: Turunkan ukuran model, kecilkan `REPORT_NUM_PREDICT`, atau sesuaikan `REPORT_MAX_CONCURRENT_JOBS` dengan kapasitas mesin yang menjalankan Ollama.
 * **Queue penuh saat stress test**: Tingkatkan `REPORT_MAX_PENDING_JOBS` bila antrean memang ingin diperbolehkan lebih panjang, atau turunkan jumlah pengguna simultan bila target waktu 3-4 menit mulai meleset.
 * **Artefak hasil report tidak ditemukan**: Pastikan `REPORT_ARTIFACTS_DIR` dapat ditulis oleh user proses aplikasi, dan `JOB_STATE_DB_PATH` mengarah ke lokasi yang persisten di VPS.
