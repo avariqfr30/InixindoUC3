@@ -8,7 +8,7 @@ import re
 import statistics
 import textwrap
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -34,6 +34,18 @@ from sqlalchemy import create_engine
 
 from config import (
     APP_SERVER,
+    CASH_OUT_API_AUTH_TOKEN,
+    CASH_OUT_API_BASIC_PASSWORD,
+    CASH_OUT_API_BASIC_USERNAME,
+    CASH_OUT_API_BODY_JSON,
+    CASH_OUT_API_ENDPOINT_URL,
+    CASH_OUT_API_HEADERS_JSON,
+    CASH_OUT_API_METHOD,
+    CASH_OUT_API_QUERY_PARAMS_JSON,
+    CASH_OUT_API_RECORDS_KEY,
+    CASH_OUT_API_TIMEOUT,
+    CASH_OUT_API_VERIFY_SSL,
+    CASH_OUT_FIELD_MAP_JSON,
     DATA_ACQUISITION_MODE,
     DATA_DIR,
     DEFAULT_COLOR,
@@ -203,6 +215,325 @@ class InternalAPIClient:
         return records, extraction_summary
 
 
+class CashOutAPIClient(InternalAPIClient):
+    FIELD_ALIASES = {
+        "amount": (
+            "amount",
+            "amount_idr",
+            "nominal",
+            "nilai",
+            "cash_out",
+            "outflow",
+            "expense_amount",
+            "planned_amount",
+            "total_amount",
+            "value",
+        ),
+        "due_date": (
+            "due_date",
+            "payment_date",
+            "planned_date",
+            "tanggal_bayar",
+            "tanggal_jatuh_tempo",
+            "jatuh_tempo",
+            "due",
+            "date",
+            "tanggal",
+        ),
+        "category": (
+            "category",
+            "expense_category",
+            "cash_out_category",
+            "jenis_biaya",
+            "kategori",
+            "cost_center",
+        ),
+        "reference": (
+            "reference",
+            "reference_code",
+            "code",
+            "id",
+            "reference_id",
+            "document_no",
+            "invoice_no",
+            "nama",
+            "name",
+        ),
+        "status": (
+            "status",
+            "payment_status",
+            "approval_status",
+            "state",
+        ),
+        "description": (
+            "description",
+            "note",
+            "notes",
+            "memo",
+            "remarks",
+            "keterangan",
+        ),
+    }
+
+    REQUIRED_FIELDS = ("amount", "due_date")
+
+    def __init__(self):
+        self.endpoint_url = CASH_OUT_API_ENDPOINT_URL.strip()
+        self.base_url = ""
+        self.dataset_path = ""
+        self.method = (CASH_OUT_API_METHOD or "GET").strip().upper()
+        self.records_key = CASH_OUT_API_RECORDS_KEY.strip()
+        self.auth_token = CASH_OUT_API_AUTH_TOKEN.strip()
+        self.basic_username = CASH_OUT_API_BASIC_USERNAME.strip()
+        self.basic_password = CASH_OUT_API_BASIC_PASSWORD
+        self.timeout = CASH_OUT_API_TIMEOUT
+        self.verify_ssl = CASH_OUT_API_VERIFY_SSL
+        self.headers = self._parse_json_object(CASH_OUT_API_HEADERS_JSON, "headers")
+        self.body = self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body")
+        self.field_map = self._parse_field_map(CASH_OUT_FIELD_MAP_JSON)
+        self.query_params = self._parse_json_object(
+            CASH_OUT_API_QUERY_PARAMS_JSON,
+            "query params",
+        )
+
+    @classmethod
+    def _parse_field_map(cls, raw_value):
+        if not raw_value:
+            return {}
+        try:
+            candidate = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid CASH_OUT_FIELD_MAP_JSON: {exc}") from exc
+        if not isinstance(candidate, dict):
+            raise ValueError("CASH_OUT_FIELD_MAP_JSON must be a JSON object.")
+
+        normalized_map = {}
+        for key, value in candidate.items():
+            normalized_key = cls._normalize_key(key)
+            if normalized_key not in cls.FIELD_ALIASES:
+                raise ValueError(
+                    "CASH_OUT_FIELD_MAP_JSON contains an unknown field key: "
+                    f"{key}. Use amount, due_date, category, reference, status, or description."
+                )
+            normalized_map[normalized_key] = str(value).strip()
+        return normalized_map
+
+    @staticmethod
+    def _normalize_key(value):
+        return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+    @classmethod
+    def _resolve_columns(cls, data_frame, explicit_field_map=None):
+        explicit_field_map = explicit_field_map or {}
+        columns = list(data_frame.columns)
+        normalized_columns = {
+            cls._normalize_key(column): column
+            for column in columns
+        }
+
+        resolved = {}
+        missing = []
+        for canonical_field, aliases in cls.FIELD_ALIASES.items():
+            explicit_column = explicit_field_map.get(canonical_field)
+            if explicit_column:
+                if explicit_column in data_frame.columns:
+                    resolved[canonical_field] = explicit_column
+                    continue
+                normalized_explicit = cls._normalize_key(explicit_column)
+                if normalized_explicit in normalized_columns:
+                    resolved[canonical_field] = normalized_columns[normalized_explicit]
+                    continue
+
+            for alias in aliases:
+                normalized_alias = cls._normalize_key(alias)
+                if normalized_alias in normalized_columns:
+                    resolved[canonical_field] = normalized_columns[normalized_alias]
+                    break
+
+            if canonical_field in cls.REQUIRED_FIELDS and canonical_field not in resolved:
+                missing.append(canonical_field)
+
+        return resolved, missing
+
+    @staticmethod
+    def _normalize_records(records):
+        data_frame = pd.json_normalize(records, sep="_")
+        if data_frame.empty:
+            return data_frame
+
+        for column in data_frame.columns:
+            data_frame[column] = data_frame[column].apply(
+                lambda value: json.dumps(value, ensure_ascii=False)
+                if isinstance(value, (dict, list))
+                else value
+            )
+
+        data_frame.columns = [str(column).strip() for column in data_frame.columns]
+        return data_frame
+
+    @staticmethod
+    def _parse_due_date(raw_value):
+        if raw_value is None or (isinstance(raw_value, float) and pd.isna(raw_value)):
+            return None
+        parsed_value = pd.to_datetime(raw_value, errors="coerce")
+        if pd.isna(parsed_value):
+            return None
+        return parsed_value.to_pydatetime()
+
+    @staticmethod
+    def _is_open_status(raw_status):
+        status = str(raw_status or "").strip().lower()
+        if not status:
+            return True
+        return status not in {"paid", "settled", "closed", "cancelled", "canceled", "done"}
+
+    def fetch_commitments(self):
+        if not self.is_configured():
+            return [], self.get_summary()
+
+        records, extraction_summary = self.fetch_records()
+        raw_data_frame = self._normalize_records(records)
+        if raw_data_frame.empty:
+            return [], {
+                **self.get_summary(),
+                "datasetUrl": self.get_dataset_url(),
+                "requestMethod": self.method,
+                "recordCount": 0,
+                "missingRequiredFields": list(self.REQUIRED_FIELDS),
+            }
+
+        resolved_columns, missing_fields = self._resolve_columns(raw_data_frame, self.field_map)
+        normalized_records = []
+        for _, row in raw_data_frame.iterrows():
+            amount_column = resolved_columns.get("amount")
+            due_date_column = resolved_columns.get("due_date")
+            try:
+                amount = parse_idr_amount(row.get(amount_column, 0)) if amount_column else 0
+            except ValueError:
+                continue
+            due_date = self._parse_due_date(row.get(due_date_column)) if due_date_column else None
+            if amount <= 0 or due_date is None:
+                continue
+            normalized_records.append(
+                {
+                    "amount": amount,
+                    "due_date": due_date,
+                    "category": str(row.get(resolved_columns.get("category"), "")).strip(),
+                    "reference": str(row.get(resolved_columns.get("reference"), "")).strip(),
+                    "status": str(row.get(resolved_columns.get("status"), "")).strip(),
+                    "description": str(row.get(resolved_columns.get("description"), "")).strip(),
+                    "is_open": self._is_open_status(row.get(resolved_columns.get("status"), "")),
+                }
+            )
+
+        summary = {
+            **self.get_summary(),
+            **extraction_summary,
+            "recordCount": len(normalized_records),
+            "resolvedFields": resolved_columns,
+            "missingRequiredFields": missing_fields,
+        }
+        return normalized_records, summary
+
+    def get_summary(self):
+        return {
+            "configured": self.is_configured(),
+            "datasetUrl": self.get_dataset_url() if self.is_configured() else None,
+            "requestMethod": self.method,
+        }
+
+
+class CashOutStore:
+    def __init__(self):
+        self.client = CashOutAPIClient()
+        self.records = []
+        self.summary = self.client.get_summary()
+        self.lock = threading.Lock()
+        self.refresh_lock = threading.Lock()
+        self.version = 0
+        self.sync_status = "not_configured" if not self.client.is_configured() else "not_loaded"
+        self.last_sync_started_at = None
+        self.last_sync_at = None
+        self.last_success_at = None
+        self.last_sync_duration_seconds = None
+        self.last_sync_error = None
+        if self.client.is_configured():
+            self.refresh_data()
+
+    def refresh_data(self):
+        if not self.client.is_configured():
+            with self.lock:
+                self.records = []
+                self.summary = self.client.get_summary()
+                self.sync_status = "not_configured"
+                self.last_sync_error = None
+            return False
+
+        with self.refresh_lock:
+            started_at = datetime.now()
+            with self.lock:
+                self.sync_status = "refreshing"
+                self.last_sync_started_at = started_at
+                self.last_sync_error = None
+
+            try:
+                records, summary = self.client.fetch_commitments()
+                completed_at = datetime.now()
+                with self.lock:
+                    self.records = records
+                    self.summary = summary
+                    self.version += 1
+                    self.sync_status = "ready"
+                    self.last_sync_at = completed_at
+                    self.last_success_at = completed_at
+                    self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
+                    self.last_sync_error = None
+                return True
+            except Exception as exc:
+                completed_at = datetime.now()
+                logger.error("Cash-out source sync failed: %s", exc)
+                with self.lock:
+                    self.records = []
+                    self.summary = {
+                        **self.client.get_summary(),
+                        "recordCount": 0,
+                        "missingRequiredFields": list(self.client.REQUIRED_FIELDS),
+                    }
+                    self.sync_status = "error"
+                    self.last_sync_at = completed_at
+                    self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
+                    self.last_sync_error = str(exc)
+                return False
+
+    def get_records(self):
+        with self.lock:
+            return copy.deepcopy(self.records)
+
+    def get_status(self, refresh_interval_seconds=0):
+        with self.lock:
+            last_success_at = self.last_success_at
+            next_refresh_at = None
+            if refresh_interval_seconds > 0 and last_success_at is not None:
+                next_refresh_at = last_success_at + timedelta(seconds=refresh_interval_seconds)
+            source_age_minutes = None
+            if last_success_at is not None:
+                source_age_minutes = round((datetime.now() - last_success_at).total_seconds() / 60, 1)
+            return {
+                "configured": self.client.is_configured(),
+                "syncStatus": self.sync_status,
+                "lastSyncStartedAt": self.last_sync_started_at.isoformat() if self.last_sync_started_at else None,
+                "lastSyncAt": self.last_sync_at.isoformat() if self.last_sync_at else None,
+                "lastSuccessAt": last_success_at.isoformat() if last_success_at else None,
+                "lastSyncDurationSeconds": self.last_sync_duration_seconds,
+                "lastSyncError": self.last_sync_error,
+                "sourceAgeMinutes": source_age_minutes,
+                "nextRefreshAt": next_refresh_at.isoformat() if next_refresh_at else None,
+                "recordCount": len(self.records),
+                "version": self.version,
+                "summary": copy.deepcopy(self.summary),
+            }
+
+
 class KnowledgeBase:
     def __init__(self, db_uri):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -223,6 +554,14 @@ class KnowledgeBase:
         self.report_context_cache = None
         self.data_contract_summary = build_internal_data_summary(None)
         self.cache_lock = threading.Lock()
+        self.refresh_lock = threading.Lock()
+        self.sync_status = "not_loaded"
+        self.last_sync_started_at = None
+        self.last_sync_at = None
+        self.last_success_at = None
+        self.last_sync_duration_seconds = None
+        self.last_sync_error = None
+        self.data_version = 0
         self.refresh_data()
 
     @staticmethod
@@ -339,12 +678,40 @@ class KnowledgeBase:
         return True
 
     def refresh_data(self):
-        self.df = self._load_source_data()
-        if self.df is None or self.df.empty:
-            return False
-        with self.cache_lock:
-            self.report_context_cache = None
-        return self._rebuild_embeddings()
+        with self.refresh_lock:
+            started_at = datetime.now()
+            self.sync_status = "refreshing"
+            self.last_sync_started_at = started_at
+            self.last_sync_error = None
+
+            self.df = self._load_source_data()
+            if self.df is None or self.df.empty:
+                completed_at = datetime.now()
+                self.sync_status = "error"
+                self.last_sync_at = completed_at
+                self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
+                self.last_sync_error = "Data finansial tidak tersedia atau kosong."
+                return False
+
+            with self.cache_lock:
+                self.report_context_cache = None
+
+            rebuilt = self._rebuild_embeddings()
+            completed_at = datetime.now()
+            if not rebuilt:
+                self.sync_status = "error"
+                self.last_sync_at = completed_at
+                self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
+                self.last_sync_error = "Embedding store gagal diperbarui."
+                return False
+
+            self.sync_status = "ready"
+            self.last_sync_at = completed_at
+            self.last_success_at = completed_at
+            self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
+            self.last_sync_error = None
+            self.data_version += 1
+            return True
 
     def query(self, context_keywords="", max_results=12):
         query_text = (
@@ -398,6 +765,30 @@ class KnowledgeBase:
         contract["internalApiConfigured"] = self.internal_api_client.is_configured()
         contract["datasetUrl"] = self.internal_api_client.get_dataset_url() if self.internal_api_client.is_configured() else None
         return contract
+
+    def get_sync_status(self, refresh_interval_seconds=0):
+        next_refresh_at = None
+        if refresh_interval_seconds > 0 and self.last_success_at is not None:
+            next_refresh_at = self.last_success_at + timedelta(seconds=refresh_interval_seconds)
+
+        source_age_minutes = None
+        if self.last_success_at is not None:
+            source_age_minutes = round((datetime.now() - self.last_success_at).total_seconds() / 60, 1)
+
+        return {
+            "dataMode": self.data_mode,
+            "syncStatus": self.sync_status,
+            "lastSyncStartedAt": self.last_sync_started_at.isoformat() if self.last_sync_started_at else None,
+            "lastSyncAt": self.last_sync_at.isoformat() if self.last_sync_at else None,
+            "lastSuccessAt": self.last_success_at.isoformat() if self.last_success_at else None,
+            "lastSyncDurationSeconds": self.last_sync_duration_seconds,
+            "lastSyncError": self.last_sync_error,
+            "sourceAgeMinutes": source_age_minutes,
+            "nextRefreshAt": next_refresh_at.isoformat() if next_refresh_at else None,
+            "recordCount": 0 if self.df is None else int(len(self.df)),
+            "dataVersion": self.data_version,
+            "contractReady": bool(self.data_contract_summary.get("isReady")),
+        }
 
 
 class FinancialAnalyzer:
@@ -1832,6 +2223,15 @@ class ChartEngine:
         return tuple(component / 255 for component in theme_color)
 
     @staticmethod
+    def _format_compact_currency(value):
+        amount = float(value or 0)
+        if abs(amount) >= 1_000_000_000:
+            return f"Rp {amount / 1_000_000_000:.1f}M"
+        if abs(amount) >= 1_000_000:
+            return f"Rp {amount / 1_000_000:.0f} juta"
+        return f"Rp {amount:,.0f}".replace(",", ".")
+
+    @staticmethod
     def create_bar_chart(data_str, theme_color):
         try:
             parts = [part.strip() for part in data_str.split("|")]
@@ -1935,6 +2335,177 @@ class ChartEngine:
                 dpi=200,
                 transparent=True,
             )
+            plt.close(fig)
+            image_stream.seek(0)
+            return image_stream
+        except Exception:
+            return None
+
+    @staticmethod
+    def create_dashboard_snapshot(data_str, theme_color):
+        try:
+            payload = json.loads(data_str)
+            horizon_label = payload.get("horizon_label") or "Dashboard Cashflow"
+            horizon_focus = payload.get("horizon_focus") or "-"
+            status = str(payload.get("status") or "-").upper()
+            current_cash = float(payload.get("current_cash") or 0)
+            runway_months = float(payload.get("runway_months") or 0)
+            coverage_ratio = float(payload.get("coverage_ratio") or 0)
+            average_delay_days = float(payload.get("average_delay_days") or 0)
+            balance_points = payload.get("balance_projection") or []
+            coverage_bars = payload.get("coverage_bars") or []
+
+            fig = plt.figure(figsize=(9.4, 5.4))
+            grid = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.65], width_ratios=[1.55, 1.0], hspace=0.34, wspace=0.28)
+            header_axis = fig.add_subplot(grid[0, :])
+            balance_axis = fig.add_subplot(grid[1, 0])
+            coverage_axis = fig.add_subplot(grid[1, 1])
+
+            for axis in (header_axis,):
+                axis.axis("off")
+
+            fig.patch.set_facecolor("white")
+            theme_rgb = ChartEngine._theme_to_plt_color(theme_color)
+            safe_color = "#16a34a"
+            watch_color = "#d97706"
+            risk_color = "#dc2626"
+            status_color = safe_color if status == "AMAN" else watch_color if status == "WASPADA" else risk_color
+
+            header_axis.text(
+                0.0,
+                0.98,
+                "Cashflow Health Dashboard",
+                fontsize=16,
+                fontweight="bold",
+                color="#203152",
+                va="top",
+                transform=header_axis.transAxes,
+            )
+            header_axis.text(
+                0.0,
+                0.76,
+                horizon_label,
+                fontsize=12,
+                fontweight="bold",
+                color="#0f172a",
+                va="top",
+                transform=header_axis.transAxes,
+            )
+            header_axis.text(
+                0.0,
+                0.62,
+                horizon_focus,
+                fontsize=10,
+                color="#475569",
+                va="top",
+                transform=header_axis.transAxes,
+            )
+
+            status_box = patches.FancyBboxPatch(
+                (0.76, 0.72),
+                0.2,
+                0.16,
+                boxstyle="round,pad=0.02,rounding_size=0.02",
+                fc=status_color,
+                ec="none",
+                alpha=0.95,
+                transform=header_axis.transAxes,
+            )
+            header_axis.add_patch(status_box)
+            header_axis.text(
+                0.86,
+                0.8,
+                f"STATUS: {status}",
+                fontsize=11,
+                fontweight="bold",
+                color="white",
+                ha="center",
+                va="center",
+                transform=header_axis.transAxes,
+            )
+
+            metric_cards = [
+                ("Cash", ChartEngine._format_compact_currency(current_cash)),
+                ("Runway", f"{runway_months:.1f} bulan"),
+                ("Coverage", f"{coverage_ratio:.2f}x"),
+                ("Delay", f"{average_delay_days:.0f} hari"),
+            ]
+            card_width = 0.22
+            card_gap = 0.025
+            card_y = 0.08
+            for index, (label, value) in enumerate(metric_cards):
+                x = index * (card_width + card_gap)
+                card = patches.FancyBboxPatch(
+                    (x, card_y),
+                    card_width,
+                    0.34,
+                    boxstyle="round,pad=0.015,rounding_size=0.02",
+                    fc="#f8fafc" if index != 0 else "#eef2ff",
+                    ec="#cbd5e1",
+                    lw=1,
+                    transform=header_axis.transAxes,
+                )
+                header_axis.add_patch(card)
+                header_axis.text(x + 0.02, card_y + 0.23, label, fontsize=9.5, fontweight="bold", color="#475569", transform=header_axis.transAxes)
+                header_axis.text(x + 0.02, card_y + 0.08, value, fontsize=13.5, fontweight="bold", color="#111827", transform=header_axis.transAxes)
+
+            balance_axis.set_title("Prediksi Saldo", fontsize=11, fontweight="bold", loc="left", color="#334155")
+            if balance_points:
+                x_values = list(range(len(balance_points)))
+                balances = [float(point.get("balance") or 0) for point in balance_points]
+                labels = [str(point.get("label") or "") for point in balance_points]
+                balance_axis.fill_between(x_values, balances, color=theme_rgb, alpha=0.18)
+                balance_axis.plot(x_values, balances, color=theme_rgb, marker="o", linewidth=2)
+                balance_axis.set_xticks(x_values)
+                balance_axis.set_xticklabels(labels, fontsize=8)
+                min_balance = min(balances)
+                threshold = 100_000_000
+                if min_balance <= threshold:
+                    balance_axis.axhline(threshold, color=risk_color, linestyle="--", linewidth=1.2)
+                balance_axis.grid(axis="y", linestyle="--", alpha=0.25)
+            else:
+                balance_axis.text(0.5, 0.5, "Tidak ada proyeksi saldo.", ha="center", va="center", transform=balance_axis.transAxes)
+            balance_axis.spines["top"].set_visible(False)
+            balance_axis.spines["right"].set_visible(False)
+            balance_axis.spines["left"].set_color("#cbd5e1")
+            balance_axis.spines["bottom"].set_color("#cbd5e1")
+            balance_axis.tick_params(axis="y", labelsize=8)
+
+            coverage_axis.set_title("Coverage & Runway", fontsize=11, fontweight="bold", loc="left", color="#334155")
+            if coverage_bars:
+                labels = [str(bar.get("label") or "") for bar in coverage_bars]
+                values = [float(bar.get("value") or 0) for bar in coverage_bars]
+                colors = []
+                for bar in coverage_bars:
+                    variant = str(bar.get("variant") or "")
+                    if variant == "danger":
+                        colors.append(risk_color)
+                    elif variant == "target":
+                        colors.append(watch_color)
+                    elif variant == "current":
+                        colors.append("#2563eb")
+                    else:
+                        colors.append("#0f766e")
+                y_positions = list(range(len(values)))
+                coverage_axis.barh(y_positions, values, color=colors, alpha=0.9)
+                coverage_axis.set_yticks(y_positions)
+                coverage_axis.set_yticklabels(labels, fontsize=8)
+                coverage_axis.invert_yaxis()
+                for index, value in enumerate(values):
+                    coverage_axis.text(value + 0.03, index, f"{value:.2f}", va="center", fontsize=8)
+                coverage_axis.axvline(1.0, color=risk_color, linestyle="--", linewidth=1)
+                coverage_axis.axvline(1.2, color=watch_color, linestyle="--", linewidth=1)
+                coverage_axis.grid(axis="x", linestyle="--", alpha=0.2)
+            else:
+                coverage_axis.text(0.5, 0.5, "Tidak ada data coverage.", ha="center", va="center", transform=coverage_axis.transAxes)
+            coverage_axis.spines["top"].set_visible(False)
+            coverage_axis.spines["right"].set_visible(False)
+            coverage_axis.spines["left"].set_color("#cbd5e1")
+            coverage_axis.spines["bottom"].set_color("#cbd5e1")
+            coverage_axis.tick_params(axis="x", labelsize=8)
+
+            image_stream = io.BytesIO()
+            plt.savefig(image_stream, format="png", bbox_inches="tight", dpi=170)
             plt.close(fig)
             image_stream.seek(0)
             return image_stream
@@ -2118,6 +2689,15 @@ class DocumentBuilder:
             image = ChartEngine.create_bar_chart(marker_payload, theme_color)
             width = Inches(5.8)
             caption = "Grafik distribusi historis kelas pembayaran"
+        elif marker_type == "DASHBOARD":
+            image = ChartEngine.create_dashboard_snapshot(marker_payload, theme_color)
+            try:
+                payload = json.loads(marker_payload)
+                caption_suffix = payload.get("horizon_label") or "Horizon aktif"
+            except Exception:
+                caption_suffix = "Horizon aktif"
+            width = Inches(6.6)
+            caption = f"Dashboard cashflow snapshot - {caption_suffix}"
         else:
             image = ChartEngine.create_flowchart(marker_payload, theme_color)
             width = Inches(6.3)
@@ -2149,6 +2729,14 @@ class DocumentBuilder:
                 markdown_buffer = []
                 payload = stripped_line.replace("[[CHART:", "", 1).rsplit("]]", 1)[0].strip()
                 cls._add_visual(doc, "CHART", payload, theme_color)
+                continue
+
+            if stripped_line.startswith("[[DASHBOARD:") and stripped_line.endswith("]]"
+            ):
+                cls._flush_markdown_block(doc, markdown_buffer, theme_color)
+                markdown_buffer = []
+                payload = stripped_line.replace("[[DASHBOARD:", "", 1).rsplit("]]", 1)[0].strip()
+                cls._add_visual(doc, "DASHBOARD", payload, theme_color)
                 continue
 
             if stripped_line.startswith("[[FLOW:") and stripped_line.endswith("]]"
@@ -2258,6 +2846,95 @@ class ReportGenerator:
         self.ollama = Client(host=OLLAMA_HOST)
         self.kb = kb_instance
         self.io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+    @staticmethod
+    def _normalize_analysis_payload(analysis_payload):
+        if isinstance(analysis_payload, dict):
+            return analysis_payload
+        if not analysis_payload:
+            return {}
+        if isinstance(analysis_payload, str):
+            try:
+                parsed = json.loads(analysis_payload)
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    @staticmethod
+    def _build_dashboard_visual_markers(analysis_payload):
+        payload = ReportGenerator._normalize_analysis_payload(analysis_payload)
+        horizon_snapshot = payload.get("horizon_snapshot") or {}
+        forecasts = horizon_snapshot.get("forecasts") if isinstance(horizon_snapshot, dict) else None
+        if not isinstance(forecasts, dict):
+            return []
+
+        markers = []
+        for horizon_key in ("short_term", "mid_term", "long_term"):
+            forecast = forecasts.get(horizon_key)
+            if not isinstance(forecast, dict):
+                continue
+            dashboard = forecast.get("dashboard_snapshot")
+            if not isinstance(dashboard, dict):
+                continue
+            coverage_bars = (((dashboard.get("coverage_chart") or {}).get("bars")) or [])[:4]
+            compact_payload = {
+                "horizon_key": dashboard.get("horizon_key") or horizon_key,
+                "horizon_label": dashboard.get("horizon_label"),
+                "horizon_focus": dashboard.get("horizon_focus"),
+                "status": dashboard.get("status"),
+                "current_cash": dashboard.get("current_cash"),
+                "runway_months": dashboard.get("runway_months"),
+                "coverage_ratio": dashboard.get("coverage_ratio"),
+                "average_delay_days": dashboard.get("average_delay_days"),
+                "balance_projection": dashboard.get("balance_projection_30d") or [],
+                "coverage_bars": coverage_bars,
+            }
+            markers.append(f"[[DASHBOARD:{json.dumps(compact_payload, ensure_ascii=False, separators=(',', ':'))}]]")
+        return markers
+
+    @staticmethod
+    def _build_operational_snapshot_block(analysis_payload):
+        payload = ReportGenerator._normalize_analysis_payload(analysis_payload)
+        if not payload:
+            return ""
+
+        selected_period = payload.get("selected_period") or {}
+        sync_status = payload.get("sync_status") or {}
+        financial_sync = sync_status.get("financialData") or {}
+        cash_out_sync = sync_status.get("cashOutSource") or {}
+
+        lines = []
+        period_label = selected_period.get("label")
+        if period_label:
+            lines.append(f"- Periode dashboard yang diekspor ke laporan: {period_label}.")
+
+        cash_on_hand = payload.get("cash_on_hand")
+        if cash_on_hand is not None:
+            lines.append(f"- Cash in hand pada saat review: Rp{int(cash_on_hand):,}.")
+
+        if financial_sync:
+            freshness = financial_sync.get("sourceAgeMinutes")
+            freshness_label = "belum tersedia"
+            if freshness is not None:
+                freshness_label = f"{float(freshness):.1f} menit"
+            lines.append(
+                "- Status sinkronisasi data finansial: "
+                f"{financial_sync.get('syncStatus') or '-'}; usia data {freshness_label}; "
+                f"record aktif {int(financial_sync.get('recordCount') or 0)}."
+            )
+
+        if cash_out_sync:
+            if cash_out_sync.get("configured"):
+                lines.append(
+                    "- Sumber cash out memakai komitmen aktual dengan status "
+                    f"{cash_out_sync.get('syncStatus') or '-'} dan "
+                    f"{int(cash_out_sync.get('recordCount') or 0)} item aktif."
+                )
+            else:
+                lines.append("- Sumber cash out masih memakai model operating cost bulanan karena feed kewajiban aktual belum dikonfigurasi.")
+
+        return "\n".join(lines).strip()
 
     @staticmethod
     def _build_user_instruction(notes, active_sections):
@@ -2513,13 +3190,15 @@ class ReportGenerator:
         sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
         return sanitized.strip()
 
-    def _finalize_report_content(self, raw_text, report_context, macro_osint):
+    def _finalize_report_content(self, raw_text, report_context, macro_osint, analysis_payload=None):
         raw_text = self._sanitize_generated_report_text(raw_text)
         sections = self._split_top_level_sections(raw_text)
         if not sections:
             return raw_text
 
         chart_marker, flow_marker = self._extract_visual_markers(report_context.get("visual_prompt", ""))
+        dashboard_markers = self._build_dashboard_visual_markers(analysis_payload)
+        operational_snapshot = self._build_operational_snapshot_block(analysis_payload)
         finalized_sections = []
 
         for section in sections:
@@ -2535,6 +3214,15 @@ class ReportGenerator:
                     macro_osint or "Tidak ada tren finansial eksternal yang tersedia.",
                     before_subheading="Risiko dan Kontrol",
                 )
+            elif section_title == "Analisis Prediktif":
+                section_body = self._inject_subheading_block(
+                    section_body,
+                    "Snapshot Dashboard Operasional",
+                    operational_snapshot,
+                    before_subheading="Skenario 1-2 Kuartal",
+                )
+                for dashboard_marker in dashboard_markers:
+                    section_body = self._append_marker_block(section_body, dashboard_marker)
             elif section_title == "Rekomendasi Preskriptif":
                 section_body = self._append_marker_block(section_body, flow_marker)
 
@@ -2542,8 +3230,10 @@ class ReportGenerator:
 
         return self._join_top_level_sections(finalized_sections)
 
-    def _build_fallback_report(self, report_context, notes, analysis_context, macro_osint):
+    def _build_fallback_report(self, report_context, notes, analysis_context, macro_osint, analysis_payload=None):
         chart_marker, flow_marker = self._extract_visual_markers(report_context.get("visual_prompt", ""))
+        dashboard_markers = self._build_dashboard_visual_markers(analysis_payload)
+        operational_snapshot = self._build_operational_snapshot_block(analysis_payload)
         focus_block = notes.strip() if notes and notes.strip() else "Tidak ada fokus tambahan dari pengguna."
         structured_context_block = self._format_structured_context_block(analysis_context)
 
@@ -2608,6 +3298,9 @@ class ReportGenerator:
                 "- Proyeksi menggunakan pendekatan risk-adjusted berdasarkan campuran kelas pembayaran historis, sehingga hasil harus dibaca sebagai skenario manajemen, bukan kepastian kas masuk.",
                 "- Base case mewakili perilaku penagihan yang paling mungkin terjadi bila pola historis bertahan, sedangkan upside dan downside menunjukkan ruang perbaikan atau penurunan.",
                 "",
+                "### Snapshot Dashboard Operasional",
+                operational_snapshot or "- Snapshot dashboard operasional belum tersedia pada saat laporan dibentuk.",
+                "",
                 "### Skenario 1-2 Kuartal",
                 report_context["scenario_table"],
                 "",
@@ -2641,6 +3334,11 @@ class ReportGenerator:
                 "- Konsolidasikan hasil follow-up ke finance collection, account owner, dan sponsor bisnis agar keputusan rapat langsung dapat dieksekusi.",
             ]
         )
+
+        if dashboard_markers:
+            dashboard_insert_index = lines.index("### Implikasi terhadap Rencana Kas") + 2
+            dashboard_block = ["", "### Visual Dashboard Snapshot", *dashboard_markers, ""]
+            lines[dashboard_insert_index:dashboard_insert_index] = dashboard_block
 
         if flow_marker:
             lines.extend(["", flow_marker])
@@ -2679,7 +3377,7 @@ class ReportGenerator:
         )
         return response["message"]["content"]
 
-    def run(self, notes="", analysis_context=""):
+    def run(self, notes="", analysis_context="", analysis_payload=None):
         logger.info("Starting cash-in intelligence report generation.")
 
         global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, notes)
@@ -2706,7 +3404,7 @@ class ReportGenerator:
             )
 
         generated_content = "\n\n".join(section for section in generated_sections if section).strip()
-        generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
+        generated_content = self._finalize_report_content(generated_content, report_context, macro_osint, analysis_payload=analysis_payload)
         completeness_result = self._score_report_completeness(generated_content)
         logger.info(
             "Report completeness score %.1f/100 before fallback.",
@@ -2715,8 +3413,8 @@ class ReportGenerator:
         if not completeness_result["passed"]:
             logger.warning("Generated report failed quality gate. Falling back to deterministic management draft.")
             fallback_used = True
-            generated_content = self._build_fallback_report(report_context, notes, analysis_context, macro_osint)
-            generated_content = self._finalize_report_content(generated_content, report_context, macro_osint)
+            generated_content = self._build_fallback_report(report_context, notes, analysis_context, macro_osint, analysis_payload=analysis_payload)
+            generated_content = self._finalize_report_content(generated_content, report_context, macro_osint, analysis_payload=analysis_payload)
             completeness_result = self._score_report_completeness(generated_content)
             logger.info(
                 "Report completeness score %.1f/100 after fallback.",
@@ -2742,7 +3440,7 @@ class ReportGenerator:
                 and "tidak tersedia" not in macro_osint.lower()
                 and "tidak ada data osint" not in macro_osint.lower()
             ),
-            "visuals_included": "[[CHART:" in generated_content and "[[FLOW:" in generated_content,
+            "visuals_included": any(marker in generated_content for marker in ("[[CHART:", "[[FLOW:", "[[DASHBOARD:")),
             "report_length": len(generated_content),
         }
 

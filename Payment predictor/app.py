@@ -1,5 +1,6 @@
 import argparse
 import calendar
+import copy
 import concurrent.futures
 import logging
 import os
@@ -373,7 +374,7 @@ class ReportJobManager:
             "completenessScore": job["completeness_score"],
         }
 
-    def submit(self, notes, analysis_context=""):
+    def submit(self, notes, analysis_context="", analysis_payload=None):
         job_id = uuid.uuid4().hex
         preview_source = (notes or "").strip() or (analysis_context or "").strip()
         notes_preview = preview_source.replace("\n", " ")[:240]
@@ -385,10 +386,10 @@ class ReportJobManager:
                 raise QueueCapacityError(active_jobs, self.max_pending_jobs)
             self.job_store.create_job(job_id, notes_preview)
 
-        self.executor.submit(self._run_job, job_id, notes, analysis_context)
+        self.executor.submit(self._run_job, job_id, notes, analysis_context, analysis_payload)
         return job_id
 
-    def _run_job(self, job_id, notes, analysis_context=""):
+    def _run_job(self, job_id, notes, analysis_context="", analysis_payload=None):
         started_at = time.time()
         self.job_store.update_job(
             job_id,
@@ -399,7 +400,11 @@ class ReportJobManager:
         )
 
         try:
-            document, file_name, run_metadata = self.report_generator.run(notes, analysis_context)
+            document, file_name, run_metadata = self.report_generator.run(
+                notes,
+                analysis_context,
+                analysis_payload=analysis_payload,
+            )
             artifact_path = self.artifacts_dir / f"{job_id}_{file_name}.docx"
             document.save(str(artifact_path))
         except Exception as exc:
@@ -470,10 +475,92 @@ class ReportJobManager:
         }
 
 
+class ForecastSnapshotCache:
+    def __init__(self, ttl_seconds=300):
+        self.ttl_seconds = max(int(ttl_seconds or 0), 0)
+        self.lock = threading.Lock()
+        self._items = {}
+
+    def _purge_locked(self):
+        if not self._items:
+            return
+        now = time.time()
+        expired_keys = [
+            key for key, item in self._items.items()
+            if now - item["stored_at"] > self.ttl_seconds
+        ]
+        for key in expired_keys:
+            self._items.pop(key, None)
+
+    def get(self, key):
+        if self.ttl_seconds <= 0:
+            return None
+        with self.lock:
+            self._purge_locked()
+            item = self._items.get(key)
+            if not item:
+                return None
+            return copy.deepcopy(item["value"])
+
+    def set(self, key, value):
+        if self.ttl_seconds <= 0:
+            return copy.deepcopy(value)
+        with self.lock:
+            self._purge_locked()
+            self._items[key] = {
+                "stored_at": time.time(),
+                "value": copy.deepcopy(value),
+            }
+        return copy.deepcopy(value)
+
+    def clear(self):
+        with self.lock:
+            self._items.clear()
+
+
+class BackgroundRefreshCoordinator:
+    def __init__(self, knowledge_base, cash_out_store, forecast_cache, interval_seconds):
+        self.knowledge_base = knowledge_base
+        self.cash_out_store = cash_out_store
+        self.forecast_cache = forecast_cache
+        self.interval_seconds = max(int(interval_seconds or 0), 0)
+        self.thread = None
+        self.stop_event = threading.Event()
+
+    def refresh_all(self):
+        knowledge_ok = self.knowledge_base.refresh_data()
+        cash_out_ok = self.cash_out_store.refresh_data() if self.cash_out_store else False
+        self.forecast_cache.clear()
+        return {
+            "knowledgeBase": knowledge_ok,
+            "cashOutSource": cash_out_ok if self.cash_out_store and self.cash_out_store.client.is_configured() else None,
+        }
+
+    def start(self):
+        if self.interval_seconds <= 0 or self.thread is not None:
+            return
+
+        def _runner():
+            while not self.stop_event.wait(self.interval_seconds):
+                try:
+                    self.refresh_all()
+                except Exception:
+                    logger.exception("Periodic data refresh failed.")
+
+        self.thread = threading.Thread(
+            target=_runner,
+            name="background-data-refresh",
+            daemon=True,
+        )
+        self.thread.start()
+
+
 def create_app():
     from config import (
         APP_SECRET_KEY,
+        DATA_REFRESH_INTERVAL_SECONDS,
         DB_URI,
+        FORECAST_CACHE_TTL_SECONDS,
         JOB_STATE_DB_PATH,
         PERMANENT_SESSION_LIFETIME,
         REPORT_ARTIFACTS_DIR,
@@ -486,7 +573,7 @@ def create_app():
         SESSION_COOKIE_SECURE,
         SMART_SUGGESTIONS,
     )
-    from core import KnowledgeBase, ReportGenerator, Researcher
+    from core import CashOutStore, KnowledgeBase, ReportGenerator, Researcher
     from forecast_engine import CashflowForecaster, parse_idr_amount
 
     app = Flask(__name__)
@@ -498,9 +585,11 @@ def create_app():
     CORS(app)
 
     knowledge_base = KnowledgeBase(DB_URI)
+    cash_out_store = CashOutStore()
     report_generator = ReportGenerator(knowledge_base)
     job_store = ReportJobStore(JOB_STATE_DB_PATH, REPORT_ARTIFACTS_DIR)
     user_store = UserStore(JOB_STATE_DB_PATH)
+    forecast_cache = ForecastSnapshotCache(FORECAST_CACHE_TTL_SECONDS)
     job_manager = ReportJobManager(
         report_generator=report_generator,
         max_workers=REPORT_MAX_CONCURRENT_JOBS,
@@ -513,13 +602,24 @@ def create_app():
     
     # Initialize forecaster
     forecaster = CashflowForecaster(monthly_operating_cost_idr=200_000_000)
+    refresh_coordinator = BackgroundRefreshCoordinator(
+        knowledge_base=knowledge_base,
+        cash_out_store=cash_out_store,
+        forecast_cache=forecast_cache,
+        interval_seconds=DATA_REFRESH_INTERVAL_SECONDS,
+    )
+    refresh_coordinator.start()
 
     app.config["knowledge_base"] = knowledge_base
+    app.config["cash_out_store"] = cash_out_store
     app.config["job_manager"] = job_manager
     app.config["forecaster"] = forecaster
     app.config["user_store"] = user_store
     app.config["min_completeness_score"] = REPORT_MIN_COMPLETENESS_SCORE
     app.config["status_poll_interval_ms"] = REPORT_STATUS_POLL_INTERVAL_MS
+    app.config["forecast_cache"] = forecast_cache
+    app.config["data_refresh_interval_seconds"] = DATA_REFRESH_INTERVAL_SECONDS
+    app.config["refresh_coordinator"] = refresh_coordinator
 
     def _is_authenticated():
         return bool(session.get("username"))
@@ -700,6 +800,126 @@ def create_app():
             raise ValueError("This app only accepts Rupiah (IDR) amounts.")
         return "IDR"
 
+    def _build_sync_snapshot():
+        refresh_interval = current_app.config["data_refresh_interval_seconds"]
+        knowledge_status = current_app.config["knowledge_base"].get_sync_status(refresh_interval)
+        cash_out_status = current_app.config["cash_out_store"].get_status(refresh_interval)
+        return {
+            "financialData": knowledge_status,
+            "cashOutSource": cash_out_status,
+            "refreshIntervalSeconds": refresh_interval,
+        }
+
+    def _get_cash_out_records():
+        return current_app.config["cash_out_store"].get_records()
+
+    def _build_forecast_cache_key(kind, cash_on_hand, monthly_cost, start_date, end_date=None):
+        knowledge_state = current_app.config["knowledge_base"].get_sync_status()
+        cash_out_state = current_app.config["cash_out_store"].get_status()
+        return (
+            kind,
+            knowledge_state["dataVersion"],
+            cash_out_state["version"],
+            int(cash_on_hand),
+            int(monthly_cost),
+            start_date.isoformat(),
+            end_date.isoformat() if end_date else None,
+        )
+
+    def _get_or_build_single_forecast(cash_on_hand, monthly_cost, start_date, end_date):
+        cache_key = _build_forecast_cache_key("single_forecast", cash_on_hand, monthly_cost, start_date, end_date)
+        cached_value = current_app.config["forecast_cache"].get(cache_key)
+        if cached_value is not None:
+            return cached_value
+
+        forecaster = CashflowForecaster(monthly_operating_cost_idr=monthly_cost)
+        forecast = forecaster.forecast(
+            df=current_app.config["knowledge_base"].df,
+            cash_on_hand=cash_on_hand,
+            start_date=start_date,
+            end_date=end_date,
+            cash_out_records=_get_cash_out_records(),
+        )
+        return current_app.config["forecast_cache"].set(cache_key, forecast)
+
+    def _get_or_build_horizon_forecasts(cash_on_hand, monthly_cost, start_date):
+        cache_key = _build_forecast_cache_key("horizon_forecast", cash_on_hand, monthly_cost, start_date)
+        cached_value = current_app.config["forecast_cache"].get(cache_key)
+        if cached_value is not None:
+            return cached_value
+
+        forecaster = CashflowForecaster(monthly_operating_cost_idr=monthly_cost)
+        forecasts = forecaster.forecast_by_horizon(
+            df=current_app.config["knowledge_base"].df,
+            cash_on_hand=cash_on_hand,
+            start_date=start_date,
+            cash_out_records=_get_cash_out_records(),
+        )
+        return current_app.config["forecast_cache"].set(cache_key, forecasts)
+
+    def _build_payment_class_trend():
+        dataset = current_app.config["knowledge_base"].df
+        if dataset is None or dataset.empty:
+            return {"series": [], "topPeriods": []}
+
+        resolved_columns = current_app.config["knowledge_base"].data_contract_summary.get("sourceColumns", {})
+        period_column = resolved_columns.get("period")
+        payment_class_column = resolved_columns.get("payment_class")
+        invoice_value_column = resolved_columns.get("invoice_value")
+        if not period_column or not payment_class_column or not invoice_value_column:
+            return {"series": [], "topPeriods": []}
+
+        working_df = dataset[[period_column, payment_class_column, invoice_value_column]].copy()
+        working_df.columns = ["period", "payment_class", "invoice_value"]
+        working_df["payment_class"] = working_df["payment_class"].astype(str).str.extract(r"(Kelas [A-E])", expand=False).fillna("Tidak Diketahui")
+        working_df["invoice_value"] = working_df["invoice_value"].apply(
+            lambda value: parse_idr_amount(value) if value is not None and str(value).strip() else 0
+        )
+        working_df["period"] = working_df["period"].astype(str).fillna("Tidak Diketahui")
+
+        grouped = (
+            working_df.groupby(["period", "payment_class"], as_index=False)
+            .agg(amount=("invoice_value", "sum"), invoice_count=("invoice_value", "size"))
+        )
+        period_totals = (
+            grouped.groupby("period", as_index=False)
+            .agg(total_amount=("amount", "sum"))
+            .sort_values("total_amount", ascending=False)
+        )
+        return {
+            "series": grouped.to_dict(orient="records"),
+            "topPeriods": period_totals.head(10).to_dict(orient="records"),
+        }
+
+    def _build_concentration_view(invoices):
+        if not invoices:
+            return {"partners": [], "services": []}
+
+        partner_totals = {}
+        service_totals = {}
+        total_amount = sum(invoice["amount"] for invoice in invoices) or 1
+
+        for invoice in invoices:
+            partner = invoice["partner_type"] or "Tidak Diketahui"
+            service = invoice["service"] or "Tidak Diketahui"
+            partner_totals[partner] = partner_totals.get(partner, 0) + invoice["amount"]
+            service_totals[service] = service_totals.get(service, 0) + invoice["amount"]
+
+        def _rank_items(source_map):
+            return [
+                {
+                    "label": label,
+                    "amount": amount,
+                    "sharePct": round((amount / total_amount) * 100, 1),
+                }
+                for label, amount in sorted(source_map.items(), key=lambda item: item[1], reverse=True)[:10]
+            ]
+
+        return {
+            "partners": _rank_items(partner_totals),
+            "services": _rank_items(service_totals),
+        }
+
     @app.route("/")
     def home():
         return render_template("index.html", current_username=session.get("username", ""))
@@ -708,7 +928,7 @@ def create_app():
     def get_config():
         active_knowledge_base = current_app.config["knowledge_base"]
         if active_knowledge_base.df is None or active_knowledge_base.df.empty:
-            return jsonify({"error": "Financial data is currently unavailable."})
+            return jsonify({"error": "Financial data is currently unavailable.", "syncStatus": _build_sync_snapshot()})
         review_context = active_knowledge_base.get_review_context()
 
         return jsonify(
@@ -716,6 +936,7 @@ def create_app():
                 "suggestions": SMART_SUGGESTIONS,
                 "statusPollIntervalMs": current_app.config["status_poll_interval_ms"],
                 "reviewContext": review_context,
+                "syncStatus": _build_sync_snapshot(),
             }
         )
 
@@ -724,9 +945,10 @@ def create_app():
         payload = request.get_json(silent=True) or {}
         notes = payload.get("notes", "")
         analysis_context = (payload.get("analysis_context") or "").strip()
+        analysis_payload = payload.get("analysis_payload") if isinstance(payload.get("analysis_payload"), dict) else None
         active_job_manager = current_app.config["job_manager"]
         try:
-            job_id = active_job_manager.submit(notes, analysis_context)
+            job_id = active_job_manager.submit(notes, analysis_context, analysis_payload=analysis_payload)
         except QueueCapacityError as exc:
             return (
                 jsonify(
@@ -765,9 +987,14 @@ def create_app():
 
     @app.route("/refresh-knowledge", methods=["POST"])
     def refresh_knowledge():
-        active_knowledge_base = current_app.config["knowledge_base"]
-        success = active_knowledge_base.refresh_data()
-        return jsonify({"status": "success" if success else "error"})
+        refresh_result = current_app.config["refresh_coordinator"].refresh_all()
+        return jsonify(
+            {
+                "status": "success" if refresh_result["knowledgeBase"] else "error",
+                "refreshResult": refresh_result,
+                "syncStatus": _build_sync_snapshot(),
+            }
+        )
 
     @app.route("/health")
     def health():
@@ -781,6 +1008,7 @@ def create_app():
             internal_data_contract.get("currentSummary", {}).get("isReady")
         )
         health_snapshot["minimumCompletenessScore"] = current_app.config["min_completeness_score"]
+        health_snapshot["syncStatus"] = _build_sync_snapshot()
         return jsonify(health_snapshot)
 
     @app.route("/api/internal-data/contract", methods=["GET"])
@@ -835,10 +1063,9 @@ def create_app():
         
         # Generate forecast
         try:
-            forecaster = CashflowForecaster(monthly_operating_cost_idr=monthly_cost)
-            forecast = forecaster.forecast(
-                df=knowledge_base.df,
+            forecast = _get_or_build_single_forecast(
                 cash_on_hand=cash_on_hand,
+                monthly_cost=monthly_cost,
                 start_date=start_date,
                 end_date=end_date,
             )
@@ -846,6 +1073,7 @@ def create_app():
             forecast["external_factors"] = Researcher.get_payment_delay_risks(
                 _build_external_context(start_date, end_date)
             )
+            forecast["sync_status"] = _build_sync_snapshot()
             return jsonify(forecast)
         except Exception as e:
             logger.error(f"Forecast error: {e}", exc_info=True)
@@ -888,10 +1116,9 @@ def create_app():
         
         # Generate forecasts for all horizons
         try:
-            forecaster = CashflowForecaster(monthly_operating_cost_idr=monthly_cost)
-            forecasts = forecaster.forecast_by_horizon(
-                df=knowledge_base.df,
+            forecasts = _get_or_build_horizon_forecasts(
                 cash_on_hand=cash_on_hand,
+                monthly_cost=monthly_cost,
                 start_date=start_date,
             )
             horizon_end = start_date + timedelta(days=365)
@@ -904,6 +1131,7 @@ def create_app():
                 'external_factors': Researcher.get_payment_delay_risks(
                     _build_external_context(start_date, horizon_end)
                 ),
+                'sync_status': _build_sync_snapshot(),
             })
         except Exception as e:
             logger.error(f"Multi-horizon forecast error: {e}", exc_info=True)
@@ -925,10 +1153,74 @@ def create_app():
             )
             result = forecaster._analyze_outstanding(invoices)
             result["invoice_count"] = len(invoices)
+            result["sync_status"] = _build_sync_snapshot()
             return jsonify(result)
         except Exception as e:
             logger.error(f"Outstanding analysis error: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/forecast/drilldown/top-overdue", methods=["POST"])
+    def get_top_overdue_drilldown():
+        payload = request.get_json(silent=True) or {}
+        try:
+            _validate_currency_code(payload)
+            cash_on_hand = _parse_request_idr_amount(payload.get("cash_on_hand"), "cash_on_hand", 500_000_000)
+            monthly_cost = _parse_request_idr_amount(payload.get("monthly_operating_cost"), "monthly_operating_cost", 200_000_000)
+            start_date = datetime.fromisoformat(payload.get("start_date")) if payload.get("start_date") else datetime.now()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except TypeError:
+            return jsonify({"error": "Invalid start_date format (use ISO format)"}), 400
+        mode = str(payload.get("horizon", "short_term")).strip() or "short_term"
+        forecasts = _get_or_build_horizon_forecasts(cash_on_hand, monthly_cost, start_date)
+        active_forecast = forecasts.get(mode) or forecasts.get("short_term")
+        dashboard_snapshot = active_forecast.get("dashboard_snapshot", {}) if active_forecast else {}
+        return jsonify(
+            {
+                "horizon": mode,
+                "items": dashboard_snapshot.get("top_overdue_accounts", []),
+                "alertLines": dashboard_snapshot.get("alert_recommendation_lines", []),
+                "sync_status": _build_sync_snapshot(),
+            }
+        )
+
+    @app.route("/api/forecast/drilldown/payment-class-trend", methods=["GET"])
+    def get_payment_class_trend_drilldown():
+        return jsonify(
+            {
+                **_build_payment_class_trend(),
+                "sync_status": _build_sync_snapshot(),
+            }
+        )
+
+    @app.route("/api/forecast/drilldown/concentration", methods=["POST"])
+    def get_concentration_drilldown():
+        payload = request.get_json(silent=True) or {}
+        try:
+            _validate_currency_code(payload)
+            cash_on_hand = _parse_request_idr_amount(payload.get("cash_on_hand"), "cash_on_hand", 500_000_000)
+            monthly_cost = _parse_request_idr_amount(payload.get("monthly_operating_cost"), "monthly_operating_cost", 200_000_000)
+            start_date = datetime.fromisoformat(payload.get("start_date")) if payload.get("start_date") else datetime.now()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except TypeError:
+            return jsonify({"error": "Invalid start_date format (use ISO format)"}), 400
+        mode = str(payload.get("horizon", "short_term")).strip() or "short_term"
+        active_forecast = (_get_or_build_horizon_forecasts(cash_on_hand, monthly_cost, start_date).get(mode)) or {}
+        forecaster = current_app.config["forecaster"]
+        invoices = forecaster._parse_invoices(
+            current_app.config["knowledge_base"].df,
+            start_date=start_date,
+            end_date=start_date,
+        )
+        return jsonify(
+            {
+                "horizon": mode,
+                "riskSummary": (active_forecast.get("dashboard_snapshot", {}) or {}).get("risk_summary", {}),
+                "concentration": _build_concentration_view(invoices),
+                "sync_status": _build_sync_snapshot(),
+            }
+        )
 
     return app
 

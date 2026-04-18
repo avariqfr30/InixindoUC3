@@ -154,6 +154,8 @@ REPORT_MAX_PENDING_JOBS=12
 REPORT_JOB_RETENTION_SECONDS=3600
 REPORT_METRICS_WINDOW_HOURS=24
 REPORT_MIN_COMPLETENESS_SCORE=80
+DATA_REFRESH_INTERVAL_SECONDS=300
+FORECAST_CACHE_TTL_SECONDS=300
 REPORT_ARTIFACTS_DIR=/var/tmp/inixindo-generated-reports
 JOB_STATE_DB_PATH=/var/tmp/inixindo-report-jobs.db
 ```
@@ -164,8 +166,32 @@ Arti singkatnya:
 * `REPORT_JOB_RETENTION_SECONDS`: berapa lama job selesai/error dan file hasilnya dipertahankan sebelum dibersihkan otomatis.
 * `REPORT_METRICS_WINDOW_HOURS`: jendela waktu untuk metrik kesehatan terakhir pada endpoint `/health`.
 * `REPORT_MIN_COMPLETENESS_SCORE`: ambang minimum kualitas dokumen. Job dianggap lolos bila struktur dan isi laporan mencapai skor ini.
+* `DATA_REFRESH_INTERVAL_SECONDS`: interval refresh data live di background. Set `0` untuk tetap manual.
+* `FORECAST_CACHE_TTL_SECONDS`: berapa lama snapshot forecast/dashboard disimpan agar dashboard tetap cepat dibuka ulang oleh beberapa user.
 * `REPORT_ARTIFACTS_DIR`: direktori penyimpanan file `.docx` hasil generate.
 * `JOB_STATE_DB_PATH`: SQLite kecil untuk status job, durasi, fallback, dan metrik operasional.
+
+Jika sumber `cash out` aktual sudah tersedia, app sekarang juga bisa membaca feed kewajiban langsung dari endpoint terpisah:
+
+```bash
+CASH_OUT_API_ENDPOINT_URL=https://internal.example.com/api/finance/cash-out \
+CASH_OUT_API_METHOD=POST \
+CASH_OUT_API_BASIC_USERNAME=your_user \
+CASH_OUT_API_BASIC_PASSWORD=your_pass \
+CASH_OUT_API_BODY_JSON='{"resource":"cashout"}' \
+CASH_OUT_API_RECORDS_KEY=data.items \
+CASH_OUT_FIELD_MAP_JSON='{"amount":"amount_idr","due_date":"due_date","category":"expense_category","reference":"document_no","status":"status"}'
+```
+
+Kalau feed `cash out` belum diset, app tetap berjalan dengan model operating cost bulanan seperti sebelumnya.
+
+Endpoint operasional yang sekarang berguna untuk dashboard live:
+* `GET /health`: status job + freshness sinkronisasi data finansial dan feed cash out.
+* `GET /get-config`: review context + status sinkronisasi yang dipakai UI.
+* `POST /refresh-knowledge`: refresh manual data finansial dan feed cash out.
+* `POST /api/forecast/drilldown/top-overdue`: daftar overdue utama untuk horizon aktif.
+* `GET /api/forecast/drilldown/payment-class-trend`: distribusi nominal invoice per periode dan kelas pembayaran.
+* `POST /api/forecast/drilldown/concentration`: konsentrasi exposure per partner dan layanan.
 
 ---
 
