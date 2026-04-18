@@ -526,10 +526,10 @@ class CashflowForecaster:
                 'priority': 'HIGH',
                 'action': 'Percepat penagihan dari high-priority clients',
                 'rationale': 'Buffer operasional menipis dan perlu dijaga agar kewajiban jangka pendek tetap tertutup',
-                'estimated_impact': 'Dapat meningkatkan cash in 10-30 hari',
+                'estimated_impact': 'Dapat meningkatkan arus kas masuk 10-30 hari',
                 'sop': 'Hubungi Client Relations, escalate ke Finance VP',
                 'customer_characteristic': 'Likuiditas internal tertekan',
-                'retention_signal': 'Pertahankan akun yang masih responsif agar cash in tidak makin tertunda',
+                'retention_signal': 'Pertahankan akun yang masih responsif agar arus kas masuk tidak makin tertunda',
                 'satisfaction_signal': 'Pastikan komunikasi tetap jelas agar percepatan penagihan tidak menurunkan trust',
             })
         
@@ -573,14 +573,14 @@ class CashflowForecaster:
                 'estimated_impact': 'Revenue growth, improved pipeline',
                 'sop': 'Schedule business review, identify upsell opportunities, propose longer contracts',
                 'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic('Kelas A'),
-                'retention_signal': 'Retention kuat; akun sehat bisa dijaga untuk menopang kestabilan cash in jangka menengah',
+                'retention_signal': 'Retention kuat; akun sehat bisa dijaga untuk menopang kestabilan arus kas masuk jangka menengah',
                 'satisfaction_signal': 'Satisfaction tinggi memberi ruang untuk cross-sell tanpa menambah risiko pembayaran berarti',
             })
 
         if dimension_scores.get('stability', 100) < 60:
             recommendations.append({
                 'priority': 'HIGH',
-                'action': 'Perkuat visibilitas jadwal cash in mingguan',
+                'action': 'Perkuat visibilitas jadwal arus kas masuk mingguan',
                 'rationale': 'Pola masuk kas masih fluktuatif atau terlalu sedikit invoice yang punya timing realisasi yang jelas dalam periode ini',
                 'estimated_impact': 'Meningkatkan akurasi forecast kas dan menurunkan kejutan pada jadwal pembayaran',
                 'sop': 'Buat weekly collection calendar, locking invoice target mingguan, dan review aging tiap awal minggu',
@@ -751,7 +751,7 @@ class CashflowForecaster:
             },
             'cash_in_visibility': {
                 'ok': stability['metrics']['visibility_ratio'] >= 0.35 and stability['metrics']['predicted_payment_count'] > 0,
-                'label': 'Timing cash in dapat dipetakan',
+                'label': 'Timing arus kas masuk dapat dipetakan',
                 'detail': (
                     f"{stability['metrics']['visibility_ratio_pct']:.1f}% nilai invoice memiliki proyeksi jatuh ke periode/horizon yang dipilih."
                 ),
@@ -843,7 +843,7 @@ class CashflowForecaster:
             'score': score,
             'weight': self.HEALTH_WEIGHTS['stability'],
             'summary': (
-                f"Visibilitas cash in {visibility_ratio * 100:.1f}% dari outstanding dengan variasi realisasi "
+                f"Visibilitas arus kas masuk {visibility_ratio * 100:.1f}% dari outstanding dengan variasi realisasi "
                 f"{coefficient_variation:.2f} dan porsi pembayaran cepat {low_delay_share * 100:.1f}%."
             ),
             'metrics': {
@@ -897,7 +897,7 @@ class CashflowForecaster:
             'label': 'Coverage',
             'score': score,
             'weight': self.HEALTH_WEIGHTS['coverage'],
-            'summary': f"Rasio cash in terhadap cash out berada di {coverage_ratio:.2f}x.",
+            'summary': f"Rasio arus kas masuk terhadap arus kas keluar berada di {coverage_ratio:.2f}x.",
             'metrics': {
                 'coverage_ratio': round(coverage_ratio, 2),
             },

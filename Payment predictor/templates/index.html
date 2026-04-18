@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inixindo Cash In Intelligence</title>
+    <title>Inixindo Cashflow Intelligence</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/flatpickr/flatpickr.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/quill/quill.snow.css') }}">
     <style>
@@ -177,12 +177,12 @@
         <div id="toast-notification" class="toast-notification hidden" role="status" aria-live="polite"></div>
         <div id="loader" style="text-align:center; padding: 40px;">
             <div style="border:4px solid #e2e8f0; border-top:4px solid #CC0000; border-radius:50%; width:40px; height:40px; animation: spin 1s linear infinite; margin: 0 auto 20px auto;"></div>
-            <p id="loader-text">Memuat data finansial dan konteks analisis cash in...</p>
+            <p id="loader-text">Memuat data finansial dan konteks analisis cashflow...</p>
         </div>
 
         <div id="step-config" class="hidden">
-            <h2><span style="color: #CC0000;">Inixindo</span> Cash In Intelligence</h2>
-            <p class="sub">Sistem AI akan membaca <strong>histori data cash in dan karakter penagihan</strong> untuk membuat laporan yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
+            <h2><span style="color: #CC0000;">Inixindo</span> Cashflow Intelligence</h2>
+            <p class="sub">Sistem AI akan membaca <strong>histori arus kas masuk, tekanan arus kas keluar, dan karakter penagihan</strong> untuk membuat analisis yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
             <div id="config-operational-status"></div>
 
             <div class="control-grid">
@@ -197,7 +197,7 @@
                     <p class="field-hint">Pilih tanggal akhir analisis secara bebas sesuai kebutuhan.</p>
                 </div>
                 <div>
-                    <label for="cash-on-hand">Cash In Hand Saat Ini (Rupiah / IDR)</label>
+                    <label for="cash-on-hand">Kas Tersedia Saat Ini (Rupiah / IDR)</label>
                     <input id="cash-on-hand" type="number" min="0" step="1000000" value="500000000" />
                     <p class="field-hint">Masukkan angka Rupiah saja. Aplikasi ini tidak menerima USD, EUR, atau mata uang lain.</p>
                 </div>
@@ -237,7 +237,7 @@
         </div>
 
         <div id="step-review" class="hidden">
-            <h2>Konfirmasi Laporan Cash In</h2>
+            <h2>Konfirmasi Laporan Cashflow</h2>
             <div id="review-operational-status"></div>
             <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
@@ -986,7 +986,7 @@
 
             const factorLines = (forecast.external_factors || [])
                 .map(item => `- ${item.factor}: potensi delay ${item.potential_delay_days.min}-${item.potential_delay_days.max} hari. ${item.impact} Sumber: ${(item.source_domains || []).join(', ') || '-'}.`)
-                .join('\n') || '- Tidak ada sinyal eksternal tambahan.';
+                .join('\n') || '- OSINT tidak dipakai karena belum ada sinyal eksternal yang cukup sebanding dengan profil perusahaan.';
 
             const recommendationLines = (forecast.recommendations || [])
                 .map(item => `- [${item.priority}] ${item.action}. SoP: ${item.sop}. Retention: ${item.retention_signal}. Satisfaction: ${item.satisfaction_signal}.`)
@@ -1011,7 +1011,7 @@
                     if (!item) {
                         return null;
                     }
-                    return `- ${item.time_horizon.label}: fokus ${item.time_horizon.focus}; predicted cash in ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}; predicted cash out ${formatCurrency(item.forecast.cash_out.total_cash_out)}; ending cash ${formatCurrency(item.forecast.ending_cash)}; sinyal operasional ${item.cashflow_health ? item.cashflow_health.operating_signal : '-'}.`;
+                    return `- ${item.time_horizon.label}: fokus ${item.time_horizon.focus}; arus kas masuk ${formatCurrency(item.forecast.cash_in.total_predicted_cash_in)}; arus kas keluar ${formatCurrency(item.forecast.cash_out.total_cash_out)}; ending cash ${formatCurrency(item.forecast.ending_cash)}; sinyal operasional ${item.cashflow_health ? item.cashflow_health.operating_signal : '-'}.`;
                 })
                 .filter(Boolean)
                 .join('\n');
@@ -1081,10 +1081,10 @@
                     <div class="review-row"><span>Sumber Data</span><span>${escapeHtml((reviewContext && reviewContext.dataSource) || 'Sumber data aktif')}</span></div>
                     <div class="review-row"><span>Status Data</span><span>${escapeHtml((reviewContext && reviewContext.dataStatus) || 'Data siap dianalisis')}</span></div>
                     <div class="review-row"><span>Periode Pilihan</span><span>${escapeHtml(selectedPeriod.label)}</span></div>
-                    <div class="review-row"><span>Cash In Hand</span><span>${formatCurrency(cashOnHand)}</span></div>
-                    <div class="review-row"><span>Predicted Cash In</span><span>${formatCurrency(forecast.forecast.cash_in.total_predicted_cash_in)}</span></div>
-                    <div class="review-row"><span>Predicted Cash Out</span><span>${formatCurrency(forecast.forecast.cash_out.total_cash_out)}</span></div>
-                    <div class="review-row"><span>Cash Out Source</span><span>${escapeHtml(forecast.forecast.cash_out.source === 'live_schedule' ? 'Komitmen keluar kas aktual' : 'Model operating cost bulanan')}</span></div>
+                    <div class="review-row"><span>Kas Tersedia Saat Ini</span><span>${formatCurrency(cashOnHand)}</span></div>
+                    <div class="review-row"><span>Prediksi Arus Kas Masuk</span><span>${formatCurrency(forecast.forecast.cash_in.total_predicted_cash_in)}</span></div>
+                    <div class="review-row"><span>Prediksi Arus Kas Keluar</span><span>${formatCurrency(forecast.forecast.cash_out.total_cash_out)}</span></div>
+                    <div class="review-row"><span>Sumber Cash Out</span><span>${escapeHtml(forecast.forecast.cash_out.source === 'live_schedule' ? 'Komitmen keluar kas aktual' : 'Model operating cost bulanan')}</span></div>
                     <div class="review-row"><span>Ending Cash</span><span>${formatCurrency(forecast.forecast.ending_cash)}</span></div>
                     <p class="mini-note">Formula internal: ${escapeHtml(forecast.forecast.formula)}</p>
                     ${appState.syncStatus && appState.syncStatus.financialData ? `<p class="mini-note"><strong>Freshness:</strong> sinkronisasi ${escapeHtml(appState.syncStatus.financialData.syncStatus || '-')} dengan usia data ${escapeHtml(formatRelativeMinutes(appState.syncStatus.financialData.sourceAgeMinutes))}.</p>` : ''}
@@ -1100,7 +1100,7 @@
                     <div class="review-row"><span>Cash Coverage</span><span>${coverage ? `${coverage.metrics.coverage_ratio.toFixed(2)}x` : '-'}</span></div>
                     <div class="review-row"><span>Rata-rata Delay</span><span>${conversion ? `${conversion.metrics.average_delay_days.toFixed(1)} hari` : '-'}</span></div>
                     <div class="review-row"><span>Eksposur Partner Terbesar</span><span>${risk ? formatPercent(risk.metrics.top_partner_share_pct) : '-'}</span></div>
-                    <div class="review-row"><span>Visibilitas Cash In</span><span>${stability ? formatPercent(stability.metrics.visibility_ratio_pct) : '-'}</span></div>
+                    <div class="review-row"><span>Visibilitas Arus Kas Masuk</span><span>${stability ? formatPercent(stability.metrics.visibility_ratio_pct) : '-'}</span></div>
                     <table class="forecast-table" style="margin-top: 16px;">
                         <thead>
                             <tr>
@@ -1231,13 +1231,13 @@
                 return;
             }
             if (!Number.isFinite(cashOnHand) || cashOnHand < 0) {
-                alert('Masukkan nilai cash in hand yang valid.');
+                alert('Masukkan nilai kas tersedia saat ini yang valid.');
                 return;
             }
 
             const originalLabel = ui.btnReview.textContent;
             ui.btnReview.disabled = true;
-            ui.btnReview.textContent = 'Menyusun Preview Forecast...';
+            ui.btnReview.textContent = 'Menganalisis Cashflow...';
 
             try {
                 const forecastPayload = {
@@ -1392,7 +1392,7 @@
                     let url = window.URL.createObjectURL(blob);
                     let a = document.createElement('a');
                     a.href = url;
-                    a.download = `Inixindo_Cash_In_Intelligence_Report.docx`;
+                    a.download = `Inixindo_Cashflow_Intelligence_Report.docx`;
                     a.click();
                     resetGenerateState();
                     ui.jobStatus.classList.add('hidden');
@@ -1437,7 +1437,7 @@
                     }
 
                     if (data.status === 'running') {
-                        updateJobStatus('AI sedang menyusun analisis cash in dan dokumen Word.');
+                        updateJobStatus('AI sedang menyusun analisis cashflow dan dokumen Word.');
                         appState.statusTimer = setTimeout(() => pollJobStatus(jobId), appState.statusPollIntervalMs);
                         return;
                     }

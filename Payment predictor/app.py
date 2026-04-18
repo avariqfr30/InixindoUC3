@@ -769,20 +769,42 @@ def create_app():
     def _build_external_context(start_date, end_date):
         dataset = knowledge_base.df
         partner_types = []
-        if dataset is not None and not dataset.empty and "Tipe Partner" in dataset.columns:
-            partner_types = (
-                dataset["Tipe Partner"]
-                .dropna()
-                .astype(str)
-                .value_counts()
-                .head(3)
-                .index
-                .tolist()
+        services = []
+        if dataset is not None and not dataset.empty:
+            partner_column = next(
+                (column for column in dataset.columns if str(column).strip().lower() in {"tipe partner", "partner type", "partner_type"}),
+                None,
             )
+            service_column = next(
+                (column for column in dataset.columns if str(column).strip().lower() in {"layanan", "service", "service_name"}),
+                None,
+            )
+            if partner_column:
+                partner_types = (
+                    dataset[partner_column]
+                    .dropna()
+                    .astype(str)
+                    .value_counts()
+                    .head(3)
+                    .index
+                    .tolist()
+                )
+            if service_column:
+                services = (
+                    dataset[service_column]
+                    .dropna()
+                    .astype(str)
+                    .value_counts()
+                    .head(3)
+                    .index
+                    .tolist()
+                )
         partner_snippet = ", ".join(partner_types)
+        service_snippet = ", ".join(services)
         return (
             f"periode {start_date.strftime('%d %B %Y')} sampai {end_date.strftime('%d %B %Y')} "
-            f"partner {partner_snippet}"
+            f"partner {partner_snippet} "
+            f"layanan {service_snippet}"
         ).strip()
 
     def _parse_request_idr_amount(raw_value, field_name, default_value):

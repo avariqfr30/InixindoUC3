@@ -87,10 +87,10 @@ WRITER_FIRM_NAME = "Inixindo Jogja - Finance & Revenue Optimization Division"
 DEFAULT_COLOR = (204, 0, 0)
 
 SMART_SUGGESTIONS = [
-    "Jelaskan kondisi cash in saat ini dari karakter penagihan partner dan faktor yang paling memengaruhi keterlambatan.",
-    "Diagnosa akar masalah cash in berdasarkan pola kelas pembayaran, jenis partner, dan catatan historis penagihan.",
-    "Prediksi risiko penurunan cash in 1-2 kuartal ke depan dan tandai segmen partner yang perlu diawasi.",
-    "Berikan rekomendasi tindakan prioritas untuk mempercepat cash in dan menurunkan invoice berisiko.",
+    "Jelaskan kondisi cashflow saat ini dari karakter penagihan partner, tekanan cash out, dan faktor yang paling memengaruhi keterlambatan.",
+    "Diagnosa akar masalah cashflow berdasarkan pola kelas pembayaran, jenis partner, catatan historis penagihan, dan jadwal kewajiban keluar.",
+    "Prediksi risiko penurunan cash in, tekanan cash out, dan ending cash 1-2 kuartal ke depan serta tandai segmen yang perlu diawasi.",
+    "Berikan rekomendasi tindakan prioritas untuk mempercepat cash in, mengendalikan cash out, dan menurunkan invoice berisiko.",
     "Sorot batasan data, asumsi kerja, dan tingkat keyakinan analisis agar laporan siap dibahas manajemen.",
     "Jelaskan risiko kontrol, penanggung jawab utama, dan prasyarat implementasi agar tindak lanjut bisa dijalankan.",
 ]
@@ -100,10 +100,10 @@ You are the Chief Financial Officer (CFO) and Lead Financial Data Scientist for 
 ROLE: {persona}
 
 OBJECTIVE:
-Create one professional internal cash-in intelligence report for management discussion.
+Create one professional internal cashflow intelligence report for management discussion.
 The report must be detailed enough for an internal meeting, numerically consistent, and action-oriented.
 
-=== INTERNAL CASH-IN SUMMARY ===
+=== INTERNAL CASHFLOW SUMMARY ===
 {financial_summary}
 
 === MANAGEMENT ANALYSIS BRIEF (USE THESE FACTS) ===
@@ -129,7 +129,7 @@ The report must be detailed enough for an internal meeting, numerically consiste
 
 MANDATORY RULES:
 1. Write the full response in professional but easy-to-understand Bahasa Indonesia.
-2. Keep the analysis focused on cash-in behavior, collection patterns, and invoice realization risk.
+2. Keep the analysis focused on cashflow behavior: cash in realization, cash out pressure, ending cash, and invoice collection risk.
 3. Use these exact top-level Markdown headings in order for this pass:
 {section_headings}
 4. This must read like a management memo, not a generic AI answer.
@@ -141,27 +141,29 @@ MANDATORY RULES:
 10. Never contradict the provided metrics. If risk score decreases, describe it as improving or lower risk. If risk score increases, describe it as worsening or higher risk.
 11. Never copy internal delimiter labels or raw machine blocks verbatim. If source context contains separators, debug-like markers, or structured forecast notes, rewrite them into natural business prose, tables, or bullets.
 12. The report must explicitly cover:
-   - current cash-in condition,
-   - main collection bottlenecks,
+   - current cashflow condition,
+   - main inflow bottlenecks,
+   - main outflow pressure,
    - short-term forecast or scenarios,
    - management implications,
    - concrete next actions.
 13. If this pass includes `# Ringkasan Eksekutif`, include `### Dampak Bisnis` and `### Tingkat Keyakinan dan Caveat`.
-14. If this pass includes `# Analisis Deskriptif Cash In`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
-15. If this pass includes `# Analisis Diagnostik`, include `### Pola Hambatan Utama`, `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
-16. In `# Analisis Diagnostik`, split the explanation by what drives the delay, for example process/document issues, budget/approval issues, and liquidity/relationship issues, instead of dumping one long block of mixed evidence.
-17. If this pass includes `# Analisis Prediktif`, include `### Dasar Proyeksi`, `### Skenario 1-2 Kuartal`, and `### Implikasi terhadap Rencana Kas`.
+14. If this pass includes `# Analisis Deskriptif Cashflow`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
+15. If this pass includes `# Analisis Diagnostik Cashflow`, include `### Pola Hambatan Utama`, `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
+16. In `# Analisis Diagnostik Cashflow`, split the explanation by what drives the delay, for example process/document issues, budget/approval issues, liquidity/relationship issues, and outflow pressure instead of dumping one long block of mixed evidence.
+17. If this pass includes `# Analisis Prediktif Cashflow`, include `### Dasar Proyeksi`, `### Skenario 1-2 Kuartal`, and `### Implikasi terhadap Arus Kas Masuk dan Keluar`.
 18. If this pass includes `# Rekomendasi Preskriptif`, include `### Prinsip Tindakan`, `### Prasyarat Implementasi`, and `### Kesiapan Pelaksanaan`.
 19. If this pass includes `# Prioritas Tindakan 30 Hari`, include a Markdown table with columns:
    `Prioritas | Fokus | Penanggung Jawab | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan`
 20. Avoid vague phrases such as `perlu perhatian lebih` unless followed by a specific action and expected impact.
 21. Do not add an introduction before `# Ringkasan Eksekutif`.
-22. If `### Konteks OSINT Pendukung` is included, summarize external signals in business language and mention source domains naturally.
+22. If `### Konteks OSINT Pendukung` is included, use external signals only when they are comparable to the company profile, payment posture, or cashflow pressures in the provided context. If that bar is not met, explicitly state that OSINT was omitted because it was not close enough to the company situation.
 23. If visual markers are provided, reproduce them verbatim on standalone lines in the most relevant section and do not modify the marker syntax.
 24. If the user focus or forecast context includes structured cashflow forecast inputs, explicitly weave in:
    - selected period window,
    - current cash on hand,
    - estimated payments by character, retention, and satisfaction,
+   - predicted cash out and major outflow implications,
    - total outstanding by age and payment character,
    - external factors that may delay payment,
    - short-, mid-, and long-term implications.
@@ -184,9 +186,9 @@ VISUAL MARKERS:
 
 REPORT_SECTION_SEQUENCE = [
     "Ringkasan Eksekutif",
-    "Analisis Deskriptif Cash In",
-    "Analisis Diagnostik",
-    "Analisis Prediktif",
+    "Analisis Deskriptif Cashflow",
+    "Analisis Diagnostik Cashflow",
+    "Analisis Prediktif Cashflow",
     "Rekomendasi Preskriptif",
     "Prioritas Tindakan 30 Hari",
 ]
