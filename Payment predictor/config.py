@@ -40,6 +40,8 @@ REPORT_NUM_PREDICT = int(os.getenv("REPORT_NUM_PREDICT", "2200"))
 REPORT_TEMPERATURE = float(os.getenv("REPORT_TEMPERATURE", "0.2"))
 REPORT_TOP_P = float(os.getenv("REPORT_TOP_P", "0.85"))
 REPORT_REPEAT_PENALTY = float(os.getenv("REPORT_REPEAT_PENALTY", "1.1"))
+DATA_REFRESH_INTERVAL_SECONDS = int(os.getenv("DATA_REFRESH_INTERVAL_SECONDS", "0"))
+FORECAST_CACHE_TTL_SECONDS = int(os.getenv("FORECAST_CACHE_TTL_SECONDS", "300"))
 PERMANENT_SESSION_LIFETIME = timedelta(hours=SESSION_LIFETIME_HOURS)
 
 INTERNAL_API_ENDPOINT_URL = os.getenv("INTERNAL_API_ENDPOINT_URL", "").strip()
@@ -63,6 +65,23 @@ INTERNAL_API_VERIFY_SSL = os.getenv("INTERNAL_API_VERIFY_SSL", "true").strip().l
     "false",
     "no",
 }
+
+CASH_OUT_API_ENDPOINT_URL = os.getenv("CASH_OUT_API_ENDPOINT_URL", "").strip()
+CASH_OUT_API_METHOD = os.getenv("CASH_OUT_API_METHOD", "GET").strip().upper()
+CASH_OUT_API_RECORDS_KEY = os.getenv("CASH_OUT_API_RECORDS_KEY", "").strip()
+CASH_OUT_API_AUTH_TOKEN = os.getenv("CASH_OUT_API_AUTH_TOKEN", "").strip()
+CASH_OUT_API_BASIC_USERNAME = os.getenv("CASH_OUT_API_BASIC_USERNAME", "").strip()
+CASH_OUT_API_BASIC_PASSWORD = os.getenv("CASH_OUT_API_BASIC_PASSWORD", "").strip()
+CASH_OUT_API_HEADERS_JSON = os.getenv("CASH_OUT_API_HEADERS_JSON", "{}").strip()
+CASH_OUT_API_QUERY_PARAMS_JSON = os.getenv("CASH_OUT_API_QUERY_PARAMS_JSON", "{}").strip()
+CASH_OUT_API_BODY_JSON = os.getenv("CASH_OUT_API_BODY_JSON", "").strip()
+CASH_OUT_API_TIMEOUT = int(os.getenv("CASH_OUT_API_TIMEOUT", "20"))
+CASH_OUT_API_VERIFY_SSL = os.getenv("CASH_OUT_API_VERIFY_SSL", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+CASH_OUT_FIELD_MAP_JSON = os.getenv("CASH_OUT_FIELD_MAP_JSON", "{}").strip()
 
 WRITER_FIRM_NAME = "Inixindo Jogja - Finance & Revenue Optimization Division"
 DEFAULT_COLOR = (204, 0, 0)

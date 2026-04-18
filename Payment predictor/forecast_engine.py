@@ -123,18 +123,53 @@ class CashOutProjector:
         self.monthly_operating_cost = monthly_operating_cost_idr
         self.daily_rate = monthly_operating_cost_idr / 30
     
-    def project_cash_out(self, start_date: datetime, end_date: datetime) -> Dict:
+    def project_cash_out(self, start_date: datetime, end_date: datetime, cash_out_records: List[Dict] = None) -> Dict:
         """
         Project cash outflows for a period
         Returns daily, weekly, and total cash out
         """
         days = (end_date - start_date).days + 1
-        
+
+        if cash_out_records:
+            relevant_records = [
+                record
+                for record in cash_out_records
+                if record.get("is_open", True)
+                and record.get("due_date")
+                and start_date <= record["due_date"] <= end_date
+            ]
+            category_totals = {}
+            for record in relevant_records:
+                category = str(record.get("category") or "Tanpa Kategori").strip()
+                category_totals[category] = category_totals.get(category, 0) + int(record.get("amount") or 0)
+
+            sorted_categories = sorted(
+                (
+                    {"category": category, "amount": amount}
+                    for category, amount in category_totals.items()
+                ),
+                key=lambda item: item["amount"],
+                reverse=True,
+            )
+            live_total = int(sum(record.get("amount") or 0 for record in relevant_records))
+            return {
+                'total_cash_out': live_total,
+                'daily_rate': int(live_total / max(days, 1)),
+                'monthly_rate': self.monthly_operating_cost,
+                'period_days': days,
+                'source': 'live_schedule',
+                'event_count': len(relevant_records),
+                'category_breakdown': sorted_categories,
+            }
+
         return {
             'total_cash_out': int(self.daily_rate * days),
             'daily_rate': int(self.daily_rate),
             'monthly_rate': self.monthly_operating_cost,
-            'period_days': days
+            'period_days': days,
+            'source': 'modeled_monthly_rate',
+            'event_count': 0,
+            'category_breakdown': [],
         }
 
 
@@ -167,6 +202,7 @@ class CashflowForecaster:
         df: pd.DataFrame,
         cash_on_hand: int,
         start_date: datetime,
+        cash_out_records: List[Dict] = None,
     ) -> Dict:
         """Generate forecasts for all time horizons"""
         forecasts = {}
@@ -179,6 +215,7 @@ class CashflowForecaster:
                 start_date=start_date,
                 end_date=end_date,
                 horizon_key=horizon_key,
+                cash_out_records=cash_out_records,
             )
             forecasts[horizon_key] = forecast
         
@@ -191,6 +228,7 @@ class CashflowForecaster:
         start_date: datetime,
         end_date: datetime,
         horizon_key: str = None,
+        cash_out_records: List[Dict] = None,
     ) -> Dict:
         """
         Generate comprehensive cashflow forecast
@@ -212,7 +250,11 @@ class CashflowForecaster:
         cash_in_forecast = self._forecast_cash_in(invoices, start_date, end_date)
         
         # Project cash out
-        cash_out_forecast = self.out_projector.project_cash_out(start_date, end_date)
+        cash_out_forecast = self.out_projector.project_cash_out(
+            start_date,
+            end_date,
+            cash_out_records=cash_out_records,
+        )
         
         # Calculate ending cash
         total_cash_in = sum(item['amount'] for item in cash_in_forecast['predicted_payments'])

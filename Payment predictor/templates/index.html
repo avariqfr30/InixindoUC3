@@ -55,6 +55,11 @@
         .chip-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
         .chip { background: #f1f5f9; color: #475569; padding: 6px 12px; border-radius: 16px; font-size: 0.85rem; cursor: pointer; transition: 0.2s; border: 1px solid #cbd5e1; }
         .chip:hover { background: #fff0f0; border-color: #CC0000; color: #CC0000; }
+        .operational-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; margin: 0 0 18px 0; }
+        .operational-pill { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; min-height: 68px; }
+        .operational-pill-label { display: block; color: #64748b; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px; }
+        .operational-pill-value { display: block; color: #0f172a; font-size: 0.95rem; font-weight: 700; line-height: 1.35; }
+        .operational-pill-note { display: block; color: #64748b; font-size: 0.78rem; line-height: 1.35; margin-top: 4px; }
         .section-block { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e2e8f0; }
         .section-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
         .section-block h3 { margin: 0 0 10px 0; font-size: 1rem; color: #0f172a; }
@@ -144,6 +149,7 @@
         @media (max-width: 760px) {
             .control-grid { grid-template-columns: 1fr; }
             .horizon-grid { grid-template-columns: 1fr; }
+            .operational-strip { grid-template-columns: 1fr; }
             .review-row { flex-direction: column; gap: 4px; }
             .review-row span:last-child { text-align: left; }
             .review-action-buttons { flex-direction: column; }
@@ -177,6 +183,7 @@
         <div id="step-config" class="hidden">
             <h2><span style="color: #CC0000;">Inixindo</span> Cash In Intelligence</h2>
             <p class="sub">Sistem AI akan membaca <strong>histori data cash in dan karakter penagihan</strong> untuk membuat laporan yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
+            <div id="config-operational-status"></div>
 
             <div class="control-grid">
                 <div>
@@ -231,6 +238,7 @@
 
         <div id="step-review" class="hidden">
             <h2>Konfirmasi Laporan Cash In</h2>
+            <div id="review-operational-status"></div>
             <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
             <div class="review-dashboard-stack">
@@ -262,6 +270,8 @@
             endDateInput: document.getElementById('end-date'),
             cashOnHandInput: document.getElementById('cash-on-hand'),
             suggestionContainer: document.getElementById('suggestion-container'),
+            configOperationalStatus: document.getElementById('config-operational-status'),
+            reviewOperationalStatus: document.getElementById('review-operational-status'),
             reviewText: document.getElementById('review-text'),
             jobStatus: document.getElementById('job-status'),
             rootCard: document.querySelector('.card'),
@@ -281,6 +291,8 @@
             forecastSnapshot: null,
             horizonSnapshot: null,
             analysisContext: "",
+            analysisPayload: null,
+            syncStatus: null,
             startPicker: null,
             endPicker: null,
             dashboardMode: 'short_term',
@@ -301,6 +313,62 @@
 
         function formatCurrency(value) {
             return currencyFormatter.format(Number(value || 0));
+        }
+
+        function formatRelativeMinutes(minutes) {
+            const numericMinutes = Number(minutes);
+            if (!Number.isFinite(numericMinutes)) {
+                return 'belum tersedia';
+            }
+            if (numericMinutes < 1) {
+                return '< 1 menit';
+            }
+            if (numericMinutes < 60) {
+                return `${numericMinutes.toFixed(1)} menit`;
+            }
+            return `${(numericMinutes / 60).toFixed(1)} jam`;
+        }
+
+        function buildOperationalStatusMarkup(syncStatus) {
+            const financial = syncStatus && syncStatus.financialData ? syncStatus.financialData : {};
+            const cashOut = syncStatus && syncStatus.cashOutSource ? syncStatus.cashOutSource : {};
+            const refreshIntervalSeconds = Number(syncStatus && syncStatus.refreshIntervalSeconds || 0);
+            const cadenceLabel = refreshIntervalSeconds > 0 ? `${Math.round(refreshIntervalSeconds / 60)} menit` : 'manual';
+            const financialSyncLabel = financial.syncStatus || 'unknown';
+            const cashOutLabel = cashOut.configured
+                ? (cashOut.syncStatus || 'unknown')
+                : 'belum dikonfigurasi';
+
+            return `
+                <div class="operational-strip">
+                    <div class="operational-pill">
+                        <span class="operational-pill-label">Sinkronisasi Data</span>
+                        <span class="operational-pill-value">${escapeHtml(financialSyncLabel)}</span>
+                        <span class="operational-pill-note">Last success: ${escapeHtml(financial.lastSuccessAt ? formatDateForDisplay(financial.lastSuccessAt.slice(0, 10)) : 'belum ada')}</span>
+                    </div>
+                    <div class="operational-pill">
+                        <span class="operational-pill-label">Usia Data</span>
+                        <span class="operational-pill-value">${escapeHtml(formatRelativeMinutes(financial.sourceAgeMinutes))}</span>
+                        <span class="operational-pill-note">${financial.recordCount || 0} record aktif</span>
+                    </div>
+                    <div class="operational-pill">
+                        <span class="operational-pill-label">Cash Out Source</span>
+                        <span class="operational-pill-value">${escapeHtml(cashOutLabel)}</span>
+                        <span class="operational-pill-note">${cashOut.configured ? `${cashOut.recordCount || 0} komitmen aktif` : 'Masih memakai model operating cost bulanan'}</span>
+                    </div>
+                    <div class="operational-pill">
+                        <span class="operational-pill-label">Cadence Refresh</span>
+                        <span class="operational-pill-value">${escapeHtml(cadenceLabel)}</span>
+                        <span class="operational-pill-note">${financial.nextRefreshAt ? `Next: ${escapeHtml(financial.nextRefreshAt.replace('T', ' ').slice(0, 16))}` : 'Refresh manual tersedia'}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderOperationalStatus() {
+            const markup = buildOperationalStatusMarkup(appState.syncStatus);
+            ui.configOperationalStatus.innerHTML = markup;
+            ui.reviewOperationalStatus.innerHTML = markup;
         }
 
         function escapeHtml(text) {
@@ -903,7 +971,7 @@
             );
         }
 
-        function buildAnalysisContext(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot) {
+        function buildAnalysisContext(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot, syncStatus) {
             const behaviorLines = (forecast.forecast.cash_in.behavior_summary || [])
                 .map(item => `- ${item.character}: ${formatCurrency(item.total_amount)}, retention ${item.average_retention}%, satisfaction ${item.average_satisfaction}%, delay ${item.average_days_delay} hari, karakter ${item.customer_characteristic}.`)
                 .join('\n') || '- Tidak ada estimasi pembayaran pada periode yang dipilih.';
@@ -954,6 +1022,8 @@
                 '- Seluruh nilai uang dibaca langsung dalam Rupiah (IDR).',
                 `- Cash on hand saat ini: ${formatCurrency(cashOnHand)}`,
                 reviewContext && reviewContext.dataSource ? `- Sumber data aktif: ${reviewContext.dataSource}` : null,
+                syncStatus && syncStatus.financialData ? `- Sinkronisasi data finansial: ${syncStatus.financialData.syncStatus || '-'}, usia data ${formatRelativeMinutes(syncStatus.financialData.sourceAgeMinutes)}.` : null,
+                syncStatus && syncStatus.cashOutSource ? `- Sumber cash out: ${syncStatus.cashOutSource.configured ? (syncStatus.cashOutSource.syncStatus || 'aktif') : 'masih memakai model operating cost bulanan'}.` : null,
                 '',
                 'Estimasi pembayaran berdasarkan payment behavior:',
                 behaviorLines,
@@ -985,6 +1055,20 @@
             ].filter(Boolean).join('\n');
         }
 
+        function buildAnalysisPayload(selectedPeriod, cashOnHand, forecast, horizonSnapshot, syncStatus) {
+            return {
+                selected_period: selectedPeriod,
+                cash_on_hand: cashOnHand,
+                sync_status: syncStatus || null,
+                forecast: {
+                    time_horizon: forecast.time_horizon || null,
+                    dashboard_snapshot: forecast.dashboard_snapshot || null,
+                    cash_out_source: forecast.forecast && forecast.forecast.cash_out ? forecast.forecast.cash_out.source : null,
+                },
+                horizon_snapshot: horizonSnapshot || null,
+            };
+        }
+
         function buildReviewHtml(selectedPeriod, cashOnHand, reviewContext, forecast, horizonSnapshot) {
             const health = forecast.cashflow_health || {};
             const liquidity = health.dimensions ? health.dimensions.liquidity : null;
@@ -1000,8 +1084,10 @@
                     <div class="review-row"><span>Cash In Hand</span><span>${formatCurrency(cashOnHand)}</span></div>
                     <div class="review-row"><span>Predicted Cash In</span><span>${formatCurrency(forecast.forecast.cash_in.total_predicted_cash_in)}</span></div>
                     <div class="review-row"><span>Predicted Cash Out</span><span>${formatCurrency(forecast.forecast.cash_out.total_cash_out)}</span></div>
+                    <div class="review-row"><span>Cash Out Source</span><span>${escapeHtml(forecast.forecast.cash_out.source === 'live_schedule' ? 'Komitmen keluar kas aktual' : 'Model operating cost bulanan')}</span></div>
                     <div class="review-row"><span>Ending Cash</span><span>${formatCurrency(forecast.forecast.ending_cash)}</span></div>
                     <p class="mini-note">Formula internal: ${escapeHtml(forecast.forecast.formula)}</p>
+                    ${appState.syncStatus && appState.syncStatus.financialData ? `<p class="mini-note"><strong>Freshness:</strong> sinkronisasi ${escapeHtml(appState.syncStatus.financialData.syncStatus || '-')} dengan usia data ${escapeHtml(formatRelativeMinutes(appState.syncStatus.financialData.sourceAgeMinutes))}.</p>` : ''}
                     ${reviewContext && reviewContext.readinessCaveat ? `<p class="mini-note"><strong>Catatan kesiapan:</strong> ${escapeHtml(reviewContext.readinessCaveat)}</p>` : ''}
                     ${reviewContext && reviewContext.controlNote ? `<p class="mini-note"><strong>Catatan kontrol:</strong> ${escapeHtml(reviewContext.controlNote)}</p>` : ''}
                 </div>
@@ -1113,10 +1199,12 @@
                     renderSuggestions(configData.suggestions);
                     appState.statusPollIntervalMs = configData.statusPollIntervalMs || 1500;
                     appState.reviewContext = configData.reviewContext || null;
+                    appState.syncStatus = configData.syncStatus || null;
                     const periods = periodData.periods || [];
                     const defaultStart = periods[0] ? periods[0].start.slice(0, 10) : new Date().toISOString().slice(0, 10);
                     const defaultEnd = periods[0] ? periods[0].end.slice(0, 10) : defaultStart;
                     initializeDatePickers(defaultStart, defaultEnd);
+                    renderOperationalStatus();
 
                     ui.loader.classList.add('hidden');
                     ui.configStep.classList.remove('hidden');
@@ -1179,13 +1267,23 @@
 	                appState.forecastSnapshot = forecastSnapshot;
 	                appState.horizonSnapshot = horizonSnapshot;
                     appState.dashboardMode = 'short_term';
+                    appState.syncStatus = forecastSnapshot.sync_status || horizonSnapshot.sync_status || appState.syncStatus;
 	                appState.analysisContext = buildAnalysisContext(
 	                    selectedPeriod,
 	                    cashOnHand,
 	                    appState.reviewContext,
                     forecastSnapshot,
                     horizonSnapshot,
+                    appState.syncStatus,
                 );
+                    appState.analysisPayload = buildAnalysisPayload(
+                        selectedPeriod,
+                        cashOnHand,
+                        forecastSnapshot,
+                        horizonSnapshot,
+                        appState.syncStatus,
+                    );
+                    renderOperationalStatus();
 
                 ui.reviewText.innerHTML = buildReviewHtml(
                     selectedPeriod,
@@ -1367,7 +1465,8 @@
             
             const payload = {
                 notes: ui.inputNotes.value,
-                analysis_context: appState.analysisContext
+                analysis_context: appState.analysisContext,
+                analysis_payload: appState.analysisPayload
             };
 
             fetch('/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
@@ -1402,12 +1501,21 @@
         
         document.getElementById('btn-refresh').onclick = () => {
             fetch('/refresh-knowledge', {method: 'POST'})
-                .then(response => {
+                .then(async response => {
+                    const data = await response.json().catch(() => ({}));
                     if (response.status === 401) {
                         window.location.href = '/login';
                         return;
                     }
-                    location.reload();
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Gagal melakukan refresh data.');
+                    }
+                    appState.syncStatus = data.syncStatus || appState.syncStatus;
+                    renderOperationalStatus();
+                    showToast('Sinkronisasi data selesai. Preview berikutnya akan memakai data terbaru.');
+                })
+                .catch(error => {
+                    alert(error.message);
                 });
         };
     </script>
