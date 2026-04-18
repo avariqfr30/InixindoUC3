@@ -912,7 +912,7 @@ class FinancialAnalyzer:
         },
         "Likuiditas pelanggan": {
             "action": "Negosiasikan skema termin, minta komitmen tanggal bayar tertulis, dan siapkan eskalasi manajemen untuk akun rentan.",
-            "impact": "Meningkatkan peluang pemulihan cash in pada akun yang menghadapi tekanan likuiditas.",
+            "impact": "Meningkatkan peluang pemulihan arus kas masuk pada akun yang menghadapi tekanan likuiditas.",
             "owner": "Finance Manager + Account Manager",
         },
         "Sengketa atau klarifikasi": {
@@ -977,6 +977,37 @@ class FinancialAnalyzer:
     @staticmethod
     def _format_percentage(value):
         return f"{value:.1f}%"
+
+    @staticmethod
+    def _normalize_report_text_fragment(text):
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        normalized = normalized.replace("…", " ")
+        normalized = re.sub(r"\.{3,}", " ", normalized)
+        normalized = re.sub(r"\s+([,.;:!?])", r"\1", normalized)
+        normalized = re.sub(r"[\"'`]+$", "", normalized).strip(" -–—")
+        return normalized.strip()
+
+    @classmethod
+    def _trim_note_for_report(cls, note, max_length=220):
+        normalized = cls._normalize_report_text_fragment(note)
+        if not normalized:
+            return ""
+        if len(normalized) <= max_length:
+            return normalized
+
+        candidate = normalized[: max_length + 1]
+        sentence_breaks = [candidate.rfind(marker) for marker in (".", "!", "?", ";", ":")]
+        best_sentence_break = max(sentence_breaks)
+        if best_sentence_break >= int(max_length * 0.55):
+            candidate = candidate[: best_sentence_break + 1]
+        else:
+            last_space = candidate.rfind(" ")
+            if last_space > int(max_length * 0.55):
+                candidate = candidate[:last_space]
+            else:
+                candidate = candidate[:max_length]
+
+        return candidate.strip(" ,;:-")
 
     @staticmethod
     def _parse_period_sort_key(period_label):
@@ -1177,7 +1208,7 @@ class FinancialAnalyzer:
             )
 
         readiness_signals = [
-            f"- Business value clarity: {hidden_dimensions['business_value_clarity']}/5. Use case cash in jelas dan langsung terkait percepatan realisasi invoice, pengurangan risiko keterlambatan, dan prioritas follow-up.",
+            f"- Business value clarity: {hidden_dimensions['business_value_clarity']}/5. Use case cashflow jelas dan langsung terkait percepatan realisasi invoice, pengendalian cash out, pengurangan risiko keterlambatan, dan prioritas follow-up.",
             f"- Data/model readiness: {hidden_dimensions['data_model_readiness']}/5. Sumber data saat ini adalah {data_source_label} dengan {total_invoices} invoice dan {core_field_summary}.",
             f"- Infrastructure/deployment readiness: {hidden_dimensions['infrastructure_readiness']}/5. Runtime aktif adalah {APP_SERVER} dengan queue {REPORT_MAX_CONCURRENT_JOBS} job dan thread Waitress {WAITRESS_THREADS}.",
             f"- People/ownership readiness: {hidden_dimensions['people_ownership_readiness']}/5. Sinyal owner atau sponsor eksplisit dari catatan pengguna = {note_profile['owner_hits']}.",
@@ -1196,7 +1227,7 @@ class FinancialAnalyzer:
         assumption_lines = [
             f"- Analisis ini mengasumsikan {total_invoices} invoice yang tersedia sudah mewakili pola penagihan utama pada portofolio yang dibahas.",
             f"- Atribut inti yang terbaca saat ini adalah {core_field_summary}; atribut yang belum kuat atau belum tersedia: {missing_fields_sentence}.",
-            "- Proyeksi cash in dibaca sebagai skenario manajemen berbasis histori kelas pembayaran, bukan kepastian realisasi kas.",
+            "- Proyeksi arus kas masuk dibaca sebagai skenario manajemen berbasis histori kelas pembayaran, bukan kepastian realisasi kas.",
         ]
         if data_mode == "demo":
             assumption_lines.append("- Karena masih demo mode, angka dan narasi diposisikan sebagai bahan kalibrasi diskusi sebelum integrasi source-of-truth internal.")
@@ -1235,19 +1266,20 @@ class FinancialAnalyzer:
         review_context = {
             "dataSource": "Demo dataset lokal" if data_mode == "demo" else "API internal perusahaan",
             "dataStatus": f"{total_invoices} invoice siap dianalisis",
-            "operationalScope": "Analisis cash in, risiko realisasi invoice, dan prioritas tindak lanjut 30 hari.",
+            "operationalScope": "Analisis cashflow (arus kas masuk dan arus kas keluar), risiko realisasi invoice, dan prioritas tindak lanjut 30 hari.",
             "reportPurpose": "Bahan diskusi internal manajemen untuk keputusan penagihan, kontrol risiko, dan kesiapan pelaksanaan.",
             "readinessCaveat": data_mode_line,
             "controlNote": "Fakta internal tetap menjadi sumber utama; konteks eksternal hanya dipakai untuk memperkaya pembacaan risiko.",
         }
         cash_plan_implications = [
             "- Base case sebaiknya dipakai sebagai jangkar pembacaan rencana kas jangka pendek, sedangkan upside dan downside dipakai untuk menguji kebutuhan eskalasi dan ruang koreksi target.",
-            "- Semakin besar eksposur Kelas D/E pada partner bernilai tinggi, semakin besar kebutuhan buffer keputusan, ritme follow-up, dan verifikasi dokumen sebelum asumsi cash in dinaikkan.",
+            "- Semakin besar eksposur Kelas D/E pada partner bernilai tinggi, semakin besar kebutuhan buffer keputusan, ritme follow-up, dan verifikasi dokumen sebelum asumsi arus kas masuk dinaikkan.",
         ]
         if data_mode == "demo":
             cash_plan_implications.append("- Karena masih demo mode, implikasi rencana kas diposisikan sebagai arah diskusi internal, bukan angka forecast final.")
         if expected_gap_base > 0:
-            cash_plan_implications.append("- Gap cash in pada base case harus dibaca sebagai ruang risiko yang perlu diperkecil lewat penagihan prioritas, bukan langsung diasumsikan akan pulih otomatis.")
+            cash_plan_implications.append("- Gap arus kas masuk pada base case harus dibaca sebagai ruang risiko yang perlu diperkecil lewat penagihan prioritas, bukan langsung diasumsikan akan pulih otomatis.")
+        cash_plan_implications.append("- Tekanan cash out harus dibaca bersama ending cash, runway, dan coverage ratio; kenaikan arus kas masuk saja tidak cukup bila kewajiban jatuh tempo menumpuk pada horizon yang sama.")
 
         return {
             "readiness_signals": "\n".join(readiness_signals),
@@ -1272,7 +1304,7 @@ class FinancialAnalyzer:
         )
         flow_marker = (
             "[[FLOW: Prioritisasi Invoice Risiko Tinggi -> Penagihan Berbasis Bukti -> "
-            "Eskalasi Manajemen -> Pemulihan Cash In]]"
+            "Eskalasi Manajemen -> Pemulihan Cashflow]]"
         )
         return f"{chart_marker}\n{flow_marker}"
 
@@ -1296,7 +1328,7 @@ class FinancialAnalyzer:
                 "diagnostic_breakdown": "- Belum ada pola hambatan yang dapat dijelaskan karena data masih kosong.",
                 "management_brief": "Tidak ada management brief yang dapat disusun dari data kosong.",
                 "executive_facts": "- Tidak ada fakta eksekutif yang tersedia.",
-                "scenario_table": "| Skenario | Estimasi Realisasi Cash In | Gap terhadap Total Invoice | Narasi Manajemen |\n|---|---:|---:|---|\n| Base Case | Rp 0 | Rp 0 | Data kosong. |",
+                "scenario_table": "| Skenario | Estimasi Arus Kas Masuk | Gap terhadap Total Invoice | Narasi Manajemen |\n|---|---:|---:|---|\n| Base Case | Rp 0 | Rp 0 | Data kosong. |",
                 "priority_table": "| Prioritas | Fokus | Penanggung Jawab | Isu Utama | Aksi 30 Hari | Dampak yang Diharapkan |\n|---:|---|---|---|---|---|\n| 1 | Tidak ada data | Finance Collection | - | Lengkapi data terlebih dahulu. | Memberi dasar analisis yang layak. |",
                 "meeting_agenda": "1. Pastikan data internal tersedia sebelum rapat dilanjutkan.",
                 "base_profile": {
@@ -1563,13 +1595,13 @@ class FinancialAnalyzer:
             )
         if top_risk_partner_names != "-":
             diagnostic_breakdown_lines.append(
-                f"4. Eksposur dampak terbesar saat ini terkonsentrasi pada {top_risk_partner_names}, sehingga setiap bottleneck di segmen tersebut memberi pengaruh paling besar ke realisasi cash in."
+                f"4. Eksposur dampak terbesar saat ini terkonsentrasi pada {top_risk_partner_names}, sehingga setiap bottleneck di segmen tersebut memberi pengaruh paling besar ke arus kas masuk dan kualitas ending cash."
             )
         if not diagnostic_breakdown_lines:
             diagnostic_breakdown_lines.append("1. Belum ada pola hambatan dominan yang cukup kuat untuk dipisahkan dari catatan historis.")
 
         financial_summary_lines = [
-            "## Snapshot Cash In",
+            "## Snapshot Arus Kas Masuk",
             f"- Total invoice dianalisis: {total_invoices}",
             f"- Total nilai invoice: {cls._format_currency(total_invoice_value)}",
             f"- Porsi invoice terlambat: {cls._format_percentage((delayed_invoices / total_invoices) * 100 if total_invoices else 0)}",
@@ -1577,8 +1609,8 @@ class FinancialAnalyzer:
             f"- Porsi invoice risiko tinggi (Kelas D/E): {cls._format_percentage((high_risk_invoices / total_invoices) * 100 if total_invoices else 0)}",
             f"- Nilai invoice risiko tinggi (Kelas D/E): {cls._format_currency(high_risk_invoice_value)}",
             f"- Skor risiko penagihan rata-rata: {weighted_risk_score:.2f} dari 5.00",
-            f"- Estimasi cash in risk-adjusted (base case): {cls._format_currency(expected_realization_base)} atau {cls._format_percentage((expected_realization_base / total_invoice_value) * 100 if total_invoice_value else 0)} dari total nilai invoice",
-            f"- Gap cash in pada base case: {cls._format_currency(expected_gap_base)}",
+            f"- Estimasi arus kas masuk risk-adjusted (base case): {cls._format_currency(expected_realization_base)} atau {cls._format_percentage((expected_realization_base / total_invoice_value) * 100 if total_invoice_value else 0)} dari total nilai invoice",
+            f"- Gap arus kas masuk pada base case: {cls._format_currency(expected_gap_base)}",
             "",
             "## Pergerakan Periode Terbaru",
             recent_trend_line,
@@ -1661,7 +1693,7 @@ class FinancialAnalyzer:
             note = str(row["__note"]).strip()
             if not note:
                 continue
-            trimmed_note = note[:180] + ("..." if len(note) > 180 else "")
+            trimmed_note = cls._trim_note_for_report(note, max_length=220)
             evidence_lines.append(
                 "\n".join(
                     [
@@ -1679,13 +1711,13 @@ class FinancialAnalyzer:
             f"- Portofolio yang dianalisis mencakup {total_invoices} invoice dengan total nilai {cls._format_currency(total_invoice_value)}.",
             f"- Invoice terlambat mencapai {delayed_invoices} kasus atau {cls._format_percentage((delayed_invoices / total_invoices) * 100 if total_invoices else 0)} dari populasi, dengan nilai tertunda {cls._format_currency(delayed_invoice_value)}.",
             f"- Eksposur risiko tinggi Kelas D/E mencapai {high_risk_invoices} invoice senilai {cls._format_currency(high_risk_invoice_value)} dan terkonsentrasi pada {top_risk_partner_names}.",
-            f"- Estimasi cash in risk-adjusted base case adalah {cls._format_currency(expected_realization_base)} dengan gap {cls._format_currency(expected_gap_base)} terhadap total nilai invoice.",
+            f"- Estimasi arus kas masuk risk-adjusted base case adalah {cls._format_currency(expected_realization_base)} dengan gap {cls._format_currency(expected_gap_base)} terhadap total nilai invoice.",
             recent_trend_line,
             recent_risk_change_line,
             f"- Layanan dengan eksposur risiko tinggi paling dominan saat ini: {top_risk_service_names}.",
         ]
         scenario_lines = [
-            "| Skenario | Estimasi Realisasi Cash In | Gap terhadap Total Invoice | Narasi Manajemen |",
+            "| Skenario | Estimasi Arus Kas Masuk | Gap terhadap Total Invoice | Narasi Manajemen |",
             "|---|---:|---:|---|",
             f"| Upside | {cls._format_currency(expected_realization_upside)} | {cls._format_currency(expected_gap_upside)} | Terjadi bila perbaikan approval, kelengkapan dokumen, dan penagihan pada akun prioritas dijalankan cepat. |",
             f"| Base Case | {cls._format_currency(expected_realization_base)} | {cls._format_currency(expected_gap_base)} | Menggambarkan realisasi yang paling realistis bila perilaku penagihan tetap mengikuti pola historis saat ini. |",
@@ -1709,7 +1741,7 @@ class FinancialAnalyzer:
         meeting_questions = [
             "Segmen partner mana yang paling layak mendapat eskalasi manajemen karena menggabungkan nilai invoice besar dan skor risiko tinggi?",
             "Hambatan apa yang paling sering berulang: anggaran, approval, dokumen, likuiditas, atau sengketa ruang lingkup?",
-            f"Apakah strategi 30 hari ke depan harus difokuskan pada {recent_period_label} dan akun-akun D/E agar gap cash in dapat ditekan?",
+            f"Apakah strategi 30 hari ke depan harus difokuskan pada {recent_period_label} dan akun-akun D/E agar gap arus kas masuk dapat ditekan tanpa memperburuk tekanan cash out?",
         ]
         agenda_lines = [f"{index}. {question}" for index, question in enumerate(meeting_questions, start=1)]
         management_brief_lines = (
@@ -1804,6 +1836,18 @@ class Researcher:
         },
     ]
 
+    _PROFILE_KEYWORD_GROUPS = {
+        "government": ("pemerintah", "pemda", "kementerian", "dinas", "instansi", "apbn", "apbd", "pengadaan"),
+        "bumn": ("bumn", "bumd", "persero", "holding negara"),
+        "corporate": ("korporasi", "swasta", "enterprise", "perusahaan"),
+        "training": ("pelatihan", "training", "sertifikasi", "academy", "bootcamp"),
+        "consulting": ("konsultan", "consulting", "implementasi", "proyek", "jasa"),
+        "payment_ops": ("invoice", "termin", "tagihan", "piutang", "pembayaran", "approval", "bast", "vendor"),
+        "liquidity": ("cashflow", "arus kas", "likuiditas", "pencairan", "dana"),
+    }
+
+    _STRICT_PROFILE_TAGS = {"government", "bumn", "corporate", "training", "consulting"}
+
     @staticmethod
     def _is_serper_available():
         return bool(
@@ -1811,6 +1855,96 @@ class Researcher:
             and SERPER_API_KEY.strip()
             and SERPER_API_KEY != "masukkan_api_key_serper_anda_disini"
         )
+
+    @staticmethod
+    def _normalize_osint_fragment(text, max_length=240):
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        normalized = normalized.replace("…", " ")
+        normalized = re.sub(r"\.{3,}", " ", normalized)
+        normalized = re.sub(r"\s+([,.;:!?])", r"\1", normalized)
+        normalized = normalized.strip(" \"'`-–—")
+        if not normalized:
+            return ""
+        if len(normalized) <= max_length:
+            return normalized
+
+        candidate = normalized[: max_length + 1]
+        sentence_breaks = [candidate.rfind(marker) for marker in (".", "!", "?", ";", ":")]
+        best_sentence_break = max(sentence_breaks)
+        if best_sentence_break >= int(max_length * 0.5):
+            candidate = candidate[: best_sentence_break + 1]
+        else:
+            last_space = candidate.rfind(" ")
+            candidate = candidate[: last_space if last_space > 0 else max_length]
+        return candidate.strip(" ,;:-")
+
+    @classmethod
+    def _extract_profile_tags(cls, text):
+        lowered = str(text or "").lower()
+        tags = set()
+        for tag, keywords in cls._PROFILE_KEYWORD_GROUPS.items():
+            if any(keyword in lowered for keyword in keywords):
+                tags.add(tag)
+        return tags
+
+    @staticmethod
+    def _is_low_signal_fragment(entry):
+        title = str((entry or {}).get("title") or "")
+        snippet = str((entry or {}).get("snippet") or "")
+        combined = f"{title} {snippet}"
+        if combined.count("...") >= 2 or combined.count("…") >= 2:
+            return True
+        if combined.count('"') % 2 == 1:
+            return True
+        cleaned = Researcher._normalize_osint_fragment(combined, max_length=120)
+        return len(cleaned) < 35
+
+    @classmethod
+    def _is_company_comparable_entry(cls, entry, extra_context=""):
+        context_tags = cls._extract_profile_tags(extra_context)
+        profile_tags = context_tags & cls._STRICT_PROFILE_TAGS
+        if not profile_tags:
+            return False
+
+        entry_text = " ".join(
+            [
+                str(entry.get("title") or ""),
+                str(entry.get("snippet") or ""),
+                str(entry.get("domain") or ""),
+            ]
+        )
+        entry_tags = cls._extract_profile_tags(entry_text)
+        if not (entry_tags & profile_tags):
+            return False
+        if not (entry_tags & {"payment_ops", "liquidity"}):
+            return False
+        return not cls._is_low_signal_fragment(entry)
+
+    @classmethod
+    def _filter_company_comparable_entries(cls, entries, extra_context=""):
+        return [
+            entry for entry in entries
+            if cls._is_company_comparable_entry(entry, extra_context)
+        ]
+
+    @classmethod
+    def _build_entry_summary(cls, entry):
+        raw_title = str(entry.get("title") or "")
+        raw_snippet = str(entry.get("snippet") or "")
+        source = entry.get("domain") or "-"
+        date = f" ({entry['date']})" if entry.get("date") else ""
+
+        use_title = raw_title and "..." not in raw_title and "…" not in raw_title
+        headline = cls._normalize_osint_fragment(raw_title if use_title else raw_snippet, max_length=120)
+        summary = cls._normalize_osint_fragment(raw_snippet or raw_title, max_length=220)
+
+        lines = []
+        if headline:
+            lines.append(headline)
+        if summary and summary != headline:
+            lines.append(f"  Ringkasan: {summary}")
+        lines.append(f"  Sumber: {source}{date}")
+        return "\n".join(lines)
 
     @staticmethod
     def fetch_full_markdown(url):
@@ -1943,18 +2077,12 @@ class Researcher:
         lines = [f"[{topic}]"]
 
         if not entries:
-            lines.append("- Tidak ada sinyal eksternal yang relevan.")
+            lines.append("- Tidak ada sinyal eksternal yang cukup sebanding dengan profil perusahaan saat ini.")
             return "\n".join(lines)
 
-        for index, entry in enumerate(entries[:4], start=1):
-            title = entry.get("title") or "Tanpa judul"
-            snippet = entry.get("snippet") or "Tidak ada ringkasan."
-            source = entry.get("domain") or "-"
-            date = f" ({entry['date']})" if entry.get("date") else ""
-
-            lines.append(f"{index}. {title}{date}")
-            lines.append(f"   Inti: {snippet}")
-            lines.append(f"   Sumber: {source}")
+        for index, entry in enumerate(entries[:3], start=1):
+            lines.append(f"{index}.")
+            lines.append(Researcher._build_entry_summary(entry))
 
         return "\n".join(lines)
 
@@ -1965,6 +2093,8 @@ class Researcher:
             return "Data OSINT eksternal tidak tersedia (SERPER_API_KEY belum dikonfigurasi)."
 
         context_snippet = (extra_context or "").strip()
+        if not (cls._extract_profile_tags(context_snippet) & cls._STRICT_PROFILE_TAGS):
+            return "OSINT tidak dipakai karena konteks perusahaan yang sebanding belum cukup jelas."
         search_jobs = []
         for topic_config in cls._OSINT_TOPICS:
             query = topic_config["query"]
@@ -1991,8 +2121,9 @@ class Researcher:
         deep_insight_text = ""
         top_link = None
         for topic, entries in topic_results.items():
-            if entries and entries[0].get("link"):
-                top_link = entries[0]["link"]
+            comparable_entries = cls._filter_company_comparable_entries(entries, extra_context=context_snippet)
+            if comparable_entries and comparable_entries[0].get("link"):
+                top_link = comparable_entries[0]["link"]
                 break
                 
         if top_link:
@@ -2006,12 +2137,16 @@ class Researcher:
         blocks = []
         for topic_config in cls._OSINT_TOPICS:
             topic_name = topic_config["topic"]
-            unique_entries = cls._deduplicate(topic_results.get(topic_name, []))
-            blocks.append(cls._format_topic(topic_name, unique_entries))
+            unique_entries = cls._filter_company_comparable_entries(
+                cls._deduplicate(topic_results.get(topic_name, [])),
+                extra_context=context_snippet,
+            )
+            if unique_entries:
+                blocks.append(cls._format_topic(topic_name, unique_entries))
 
         combined = "\n\n".join(blocks).strip()
-        if not combined:
-            combined = "Tidak ada data OSINT eksternal yang dapat dipakai."
+        if not blocks:
+            combined = "OSINT tidak dipakai karena tidak ada sinyal eksternal yang cukup sebanding dengan kondisi perusahaan."
 
         return deep_insight_text + combined
 
@@ -2027,18 +2162,17 @@ class Researcher:
         ).strip()
 
         results = cls._execute_serper_query(query, mode="search", num_results=5)
-        unique_results = cls._deduplicate(results)
+        unique_results = cls._filter_company_comparable_entries(
+            cls._deduplicate(results),
+            extra_context=f"{chapter_keywords or ''} {notes or ''}",
+        )
         if not unique_results:
-            return "Tidak ada sinyal OSINT spesifik bab yang cukup relevan."
+            return "OSINT bab ini tidak dipakai karena belum ada sinyal eksternal yang cukup sebanding."
 
         lines = []
         for index, entry in enumerate(unique_results[:3], start=1):
-            title = entry.get("title") or "Tanpa judul"
-            snippet = entry.get("snippet") or "Tidak ada ringkasan."
-            source = entry.get("domain") or "-"
-            lines.append(f"{index}. {title}")
-            lines.append(f"   Ringkasan: {snippet}")
-            lines.append(f"   Sumber: {source}")
+            lines.append(f"{index}.")
+            lines.append(cls._build_entry_summary(entry))
 
         return "\n".join(lines)
 
@@ -2049,6 +2183,8 @@ class Researcher:
             return []
 
         context_snippet = (extra_context or "").strip()
+        if not (cls._extract_profile_tags(context_snippet) & cls._STRICT_PROFILE_TAGS):
+            return []
         factors = []
 
         for topic in cls._DELAY_FACTOR_TOPICS:
@@ -2058,7 +2194,10 @@ class Researcher:
 
             search_results = cls._execute_serper_query(query, mode="search", num_results=4)
             news_results = cls._execute_serper_query(query, mode="news", num_results=4)
-            combined = cls._deduplicate(search_results + news_results)
+            combined = cls._filter_company_comparable_entries(
+                cls._deduplicate(search_results + news_results),
+                extra_context=context_snippet,
+            )
             if not combined:
                 continue
 
@@ -2068,7 +2207,7 @@ class Researcher:
                 source = item.get("domain") or "-"
                 if source not in sources:
                     sources.append(source)
-                snippet = (item.get("snippet") or "").strip()
+                snippet = cls._normalize_osint_fragment(item.get("snippet") or item.get("title"), max_length=180)
                 if snippet:
                     snippets.append(snippet)
 
@@ -2756,8 +2895,8 @@ class DocumentBuilder:
         StyleEngine.apply_document_styles(doc, theme_color)
 
         properties = doc.core_properties
-        properties.title = "Inixindo Cash In Intelligence Report"
-        properties.subject = "Internal Cash In Intelligence Report"
+        properties.title = "Inixindo Cashflow Intelligence Report"
+        properties.subject = "Internal Cashflow Intelligence Report"
         properties.author = WRITER_FIRM_NAME
         properties.category = "Finance"
 
@@ -2773,7 +2912,7 @@ class DocumentBuilder:
 
         doc.add_paragraph()
 
-        title = doc.add_paragraph("CASH IN INTELLIGENCE REPORT")
+        title = doc.add_paragraph("CASHFLOW INTELLIGENCE REPORT")
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title.runs[0].font.name = "Calibri"
         title.runs[0].font.size = Pt(22)
@@ -2792,7 +2931,7 @@ class DocumentBuilder:
         metadata_table.style = "Table Grid"
         metadata = [
             ("Cakupan Data", "Seluruh histori invoice dan catatan penagihan"),
-            ("Tipe Laporan", "Analisis deskriptif, diagnostik, prediktif, dan preskriptif cash in"),
+            ("Tipe Laporan", "Analisis deskriptif, diagnostik, prediktif, dan preskriptif cashflow"),
             ("Tanggal Generasi", datetime.now().strftime("%d %B %Y")),
             ("Disusun Oleh", WRITER_FIRM_NAME),
         ]
@@ -2934,6 +3073,24 @@ class ReportGenerator:
             else:
                 lines.append("- Sumber cash out masih memakai model operating cost bulanan karena feed kewajiban aktual belum dikonfigurasi.")
 
+        horizons = ((payload.get("horizon_snapshot") or {}).get("forecasts")) or {}
+        for key in ("short_term", "mid_term", "long_term"):
+            horizon_payload = horizons.get(key) or {}
+            forecast = horizon_payload.get("forecast") or {}
+            health = horizon_payload.get("cashflow_health") or {}
+            horizon = horizon_payload.get("time_horizon") or {}
+            if not forecast:
+                continue
+            lines.append(
+                "- "
+                f"{horizon.get('label') or key}: cash masuk {FinancialAnalyzer._format_currency(int((forecast.get('cash_in') or {}).get('total_predicted_cash_in') or 0))}, "
+                f"cash keluar {FinancialAnalyzer._format_currency(int((forecast.get('cash_out') or {}).get('total_cash_out') or 0))}, "
+                f"ending cash {FinancialAnalyzer._format_currency(int(forecast.get('ending_cash') or 0))}, "
+                f"runway {float(health.get('runway_months') or 0):.1f} bulan, "
+                f"coverage {float(health.get('coverage_ratio') or 0):.2f}x, "
+                f"fokus {horizon.get('focus') or '-'}."
+            )
+
         return "\n".join(lines).strip()
 
     @staticmethod
@@ -3021,13 +3178,13 @@ class ReportGenerator:
 
         table_score = 0
         scenario_table_pattern = re.compile(
-            r"\|\s*Skenario\s*\|\s*Estimasi Realisasi Cash[ -]?In\s*\|\s*Gap terhadap Total Invoice\s*\|",
+            r"\|\s*Skenario\s*\|\s*Estimasi Arus Kas Masuk\s*\|\s*Gap terhadap Total Invoice\s*\|",
             re.IGNORECASE,
         )
         if scenario_table_pattern.search(report_text):
             table_score += 8
         else:
-            missing.append("Tabel skenario cash-in belum ditemukan.")
+            missing.append("Tabel skenario arus kas masuk belum ditemukan.")
 
         priority_table_pattern = re.compile(
             r"\|\s*Prioritas\s*\|\s*Fokus\s*\|\s*Penanggung Jawab\s*\|\s*Isu Utama\s*\|\s*Aksi 30 Hari\s*\|\s*Dampak yang Diharapkan\s*\|"
@@ -3205,16 +3362,16 @@ class ReportGenerator:
             section_title = section["title"]
             section_body = section["body"]
 
-            if section_title == "Analisis Deskriptif Cash In":
+            if section_title == "Analisis Deskriptif Cashflow":
                 section_body = self._append_marker_block(section_body, chart_marker)
-            elif section_title == "Analisis Diagnostik":
+            elif section_title == "Analisis Diagnostik Cashflow":
                 section_body = self._inject_subheading_block(
                     section_body,
                     "Konteks OSINT Pendukung",
-                    macro_osint or "Tidak ada tren finansial eksternal yang tersedia.",
+                    macro_osint or "OSINT tidak dipakai karena tidak ada konteks eksternal yang cukup sebanding dengan profil perusahaan.",
                     before_subheading="Risiko dan Kontrol",
                 )
-            elif section_title == "Analisis Prediktif":
+            elif section_title == "Analisis Prediktif Cashflow":
                 section_body = self._inject_subheading_block(
                     section_body,
                     "Snapshot Dashboard Operasional",
@@ -3240,7 +3397,7 @@ class ReportGenerator:
         lines = [
             "# Ringkasan Eksekutif",
             "### Dampak Bisnis",
-            "- Laporan ini digunakan untuk membantu manajemen membaca risiko cash in, memahami prioritas penagihan, dan menentukan tindakan yang paling cepat berdampak pada realisasi invoice.",
+            "- Laporan ini digunakan untuk membantu manajemen membaca risiko cashflow, memahami prioritas penagihan, mengendalikan tekanan cash out, dan menentukan tindakan yang paling cepat berdampak pada ending cash.",
             "- Fokus pengguna tetap dijaga dalam interpretasi, namun narasi dan prioritas diturunkan dari bukti internal, pola historis, serta konteks pelaksanaan yang tersedia saat ini.",
             "",
             "## Fakta Eksekutif",
@@ -3253,14 +3410,14 @@ class ReportGenerator:
         lines.extend(
             [
                 "",
-                "# Analisis Deskriptif Cash In",
+                "# Analisis Deskriptif Cashflow",
                 "### Snapshot Portofolio dan Konsentrasi Risiko",
                 report_context["financial_summary"],
                 "",
                 "### Batasan Data dan Asumsi",
                 report_context["assumptions"],
                 "",
-                "# Analisis Diagnostik",
+                "# Analisis Diagnostik Cashflow",
                 "### Pola Hambatan Utama",
                 report_context["diagnostic_breakdown"],
                 "",
@@ -3268,7 +3425,7 @@ class ReportGenerator:
                 report_context["evidence"],
                 "",
                 "### Konteks OSINT Pendukung",
-                macro_osint or "Tidak ada tren eksternal yang tersedia.",
+                macro_osint or "OSINT tidak dipakai karena tidak ada konteks eksternal yang cukup sebanding dengan profil perusahaan.",
                 "",
                 "### Risiko dan Kontrol",
                 report_context["controls"],
@@ -3293,9 +3450,9 @@ class ReportGenerator:
         lines.extend(
             [
                 "",
-                "# Analisis Prediktif",
+                "# Analisis Prediktif Cashflow",
                 "### Dasar Proyeksi",
-                "- Proyeksi menggunakan pendekatan risk-adjusted berdasarkan campuran kelas pembayaran historis, sehingga hasil harus dibaca sebagai skenario manajemen, bukan kepastian kas masuk.",
+                "- Proyeksi menggunakan pendekatan risk-adjusted berdasarkan campuran kelas pembayaran historis, sehingga hasil harus dibaca sebagai skenario manajemen, bukan kepastian arus kas masuk.",
                 "- Base case mewakili perilaku penagihan yang paling mungkin terjadi bila pola historis bertahan, sedangkan upside dan downside menunjukkan ruang perbaikan atau penurunan.",
                 "",
                 "### Snapshot Dashboard Operasional",
@@ -3304,13 +3461,13 @@ class ReportGenerator:
                 "### Skenario 1-2 Kuartal",
                 report_context["scenario_table"],
                 "",
-                "### Implikasi terhadap Rencana Kas",
+                "### Implikasi terhadap Arus Kas Masuk dan Keluar",
                 report_context["cash_plan_implications"],
                 "",
                 "# Rekomendasi Preskriptif",
                 "### Prinsip Tindakan",
                 "1. Dahulukan invoice bernilai besar dengan skor risiko tinggi dan penyebab yang masih bisa dipulihkan dalam 30 hari.",
-                "2. Pisahkan treatment untuk isu anggaran, approval, administrasi, likuiditas, dan sengketa agar collection effort tidak tersebar terlalu tipis.",
+                "2. Pisahkan treatment untuk isu anggaran, approval, administrasi, likuiditas, sengketa, dan kewajiban jatuh tempo agar tindakan inflow dan outflow tidak tercampur.",
                 "3. Gunakan bukti internal dan jadwal tindak lanjut yang terdokumentasi agar eskalasi ke manajemen klien lebih kuat.",
                 "",
                 "### Prasyarat Implementasi",
@@ -3336,7 +3493,7 @@ class ReportGenerator:
         )
 
         if dashboard_markers:
-            dashboard_insert_index = lines.index("### Implikasi terhadap Rencana Kas") + 2
+            dashboard_insert_index = lines.index("### Implikasi terhadap Arus Kas Masuk dan Keluar") + 2
             dashboard_block = ["", "### Visual Dashboard Snapshot", *dashboard_markers, ""]
             lines[dashboard_insert_index:dashboard_insert_index] = dashboard_block
 
@@ -3378,15 +3535,16 @@ class ReportGenerator:
         return response["message"]["content"]
 
     def run(self, notes="", analysis_context="", analysis_payload=None):
-        logger.info("Starting cash-in intelligence report generation.")
+        logger.info("Starting cashflow intelligence report generation.")
 
-        global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, notes)
+        osint_context = "\n".join(part for part in (notes, analysis_context) if str(part or "").strip())
+        global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, osint_context)
         report_context = self.kb.get_report_context(notes)
 
         try:
             macro_osint = global_osint_future.result(timeout=45)
         except Exception:
-            macro_osint = "Tidak ada tren finansial eksternal yang tersedia."
+            macro_osint = "OSINT tidak dipakai karena konteks eksternal yang cukup sebanding tidak tersedia."
 
         fallback_used = False
         generated_sections = []
@@ -3439,9 +3597,11 @@ class ReportGenerator:
                 macro_osint
                 and "tidak tersedia" not in macro_osint.lower()
                 and "tidak ada data osint" not in macro_osint.lower()
+                and "osint tidak dipakai" not in macro_osint.lower()
+                and "tidak ada sinyal eksternal yang cukup sebanding" not in macro_osint.lower()
             ),
             "visuals_included": any(marker in generated_content for marker in ("[[CHART:", "[[FLOW:", "[[DASHBOARD:")),
             "report_length": len(generated_content),
         }
 
-        return document, "Inixindo_Cash_In_Intelligence_Report", run_metadata
+        return document, "Inixindo_Cashflow_Intelligence_Report", run_metadata
