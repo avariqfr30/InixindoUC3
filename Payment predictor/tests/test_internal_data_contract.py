@@ -169,6 +169,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
         cls._tmpdir = tempfile.mkdtemp(prefix="cashin-internal-contract-")
         os.environ["JOB_STATE_DB_PATH"] = os.path.join(cls._tmpdir, "jobs.db")
         os.environ["REPORT_ARTIFACTS_DIR"] = os.path.join(cls._tmpdir, "artifacts")
+        os.environ["DATA_SOURCE_ACTIVE_STATE_PATH"] = os.path.join(cls._tmpdir, "active-source.json")
         os.environ["APP_SECRET_KEY"] = "test-secret-key"
         os.environ["SESSION_COOKIE_SECURE"] = "false"
 

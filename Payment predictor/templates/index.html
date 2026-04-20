@@ -60,6 +60,24 @@
         .operational-pill-label { display: block; color: #64748b; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px; }
         .operational-pill-value { display: block; color: #0f172a; font-size: 0.95rem; font-weight: 700; line-height: 1.35; }
         .operational-pill-note { display: block; color: #64748b; font-size: 0.78rem; line-height: 1.35; margin-top: 4px; }
+        .source-switcher { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; margin: 0 0 18px 0; }
+        .source-switcher-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
+        .source-switcher-header h3 { margin: 0; font-size: 1rem; color: #0f172a; }
+        .source-switcher-header p { margin: 0; color: #64748b; font-size: 0.82rem; }
+        .source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .source-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; background: #f8fafc; }
+        .source-card.active { border-color: #CC0000; background: #fff7f7; box-shadow: inset 0 0 0 1px rgba(204, 0, 0, 0.08); }
+        .source-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 8px; }
+        .source-card-title { font-size: 0.96rem; font-weight: 800; color: #0f172a; }
+        .source-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; font-size: 0.76rem; font-weight: 700; text-transform: uppercase; }
+        .source-card.active .source-badge { background: #fee2e2; color: #b91c1c; }
+        .source-meta { display: grid; gap: 6px; color: #475569; font-size: 0.86rem; }
+        .source-actions { display: flex; gap: 10px; margin-top: 12px; }
+        .source-actions button { margin-bottom: 0; padding: 10px 12px; font-size: 0.88rem; }
+        .source-actions button.secondary { border-width: 1px; }
+        .source-validation { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e2e8f0; color: #475569; font-size: 0.82rem; line-height: 1.45; }
+        .source-validation strong { color: #0f172a; }
+        .source-registry-issues { margin: 12px 0 0 18px; color: #b45309; font-size: 0.82rem; }
         .section-block { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e2e8f0; }
         .section-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
         .section-block h3 { margin: 0 0 10px 0; font-size: 1rem; color: #0f172a; }
@@ -75,6 +93,7 @@
         .bullet-list li { margin-bottom: 8px; }
         .mini-note { color: #64748b; font-size: 0.84rem; line-height: 1.45; margin-top: 8px; }
         .toast-notification { position: absolute; top: 18px; right: 18px; min-width: 300px; max-width: min(420px, calc(100% - 36px)); background: linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%); border: 1px solid #86efac; color: #166534; border-radius: 14px; padding: 14px 16px; box-shadow: 0 12px 24px rgba(22, 101, 52, 0.12); z-index: 30; font-size: 0.92rem; font-weight: 600; line-height: 1.4; }
+        .toast-notification.is-error { background: linear-gradient(90deg, #fef2f2 0%, #fff1f2 100%); border-color: #fca5a5; color: #991b1b; box-shadow: 0 12px 24px rgba(153, 27, 27, 0.12); }
         .toast-notification.hidden { display: none; }
         .review-dashboard-stack { display: grid; gap: 18px; align-items: start; }
         .review-action-buttons { display: flex; gap: 15px; align-items: stretch; }
@@ -150,6 +169,7 @@
             .control-grid { grid-template-columns: 1fr; }
             .horizon-grid { grid-template-columns: 1fr; }
             .operational-strip { grid-template-columns: 1fr; }
+            .source-grid { grid-template-columns: 1fr; }
             .review-row { flex-direction: column; gap: 4px; }
             .review-row span:last-child { text-align: left; }
             .review-action-buttons { flex-direction: column; }
@@ -184,6 +204,7 @@
             <h2><span style="color: #CC0000;">Inixindo</span> Cashflow Intelligence</h2>
             <p class="sub">Sistem AI akan membaca <strong>histori arus kas masuk, tekanan arus kas keluar, dan karakter penagihan</strong> untuk membuat analisis yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
             <div id="config-operational-status"></div>
+            <div id="data-source-control"></div>
 
             <div class="control-grid">
                 <div>
@@ -271,6 +292,7 @@
             cashOnHandInput: document.getElementById('cash-on-hand'),
             suggestionContainer: document.getElementById('suggestion-container'),
             configOperationalStatus: document.getElementById('config-operational-status'),
+            dataSourceControl: document.getElementById('data-source-control'),
             reviewOperationalStatus: document.getElementById('review-operational-status'),
             reviewText: document.getElementById('review-text'),
             jobStatus: document.getElementById('job-status'),
@@ -293,6 +315,9 @@
             analysisContext: "",
             analysisPayload: null,
             syncStatus: null,
+            dataSourceContract: null,
+            sourceValidation: {},
+            sourceActionPending: false,
             startPicker: null,
             endPicker: null,
             dashboardMode: 'short_term',
@@ -369,6 +394,139 @@
             const markup = buildOperationalStatusMarkup(appState.syncStatus);
             ui.configOperationalStatus.innerHTML = markup;
             ui.reviewOperationalStatus.innerHTML = markup;
+        }
+
+        function buildDataSourceControlMarkup(syncStatus, dataSourceContract) {
+            const financial = syncStatus && syncStatus.financialData ? syncStatus.financialData : {};
+            const availableSources = financial.availableSources || (dataSourceContract && dataSourceContract.availableSources) || [];
+            const activeSourceKey = financial.activeSourceKey || (dataSourceContract && dataSourceContract.activeSourceKey) || '';
+            const registryIssues = financial.sourceRegistryIssues || (dataSourceContract && dataSourceContract.registryIssues) || [];
+
+            const cards = availableSources.map(source => {
+                const validation = appState.sourceValidation[source.key] || null;
+                const validationMarkup = validation ? `
+                    <div class="source-validation">
+                        <strong>${validation.ready ? 'Validasi siap' : 'Validasi gagal'}:</strong>
+                        ${escapeHtml(validation.message || '-')}
+                        ${validation.recordCount !== null && validation.recordCount !== undefined ? `<br><strong>Record:</strong> ${validation.recordCount}` : ''}
+                        ${validation.missingRequiredFields && validation.missingRequiredFields.length ? `<br><strong>Field wajib belum lengkap:</strong> ${escapeHtml(validation.missingRequiredFields.join(', '))}` : ''}
+                    </div>
+                ` : '';
+                const datasetHint = source.type === 'demo_csv'
+                    ? (source.path ? `File: ${escapeHtml(source.path)}` : 'File demo belum diatur')
+                    : (source.datasetUrl ? `${escapeHtml(source.method || 'GET')} ${escapeHtml(source.datasetUrl)}` : 'Endpoint produksi belum diatur');
+                const configuredLabel = source.configured ? 'siap dipakai' : 'belum siap';
+                const activateDisabled = appState.sourceActionPending || !source.configured || source.key === activeSourceKey;
+                const validateDisabled = appState.sourceActionPending || !source.configured;
+
+                return `
+                    <div class="source-card ${source.key === activeSourceKey ? 'active' : ''}">
+                        <div class="source-card-top">
+                            <div>
+                                <div class="source-card-title">${escapeHtml(source.name)}</div>
+                                <div class="mini-note">${escapeHtml(source.description || '')}</div>
+                            </div>
+                            <span class="source-badge">${escapeHtml(source.mode === 'production' ? 'Produksi' : 'Demo')}</span>
+                        </div>
+                        <div class="source-meta">
+                            <div><strong>Status:</strong> ${escapeHtml(configuredLabel)}</div>
+                            <div><strong>Lokasi:</strong> ${datasetHint}</div>
+                            <div><strong>Aktif saat ini:</strong> ${source.key === activeSourceKey ? 'ya' : 'tidak'}</div>
+                        </div>
+                        <div class="source-actions">
+                            <button type="button" class="secondary" data-source-validate="${escapeHtml(source.key)}" ${validateDisabled ? 'disabled' : ''}>Validasi</button>
+                            <button type="button" data-source-activate="${escapeHtml(source.key)}" ${activateDisabled ? 'disabled' : ''}>${source.key === activeSourceKey ? 'Sedang Aktif' : 'Aktifkan'}</button>
+                        </div>
+                        ${validationMarkup}
+                    </div>
+                `;
+            }).join('');
+
+            const issueMarkup = registryIssues.length
+                ? `<ul class="source-registry-issues">${registryIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
+                : '';
+
+            return `
+                <div class="source-switcher">
+                    <div class="source-switcher-header">
+                        <div>
+                            <h3>Mode Sumber Data</h3>
+                            <p>Pindah dari demo ke produksi cukup lewat validasi lalu aktivasi. Data lama tetap dipertahankan bila aktivasi gagal.</p>
+                        </div>
+                    </div>
+                    <div class="source-grid">${cards || '<div class="mini-note">Belum ada sumber data yang tersedia.</div>'}</div>
+                    ${issueMarkup}
+                </div>
+            `;
+        }
+
+        function renderDataSourceControl() {
+            ui.dataSourceControl.innerHTML = buildDataSourceControlMarkup(appState.syncStatus, appState.dataSourceContract);
+            ui.dataSourceControl.querySelectorAll('[data-source-validate]').forEach(button => {
+                button.addEventListener('click', () => runSourceValidation(button.getAttribute('data-source-validate')));
+            });
+            ui.dataSourceControl.querySelectorAll('[data-source-activate]').forEach(button => {
+                button.addEventListener('click', () => runSourceActivation(button.getAttribute('data-source-activate')));
+            });
+        }
+
+        async function runSourceValidation(sourceKey) {
+            appState.sourceActionPending = true;
+            renderDataSourceControl();
+            try {
+                const payload = await fetchJson('/api/data-source/validate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({sourceKey}),
+                });
+                appState.sourceValidation[sourceKey] = payload;
+                appState.syncStatus = payload.syncStatus || appState.syncStatus;
+                renderOperationalStatus();
+                renderDataSourceControl();
+                showToast(payload.message || 'Validasi sumber data selesai.');
+            } catch (error) {
+                showToast(error.message || 'Validasi sumber data gagal.', 'error');
+            } finally {
+                appState.sourceActionPending = false;
+                renderDataSourceControl();
+            }
+        }
+
+        async function runSourceActivation(sourceKey) {
+            appState.sourceActionPending = true;
+            renderDataSourceControl();
+            try {
+                const response = await fetch('/api/data-source/activate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({sourceKey}),
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (handleUnauthorizedResponse(response, payload)) {
+                    return;
+                }
+                appState.syncStatus = payload.syncStatus || appState.syncStatus;
+                if (payload.reviewContext) {
+                    appState.reviewContext = payload.reviewContext;
+                }
+                if (!response.ok) {
+                    appState.sourceValidation[sourceKey] = payload;
+                    renderOperationalStatus();
+                    renderDataSourceControl();
+                    showToast(payload.message || payload.error || 'Aktivasi sumber data gagal.', 'error');
+                    return;
+                }
+                appState.sourceValidation[sourceKey] = payload;
+                appState.dataSourceContract = { ...(appState.dataSourceContract || {}), activeSourceKey: sourceKey };
+                renderOperationalStatus();
+                renderDataSourceControl();
+                showToast(payload.message || 'Sumber data berhasil diaktifkan.');
+            } catch (error) {
+                showToast(error.message || 'Aktivasi sumber data gagal.', 'error');
+            } finally {
+                appState.sourceActionPending = false;
+                renderDataSourceControl();
+            }
         }
 
         function escapeHtml(text) {
@@ -1200,11 +1358,13 @@
                     appState.statusPollIntervalMs = configData.statusPollIntervalMs || 1500;
                     appState.reviewContext = configData.reviewContext || null;
                     appState.syncStatus = configData.syncStatus || null;
+                    appState.dataSourceContract = configData.dataSourceContract || null;
                     const periods = periodData.periods || [];
                     const defaultStart = periods[0] ? periods[0].start.slice(0, 10) : new Date().toISOString().slice(0, 10);
                     const defaultEnd = periods[0] ? periods[0].end.slice(0, 10) : defaultStart;
                     initializeDatePickers(defaultStart, defaultEnd);
                     renderOperationalStatus();
+                    renderDataSourceControl();
 
                     ui.loader.classList.add('hidden');
                     ui.configStep.classList.remove('hidden');
@@ -1334,15 +1494,17 @@
             ui.jobStatus.classList.remove('hidden');
         }
 
-        function showToast(message) {
+        function showToast(message, variant = 'success') {
             if (appState.toastTimer) {
                 clearTimeout(appState.toastTimer);
                 appState.toastTimer = null;
             }
             ui.toastNotification.textContent = message;
+            ui.toastNotification.classList.toggle('is-error', variant === 'error');
             ui.toastNotification.classList.remove('hidden');
             appState.toastTimer = setTimeout(() => {
                 ui.toastNotification.classList.add('hidden');
+                ui.toastNotification.classList.remove('is-error');
                 ui.toastNotification.textContent = '';
                 appState.toastTimer = null;
             }, 5000);
@@ -1354,6 +1516,7 @@
                 appState.toastTimer = null;
             }
             ui.toastNotification.classList.add('hidden');
+            ui.toastNotification.classList.remove('is-error');
             ui.toastNotification.textContent = '';
         }
 
@@ -1512,6 +1675,7 @@
                     }
                     appState.syncStatus = data.syncStatus || appState.syncStatus;
                     renderOperationalStatus();
+                    renderDataSourceControl();
                     showToast('Sinkronisasi data selesai. Preview berikutnya akan memakai data terbaru.');
                 })
                 .catch(error => {

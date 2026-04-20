@@ -53,6 +53,7 @@ class DashboardOperationRouteTest(unittest.TestCase):
         cls._tmpdir = tempfile.mkdtemp(prefix="cashin-dashboard-ops-")
         os.environ["JOB_STATE_DB_PATH"] = os.path.join(cls._tmpdir, "jobs.db")
         os.environ["REPORT_ARTIFACTS_DIR"] = os.path.join(cls._tmpdir, "artifacts")
+        os.environ["DATA_SOURCE_ACTIVE_STATE_PATH"] = os.path.join(cls._tmpdir, "active-source.json")
         os.environ["APP_SECRET_KEY"] = "test-secret-key"
         os.environ["SESSION_COOKIE_SECURE"] = "false"
         os.environ["DATA_REFRESH_INTERVAL_SECONDS"] = "0"
@@ -97,12 +98,36 @@ class DashboardOperationRouteTest(unittest.TestCase):
         config_payload = config_response.get_json()
         self.assertIn("syncStatus", config_payload)
         self.assertIn("financialData", config_payload["syncStatus"])
+        self.assertIn("dataSourceContract", config_payload)
+        self.assertEqual(config_payload["dataSourceContract"]["activeSourceKey"], "demo")
 
         health_response = self.client.get("/health")
         self.assertEqual(health_response.status_code, 200)
         health_payload = health_response.get_json()
         self.assertIn("syncStatus", health_payload)
         self.assertIn("cashOutSource", health_payload["syncStatus"])
+
+    def test_data_source_validate_and_activate_demo(self):
+        validate_response = self.client.post(
+            "/api/data-source/validate",
+            json={"sourceKey": "demo"},
+        )
+        self.assertEqual(validate_response.status_code, 200)
+        validate_payload = validate_response.get_json()
+        self.assertTrue(validate_payload["ready"])
+        self.assertEqual(validate_payload["source"]["key"], "demo")
+
+        activate_response = self.client.post(
+            "/api/data-source/activate",
+            json={"sourceKey": "demo"},
+        )
+        self.assertEqual(activate_response.status_code, 200)
+        activate_payload = activate_response.get_json()
+        self.assertTrue(activate_payload["activated"])
+        self.assertEqual(
+            activate_payload["syncStatus"]["financialData"]["activeSourceKey"],
+            "demo",
+        )
 
     def test_drilldown_endpoints_return_operational_payload(self):
         start_date = "2026-04-01T00:00:00"
