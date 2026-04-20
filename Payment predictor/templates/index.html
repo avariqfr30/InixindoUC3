@@ -277,6 +277,7 @@
 
     <script src="{{ url_for('static', filename='vendor/flatpickr/flatpickr.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/quill/quill.min.js') }}"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
         const ui = {
             loader: document.getElementById('loader'),
@@ -1619,17 +1620,71 @@
                 });
         }
         
-        ui.btnGenerate.onclick = () => {
+        async function captureDashboardScreenshots() {
+            const screenshots = [];
+            const dashboardEl = document.getElementById('cash-health-dashboard');
+            if (!dashboardEl || !appState.horizonSnapshot || typeof html2canvas === 'undefined') {
+                return screenshots;
+            }
+            const horizonKeys = ['short_term', 'mid_term', 'long_term'];
+            const originalMode = appState.dashboardMode;
+            for (const key of horizonKeys) {
+                const forecast = appState.horizonSnapshot.forecasts ? appState.horizonSnapshot.forecasts[key] : null;
+                if (!forecast || !forecast.dashboard_snapshot) {
+                    continue;
+                }
+                appState.dashboardMode = key;
+                renderDashboard();
+                await new Promise(resolve => setTimeout(resolve, 120));
+                try {
+                    const canvas = await html2canvas(dashboardEl, {
+                        scale: 2,
+                        useCORS: true,
+                        backgroundColor: '#ffffff',
+                        logging: false,
+                    });
+                    const dataUrl = canvas.toDataURL('image/png');
+                    const base64 = dataUrl.split(',')[1];
+                    if (base64) {
+                        screenshots.push({
+                            horizon_key: key,
+                            horizon_label: forecast.dashboard_snapshot.horizon_label || key,
+                            image_base64: base64,
+                        });
+                    }
+                } catch (err) {
+                    console.warn('Dashboard capture failed for ' + key, err);
+                }
+            }
+            appState.dashboardMode = originalMode;
+            renderDashboard();
+            return screenshots;
+        }
+
+        ui.btnGenerate.onclick = async () => {
             syncNotesValue();
             clearToast();
             ui.btnGenerate.disabled = true; 
             document.getElementById('spinner').classList.add('active');
+            updateJobStatus('Menangkap visual dashboard...');
+
+            let dashboardScreenshots = [];
+            try {
+                dashboardScreenshots = await captureDashboardScreenshots();
+            } catch (err) {
+                console.warn('Dashboard screenshot capture failed:', err);
+            }
+
             updateJobStatus('Permintaan Anda sedang dikirim ke sistem analisis.');
-            
+
+            const enrichedPayload = appState.analysisPayload
+                ? { ...appState.analysisPayload, dashboard_screenshots: dashboardScreenshots }
+                : { dashboard_screenshots: dashboardScreenshots };
+
             const payload = {
                 notes: ui.inputNotes.value,
                 analysis_context: appState.analysisContext,
-                analysis_payload: appState.analysisPayload
+                analysis_payload: enrichedPayload
             };
 
             fetch('/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })

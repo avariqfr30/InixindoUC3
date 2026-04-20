@@ -1,3 +1,4 @@
+import base64
 import copy
 import concurrent.futures
 import io
@@ -3723,12 +3724,14 @@ class ReportGenerator:
         document = Document()
         DocumentBuilder.create_cover(document, DEFAULT_COLOR)
         DocumentBuilder.add_table_of_contents(document)
+        self._embed_dashboard_screenshots(document, analysis_payload, DEFAULT_COLOR)
         DocumentBuilder.process_content(
             document,
             generated_content,
             DEFAULT_COLOR,
         )
 
+        dashboard_screenshots_included = self._has_dashboard_screenshots(analysis_payload)
         run_metadata = {
             "fallback_used": fallback_used,
             "quality_gate_passed": completeness_result["passed"],
@@ -3741,8 +3744,75 @@ class ReportGenerator:
                 and "osint tidak dipakai" not in macro_osint.lower()
                 and "tidak ada sinyal eksternal yang cukup sebanding" not in macro_osint.lower()
             ),
-            "visuals_included": any(marker in generated_content for marker in ("[[CHART:", "[[FLOW:", "[[DASHBOARD:")),
+            "visuals_included": any(marker in generated_content for marker in ("[[CHART:", "[[FLOW:", "[[DASHBOARD:")) or dashboard_screenshots_included,
+            "dashboard_screenshots_included": dashboard_screenshots_included,
             "report_length": len(generated_content),
         }
 
         return document, "Inixindo_Cashflow_Intelligence_Report", run_metadata
+
+    @staticmethod
+    def _has_dashboard_screenshots(analysis_payload):
+        payload = ReportGenerator._normalize_analysis_payload(analysis_payload)
+        screenshots = payload.get("dashboard_screenshots")
+        return bool(screenshots and isinstance(screenshots, list) and len(screenshots) > 0)
+
+    @staticmethod
+    def _embed_dashboard_screenshots(document, analysis_payload, theme_color):
+        payload = ReportGenerator._normalize_analysis_payload(analysis_payload)
+        screenshots = payload.get("dashboard_screenshots")
+        if not screenshots or not isinstance(screenshots, list):
+            return
+
+        valid_screenshots = [
+            shot for shot in screenshots
+            if isinstance(shot, dict) and shot.get("image_base64")
+        ]
+        if not valid_screenshots:
+            return
+
+        heading = document.add_heading("Dashboard Cashflow Snapshot", level=1)
+        for run in heading.runs:
+            run.font.color.rgb = RGBColor(*theme_color)
+
+        intro = document.add_paragraph(
+            "Visual berikut diambil langsung dari dashboard operasional pada saat laporan diminta. "
+            "Setiap horizon menampilkan kondisi kas, runway, coverage ratio, prediksi saldo, "
+            "distribusi delay pembayaran, dan daftar akun overdue utama."
+        )
+        intro.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        for run in intro.runs:
+            run.italic = True
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor(80, 80, 80)
+
+        for shot in valid_screenshots:
+            try:
+                image_bytes = base64.b64decode(shot["image_base64"])
+                image_stream = io.BytesIO(image_bytes)
+                horizon_label = shot.get("horizon_label") or shot.get("horizon_key") or "Dashboard"
+
+                image_paragraph = document.add_paragraph()
+                image_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                image_paragraph.add_run().add_picture(image_stream, width=Inches(6.8))
+
+                try:
+                    caption = document.add_paragraph(
+                        f"Dashboard snapshot — {horizon_label}",
+                        style="Caption",
+                    )
+                except KeyError:
+                    caption = document.add_paragraph(
+                        f"Dashboard snapshot — {horizon_label}"
+                    )
+                caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in caption.runs:
+                    run.italic = True
+                    run.font.size = Pt(9)
+                    run.font.color.rgb = RGBColor(100, 100, 100)
+
+            except Exception as exc:
+                logger.warning("Failed to embed dashboard screenshot for %s: %s", shot.get("horizon_key"), exc)
+                continue
+
+        document.add_page_break()
