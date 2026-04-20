@@ -577,8 +577,22 @@ def build_internal_data_summary(data_frame, explicit_field_map=None, extraction_
 
     fields = []
     missing_required = []
+    low_confidence_fields = []
     for canonical_key, field_spec in INTERNAL_API_FIELD_SPECS.items():
         mapped_source = resolved_columns.get(canonical_key)
+
+        # Compute inference confidence when the column was not explicitly configured
+        inference_confidence = None
+        needs_review = False
+        explicitly_mapped = canonical_key in explicit_field_map and mapped_source is not None
+        if mapped_source and data_frame is not None and not explicitly_mapped:
+            inference_confidence = round(
+                _semantic_score(mapped_source, data_frame[mapped_source], canonical_key), 2
+            )
+            needs_review = inference_confidence < 0.7
+            if needs_review:
+                low_confidence_fields.append(canonical_key)
+
         field_entry = {
             "key": canonical_key,
             "label": field_spec["label"],
@@ -588,6 +602,9 @@ def build_internal_data_summary(data_frame, explicit_field_map=None, extraction_
             "example": field_spec["example"],
             "mappedSource": mapped_source,
             "resolvedLabel": field_spec["label"] if mapped_source else None,
+            "explicitlyMapped": explicitly_mapped,
+            "inferenceConfidence": inference_confidence,
+            "needsReview": needs_review,
         }
         fields.append(field_entry)
         if field_spec["required"] and not mapped_source:
@@ -596,6 +613,7 @@ def build_internal_data_summary(data_frame, explicit_field_map=None, extraction_
     return {
         "availableColumns": available_columns,
         "missingRequiredFields": missing_required,
+        "lowConfidenceFields": low_confidence_fields,
         "resolvedColumns": {
             canonical_key: INTERNAL_API_FIELD_SPECS[canonical_key]["label"]
             for canonical_key in resolved_columns

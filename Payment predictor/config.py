@@ -72,6 +72,21 @@ INTERNAL_API_VERIFY_SSL = os.getenv("INTERNAL_API_VERIFY_SSL", "true").strip().l
     "no",
 }
 
+# Consolidated config: point to a single JSON file instead of 17 env vars
+INTERNAL_API_CONFIG_FILE = os.getenv("INTERNAL_API_CONFIG_FILE", "").strip()
+
+# Pagination support
+INTERNAL_API_PAGINATION_MODE = os.getenv("INTERNAL_API_PAGINATION_MODE", "").strip().lower()  # offset, cursor, link, or empty
+INTERNAL_API_PAGE_SIZE = int(os.getenv("INTERNAL_API_PAGE_SIZE", "0"))  # 0 = disabled
+INTERNAL_API_PAGINATION_CURSOR_KEY = os.getenv("INTERNAL_API_PAGINATION_CURSOR_KEY", "").strip()
+INTERNAL_API_PAGINATION_OFFSET_PARAM = os.getenv("INTERNAL_API_PAGINATION_OFFSET_PARAM", "offset").strip()
+INTERNAL_API_PAGINATION_LIMIT_PARAM = os.getenv("INTERNAL_API_PAGINATION_LIMIT_PARAM", "limit").strip()
+INTERNAL_API_PAGINATION_MAX_PAGES = int(os.getenv("INTERNAL_API_PAGINATION_MAX_PAGES", "50"))
+
+# Retry config
+INTERNAL_API_MAX_RETRIES = int(os.getenv("INTERNAL_API_MAX_RETRIES", "3"))
+INTERNAL_API_RETRY_BACKOFF_BASE = float(os.getenv("INTERNAL_API_RETRY_BACKOFF_BASE", "1.0"))
+
 CASH_OUT_API_ENDPOINT_URL = os.getenv("CASH_OUT_API_ENDPOINT_URL", "").strip()
 CASH_OUT_API_METHOD = os.getenv("CASH_OUT_API_METHOD", "GET").strip().upper()
 CASH_OUT_API_RECORDS_KEY = os.getenv("CASH_OUT_API_RECORDS_KEY", "").strip()
