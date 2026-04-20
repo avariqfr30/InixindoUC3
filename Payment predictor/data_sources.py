@@ -43,14 +43,30 @@ def _build_demo_profile(csv_path):
     }
 
 
-def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base_url, dataset_path):
-    endpoint_url = str(endpoint_url or "").strip()
-    base_url = str(base_url or "").strip()
-    dataset_path = str(dataset_path or "").strip()
+def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base_url, dataset_path, config_file_path=""):
+    # Load consolidated config file if provided (single-file quickstart)
+    file_defaults = {}
+    if config_file_path:
+        config_path = Path(config_file_path).expanduser()
+        if config_path.exists():
+            try:
+                file_defaults = json.loads(config_path.read_text(encoding="utf-8"))
+                if not isinstance(file_defaults, dict):
+                    file_defaults = {}
+            except (json.JSONDecodeError, OSError):
+                file_defaults = {}
+
+    # Env vars override file values; file values override built-in defaults
+    endpoint_url = str(endpoint_url or file_defaults.get("url") or "").strip()
+    base_url = str(base_url or file_defaults.get("base_url") or "").strip()
+    dataset_path = str(dataset_path or file_defaults.get("path") or "").strip()
     if not endpoint_url and not base_url:
         return None
 
-    method = os.getenv(f"{prefix}_METHOD", "GET").strip().upper()
+    file_auth = file_defaults.get("auth") or {}
+    file_pagination = file_defaults.get("pagination") or {}
+    file_retry = file_defaults.get("retry") or {}
+    method = os.getenv(f"{prefix}_METHOD", file_defaults.get("method") or "GET").strip().upper()
     profile = {
         "key": key,
         "name": name,
@@ -62,24 +78,36 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
             "base_url": base_url,
             "path": dataset_path,
             "method": method or "GET",
-            "timeout": int(os.getenv(f"{prefix}_TIMEOUT", "20")),
-            "verify_ssl": os.getenv(f"{prefix}_VERIFY_SSL", "true").strip().lower() not in {"0", "false", "no"},
-            "records_key": os.getenv(f"{prefix}_RECORDS_KEY", "").strip(),
+            "timeout": int(os.getenv(f"{prefix}_TIMEOUT", str(file_defaults.get("timeout") or 20))),
+            "verify_ssl": os.getenv(f"{prefix}_VERIFY_SSL", str(file_defaults.get("verify_ssl", "true"))).strip().lower() not in {"0", "false", "no"},
+            "records_key": os.getenv(f"{prefix}_RECORDS_KEY", file_defaults.get("records_key") or "").strip(),
         },
         "auth": {
-            "bearer_token": os.getenv(f"{prefix}_AUTH_TOKEN", "").strip(),
-            "basic_username": os.getenv(f"{prefix}_BASIC_USERNAME", "").strip(),
-            "basic_password": os.getenv(f"{prefix}_BASIC_PASSWORD", "").strip(),
+            "bearer_token": os.getenv(f"{prefix}_AUTH_TOKEN", "").strip() or str(file_auth.get("bearer_token") or (file_auth.get("basic") or {}).get("token") or "").strip(),
+            "basic_username": os.getenv(f"{prefix}_BASIC_USERNAME", "").strip() or str(file_auth.get("basic_username") or (file_auth.get("basic") or {}).get("username") or "").strip(),
+            "basic_password": os.getenv(f"{prefix}_BASIC_PASSWORD", "").strip() or str(file_auth.get("basic_password") or (file_auth.get("basic") or {}).get("password") or ""),
         },
         "request": {
-            "headers": _parse_json_object(os.getenv(f"{prefix}_HEADERS_JSON", "{}"), f"{prefix}_HEADERS_JSON"),
+            "headers": _parse_json_object(os.getenv(f"{prefix}_HEADERS_JSON", ""), f"{prefix}_HEADERS_JSON") or (file_defaults.get("headers") if isinstance(file_defaults.get("headers"), dict) else {}),
             "query_params": _parse_json_object(
-                os.getenv(f"{prefix}_QUERY_PARAMS_JSON", "{}"),
+                os.getenv(f"{prefix}_QUERY_PARAMS_JSON", ""),
                 f"{prefix}_QUERY_PARAMS_JSON",
-            ),
-            "body": _parse_optional_json_value(os.getenv(f"{prefix}_BODY_JSON", ""), f"{prefix}_BODY_JSON"),
+            ) or (file_defaults.get("query_params") if isinstance(file_defaults.get("query_params"), dict) else {}),
+            "body": _parse_optional_json_value(os.getenv(f"{prefix}_BODY_JSON", ""), f"{prefix}_BODY_JSON") or file_defaults.get("body"),
         },
-        "field_map": _parse_json_object(os.getenv(f"{prefix}_FIELD_MAP_JSON", "{}"), f"{prefix}_FIELD_MAP_JSON"),
+        "field_map": _parse_json_object(os.getenv(f"{prefix}_FIELD_MAP_JSON", ""), f"{prefix}_FIELD_MAP_JSON") or (file_defaults.get("field_map") if isinstance(file_defaults.get("field_map"), dict) else {}),
+        "pagination": {
+            "mode": os.getenv(f"{prefix}_PAGINATION_MODE", file_pagination.get("mode") or "").strip().lower(),
+            "page_size": int(os.getenv(f"{prefix}_PAGE_SIZE", str(file_pagination.get("page_size") or 0))),
+            "cursor_key": os.getenv(f"{prefix}_PAGINATION_CURSOR_KEY", file_pagination.get("cursor_key") or "").strip(),
+            "offset_param": os.getenv(f"{prefix}_PAGINATION_OFFSET_PARAM", file_pagination.get("offset_param") or "offset").strip(),
+            "limit_param": os.getenv(f"{prefix}_PAGINATION_LIMIT_PARAM", file_pagination.get("limit_param") or "limit").strip(),
+            "max_pages": int(os.getenv(f"{prefix}_PAGINATION_MAX_PAGES", str(file_pagination.get("max_pages") or 50))),
+        },
+        "retry": {
+            "max_retries": int(os.getenv(f"{prefix}_MAX_RETRIES", str(file_retry.get("max_retries") or 3))),
+            "backoff_base": float(os.getenv(f"{prefix}_RETRY_BACKOFF_BASE", str(file_retry.get("backoff_base") or 1.0))),
+        },
     }
     return profile
 
@@ -144,6 +172,7 @@ def load_available_source_profiles(
     internal_api_dataset_path,
     demo_profile_path="",
     production_profile_path="",
+    config_file_path="",
 ):
     profiles = {}
     issues = []
@@ -170,6 +199,7 @@ def load_available_source_profiles(
                 endpoint_url=internal_api_endpoint_url,
                 base_url=internal_api_base_url,
                 dataset_path=internal_api_dataset_path,
+                config_file_path=config_file_path,
             )
         )
         if production_profile:

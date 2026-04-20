@@ -574,6 +574,7 @@ def create_app():
         SMART_SUGGESTIONS,
     )
     from core import CashOutStore, KnowledgeBase, ReportGenerator, Researcher
+    from data_sources import summarize_source_profile
     from forecast_engine import CashflowForecaster, parse_idr_amount
 
     app = Flask(__name__)
@@ -609,6 +610,20 @@ def create_app():
         interval_seconds=DATA_REFRESH_INTERVAL_SECONDS,
     )
     refresh_coordinator.start()
+
+    # Boot-time endpoint validation (non-blocking, logs warnings)
+    if knowledge_base.internal_api_client and knowledge_base.internal_api_client.is_configured():
+        ok, msg = knowledge_base.internal_api_client.validate_endpoint_url()
+        if ok:
+            logger.info("Boot check: %s", msg)
+        else:
+            logger.warning("Boot check: %s", msg)
+    if cash_out_store.client.is_configured():
+        ok, msg = cash_out_store.client.validate_endpoint_url()
+        if ok:
+            logger.info("Boot check (cash-out): %s", msg)
+        else:
+            logger.warning("Boot check (cash-out): %s", msg)
 
     app.config["knowledge_base"] = knowledge_base
     app.config["cash_out_store"] = cash_out_store
@@ -1042,8 +1057,63 @@ def create_app():
     def validate_data_source():
         payload = request.get_json(silent=True) or {}
         source_key = str(payload.get("sourceKey") or "").strip().lower()
+        preview_mode = bool(payload.get("preview"))
+        preview_rows = int(payload.get("previewRows") or 5)
         if not source_key:
             return jsonify({"error": "sourceKey wajib diisi."}), 400
+
+        if preview_mode:
+            # Dry-run: fetch limited records to verify mapping without loading full dataset
+            try:
+                active_kb = current_app.config["knowledge_base"]
+                active_kb._reload_source_registry()
+                profile = active_kb.source_registry.get(source_key)
+                if not profile:
+                    return jsonify({"error": f"Sumber data `{source_key}` tidak tersedia."}), 404
+
+                from core import InternalAPIClient
+                from data_contract import build_internal_data_summary, normalize_financial_dataframe
+                if profile.get("type") == "json_api":
+                    client = InternalAPIClient(source_profile=profile)
+                    records, extraction_summary = client.fetch_records(preview_limit=preview_rows)
+                    raw_df = active_kb._normalize_records(records)
+                    if raw_df.empty:
+                        return jsonify({
+                            "preview": True,
+                            "ready": False,
+                            "message": "Preview fetch returned no records.",
+                            "recordCount": 0,
+                            "syncStatus": _build_sync_snapshot(),
+                        })
+                    _, data_summary = normalize_financial_dataframe(
+                        raw_df, explicit_field_map=client.field_map,
+                    )
+                    sample_records = raw_df.head(preview_rows).to_dict(orient="records")
+                    return jsonify({
+                        "preview": True,
+                        "ready": bool(data_summary.get("isReady")),
+                        "message": "Preview berhasil." if data_summary.get("isReady") else "Field wajib belum lengkap.",
+                        "recordCount": len(records),
+                        "previewRows": len(sample_records),
+                        "sampleRecords": sample_records,
+                        "contractSummary": data_summary,
+                        "extractionSummary": extraction_summary,
+                        "syncStatus": _build_sync_snapshot(),
+                    })
+                else:
+                    return jsonify({
+                        "preview": True,
+                        "message": "Preview hanya tersedia untuk sumber tipe json_api.",
+                        "syncStatus": _build_sync_snapshot(),
+                    })
+            except Exception as exc:
+                return jsonify({
+                    "preview": True,
+                    "ready": False,
+                    "message": str(exc),
+                    "syncStatus": _build_sync_snapshot(),
+                }), 400
+
         try:
             validation = current_app.config["knowledge_base"].validate_source(source_key)
         except ValueError as exc:
@@ -1075,6 +1145,45 @@ def create_app():
         if not activation.get("activated"):
             return jsonify(response_payload), 409
         return jsonify(response_payload)
+
+    @app.route("/api/data-source/reload-profiles", methods=["POST"])
+    def reload_data_source_profiles():
+        """Reload source profiles from disk/env without restarting the app."""
+        try:
+            active_kb = current_app.config["knowledge_base"]
+            active_kb._reload_source_registry()
+            return jsonify({
+                "reloaded": True,
+                "activeSourceKey": active_kb.active_source_key,
+                "availableSources": [
+                    summarize_source_profile(profile)
+                    for _, profile in sorted(active_kb.source_registry.items())
+                ],
+                "registryIssues": list(active_kb.source_registry_issues),
+                "syncStatus": _build_sync_snapshot(),
+            })
+        except Exception as exc:
+            return jsonify({"reloaded": False, "error": str(exc)}), 500
+
+    @app.route("/api/data-source/check-connectivity", methods=["POST"])
+    def check_data_source_connectivity():
+        """Check if the configured API endpoint is reachable."""
+        payload = request.get_json(silent=True) or {}
+        source_key = str(payload.get("sourceKey") or "").strip().lower()
+
+        active_kb = current_app.config["knowledge_base"]
+        active_kb._reload_source_registry()
+        profile = active_kb.source_registry.get(source_key)
+        if not profile:
+            return jsonify({"error": f"Sumber data `{source_key}` tidak tersedia."}), 404
+
+        if profile.get("type") != "json_api":
+            return jsonify({"reachable": True, "message": "Sumber CSV lokal tidak memerlukan koneksi jaringan."})
+
+        from core import InternalAPIClient
+        client = InternalAPIClient(source_profile=profile)
+        ok, message = client.validate_endpoint_url()
+        return jsonify({"reachable": ok, "message": message})
 
     # ==================== CASHFLOW FORECAST ENDPOINTS ====================
     

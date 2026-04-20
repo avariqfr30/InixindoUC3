@@ -9,6 +9,7 @@ import re
 import statistics
 import textwrap
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -61,13 +62,22 @@ from config import (
     INTERNAL_API_BASIC_PASSWORD,
     INTERNAL_API_BASIC_USERNAME,
     INTERNAL_API_BODY_JSON,
+    INTERNAL_API_CONFIG_FILE,
     INTERNAL_API_DATASET_PATH,
     INTERNAL_API_ENDPOINT_URL,
     INTERNAL_API_FIELD_MAP_JSON,
     INTERNAL_API_HEADERS_JSON,
+    INTERNAL_API_MAX_RETRIES,
     INTERNAL_API_METHOD,
+    INTERNAL_API_PAGE_SIZE,
+    INTERNAL_API_PAGINATION_CURSOR_KEY,
+    INTERNAL_API_PAGINATION_LIMIT_PARAM,
+    INTERNAL_API_PAGINATION_MAX_PAGES,
+    INTERNAL_API_PAGINATION_MODE,
+    INTERNAL_API_PAGINATION_OFFSET_PARAM,
     INTERNAL_API_QUERY_PARAMS_JSON,
     INTERNAL_API_RECORDS_KEY,
+    INTERNAL_API_RETRY_BACKOFF_BASE,
     INTERNAL_API_TIMEOUT,
     INTERNAL_API_VERIFY_SSL,
     LLM_MODEL,
@@ -143,10 +153,24 @@ class InternalAPIClient:
                 "body": self._parse_optional_json_value(INTERNAL_API_BODY_JSON, "body"),
             },
             "field_map": parse_internal_api_field_map(INTERNAL_API_FIELD_MAP_JSON),
+            "pagination": {
+                "mode": INTERNAL_API_PAGINATION_MODE,
+                "page_size": INTERNAL_API_PAGE_SIZE,
+                "cursor_key": INTERNAL_API_PAGINATION_CURSOR_KEY,
+                "offset_param": INTERNAL_API_PAGINATION_OFFSET_PARAM,
+                "limit_param": INTERNAL_API_PAGINATION_LIMIT_PARAM,
+                "max_pages": INTERNAL_API_PAGINATION_MAX_PAGES,
+            },
+            "retry": {
+                "max_retries": INTERNAL_API_MAX_RETRIES,
+                "backoff_base": INTERNAL_API_RETRY_BACKOFF_BASE,
+            },
         }
         endpoint = profile.get("endpoint", {}) or {}
         auth = profile.get("auth", {}) or {}
         request_config = profile.get("request", {}) or {}
+        pagination_config = profile.get("pagination", {}) or {}
+        retry_config = profile.get("retry", {}) or {}
 
         self.source_profile = profile
         self.endpoint_url = str(endpoint.get("url") or "").strip()
@@ -169,6 +193,18 @@ class InternalAPIClient:
         self.body = request_config.get("body")
         self.query_params = dict(request_config.get("query_params") or {})
         self.field_map = parse_internal_api_field_map(profile.get("field_map") or {})
+
+        # Pagination config
+        self.pagination_mode = str(pagination_config.get("mode") or "").strip().lower()
+        self.page_size = int(pagination_config.get("page_size") or 0)
+        self.pagination_cursor_key = str(pagination_config.get("cursor_key") or "").strip()
+        self.pagination_offset_param = str(pagination_config.get("offset_param") or "offset").strip()
+        self.pagination_limit_param = str(pagination_config.get("limit_param") or "limit").strip()
+        self.pagination_max_pages = int(pagination_config.get("max_pages") or 50)
+
+        # Retry config
+        self.max_retries = max(int(retry_config.get("max_retries") or 3), 1)
+        self.retry_backoff_base = max(float(retry_config.get("backoff_base") or 1.0), 0.1)
 
     @staticmethod
     def _parse_json_object(raw_value, label):
@@ -202,10 +238,27 @@ class InternalAPIClient:
             return self.endpoint_url
         return urljoin(f"{self.base_url}/", self.dataset_path.lstrip("/"))
 
-    def fetch_records(self):
+    def validate_endpoint_url(self):
+        """Boot-time connectivity pre-check. Returns (ok, message)."""
         if not self.is_configured():
-            raise RuntimeError("Internal API endpoint is not configured.")
+            return False, "Internal API endpoint is not configured (INTERNAL_API_ENDPOINT_URL or INTERNAL_API_BASE_URL is empty)."
+        dataset_url = self.get_dataset_url()
+        parsed = urlparse(dataset_url)
+        if parsed.scheme not in {"http", "https"}:
+            return False, f"Internal API URL has invalid scheme '{parsed.scheme}': {dataset_url}"
+        if not parsed.hostname:
+            return False, f"Internal API URL has no hostname: {dataset_url}"
+        try:
+            requests.head(dataset_url, timeout=5, verify=self.verify_ssl)
+            return True, f"Internal API endpoint is reachable: {dataset_url}"
+        except requests.ConnectionError:
+            return False, f"Internal API endpoint is unreachable (connection refused or DNS failure): {dataset_url}"
+        except requests.Timeout:
+            return False, f"Internal API endpoint timed out after 5s: {dataset_url}"
+        except Exception as exc:
+            return False, f"Internal API endpoint pre-check failed: {dataset_url} — {exc}"
 
+    def _build_request_kwargs(self, extra_params=None):
         headers = {"Accept": "application/json"}
         headers.update(self.headers)
         auth = None
@@ -214,10 +267,13 @@ class InternalAPIClient:
         if self.auth_token:
             headers.setdefault("Authorization", f"Bearer {self.auth_token}")
 
-        dataset_url = self.get_dataset_url()
+        params = dict(self.query_params)
+        if extra_params:
+            params.update(extra_params)
+
         request_kwargs = {
             "headers": headers,
-            "params": self.query_params,
+            "params": params,
             "timeout": self.timeout,
             "verify": self.verify_ssl,
         }
@@ -227,17 +283,79 @@ class InternalAPIClient:
             request_kwargs["json"] = self.body
             headers.setdefault("Content-Type", "application/json")
 
-        response = requests.request(
-            self.method,
-            dataset_url,
-            **request_kwargs,
-        )
-        response.raise_for_status()
+        return request_kwargs, auth
 
-        payload = response.json()
+    def _execute_request_with_retry(self, dataset_url, request_kwargs):
+        """Execute HTTP request with exponential backoff retry."""
+        last_exc = None
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.request(
+                    self.method,
+                    dataset_url,
+                    **request_kwargs,
+                )
+                if response.status_code >= 500 and attempt < self.max_retries - 1:
+                    logger.warning(
+                        "Internal API returned HTTP %s on attempt %s/%s for %s %s. Retrying...",
+                        response.status_code, attempt + 1, self.max_retries, self.method, dataset_url,
+                    )
+                    time.sleep(self.retry_backoff_base * (2 ** attempt))
+                    continue
+                if response.status_code >= 400:
+                    body_preview = (response.text or "")[:300]
+                    raise RuntimeError(
+                        f"Internal API returned HTTP {response.status_code} for {self.method} {dataset_url}. "
+                        f"Response body (truncated): {body_preview}"
+                    )
+                return response
+            except requests.ConnectionError as exc:
+                last_exc = exc
+                if attempt < self.max_retries - 1:
+                    wait = self.retry_backoff_base * (2 ** attempt)
+                    logger.warning(
+                        "Connection to %s failed on attempt %s/%s. Retrying in %.1fs...",
+                        dataset_url, attempt + 1, self.max_retries, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise RuntimeError(
+                    f"Internal API at {dataset_url} is unreachable after {self.max_retries} attempts. "
+                    f"Check INTERNAL_API_ENDPOINT_URL and network connectivity. Last error: {exc}"
+                ) from exc
+            except requests.Timeout as exc:
+                last_exc = exc
+                if attempt < self.max_retries - 1:
+                    wait = self.retry_backoff_base * (2 ** attempt)
+                    logger.warning(
+                        "Request to %s timed out on attempt %s/%s. Retrying in %.1fs...",
+                        dataset_url, attempt + 1, self.max_retries, wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise RuntimeError(
+                    f"Internal API at {dataset_url} timed out after {self.timeout}s "
+                    f"({self.max_retries} attempts). Increase INTERNAL_API_TIMEOUT or check endpoint performance."
+                ) from exc
+        raise RuntimeError(f"Internal API request failed after {self.max_retries} retries.") from last_exc
+
+    def _parse_response_payload(self, response, dataset_url):
+        """Parse and validate the JSON response, returning the raw payload."""
+        try:
+            payload = response.json()
+        except ValueError:
+            body_preview = (response.text or "")[:300]
+            raise RuntimeError(
+                f"Internal API at {dataset_url} returned non-JSON response "
+                f"(Content-Type: {response.headers.get('Content-Type', 'unknown')}). "
+                f"Body (truncated): {body_preview}"
+            )
+
         if isinstance(payload, dict) and payload.get("success") is False:
-            message = payload.get("message") or "Internal API returned an authorization or business error."
-            raise RuntimeError(message)
+            message = payload.get("message") or payload.get("error") or "unknown error"
+            raise RuntimeError(
+                f"Internal API returned a business error for {self.method} {dataset_url}: {message}"
+            )
         if (
             isinstance(payload, dict)
             and payload.get("success") is True
@@ -245,18 +363,134 @@ class InternalAPIClient:
             and payload.get("data") is None
         ):
             raise RuntimeError(
-                "Internal API returned `data: null`. The endpoint is reachable and credentials are valid, "
-                "but it still needs the correct POST payload. Set INTERNAL_API_BODY_JSON once the company "
-                "shares the required request body."
+                f"Internal API at {dataset_url} returned `data: null`. The endpoint is reachable and "
+                "credentials are valid, but it still needs the correct POST payload. "
+                "Set INTERNAL_API_BODY_JSON once the company shares the required request body."
             )
-        records, extraction_summary = extract_records_from_payload(
-            payload,
-            explicit_records_path=self.records_key or None,
-        )
+        return payload
+
+    def _fetch_single_page(self, extra_params=None):
+        """Fetch a single page of records."""
+        dataset_url = self.get_dataset_url()
+        request_kwargs, auth = self._build_request_kwargs(extra_params)
+        response = self._execute_request_with_retry(dataset_url, request_kwargs)
+        payload = self._parse_response_payload(response, dataset_url)
+        return payload, response, auth
+
+    def _is_pagination_enabled(self):
+        return self.pagination_mode in {"offset", "cursor", "link"} and self.page_size > 0
+
+    def _fetch_with_pagination(self):
+        """Fetch all records across multiple pages."""
+        dataset_url = self.get_dataset_url()
+        all_records = []
+        total_pages = 0
+
+        if self.pagination_mode == "offset":
+            offset = 0
+            for page in range(self.pagination_max_pages):
+                total_pages += 1
+                extra_params = {
+                    self.pagination_offset_param: offset,
+                    self.pagination_limit_param: self.page_size,
+                }
+                payload, response, auth = self._fetch_single_page(extra_params)
+                page_records, _ = extract_records_from_payload(
+                    payload, explicit_records_path=self.records_key or None,
+                )
+                all_records.extend(page_records)
+                if len(page_records) < self.page_size:
+                    break
+                offset += self.page_size
+
+        elif self.pagination_mode == "cursor":
+            cursor = None
+            for page in range(self.pagination_max_pages):
+                total_pages += 1
+                extra_params = {self.pagination_limit_param: self.page_size}
+                if cursor:
+                    extra_params[self.pagination_cursor_key or "cursor"] = cursor
+                payload, response, auth = self._fetch_single_page(extra_params)
+                page_records, _ = extract_records_from_payload(
+                    payload, explicit_records_path=self.records_key or None,
+                )
+                all_records.extend(page_records)
+                next_cursor = None
+                if isinstance(payload, dict):
+                    cursor_path = self.pagination_cursor_key or "next_cursor"
+                    next_cursor = payload.get(cursor_path) or payload.get("meta", {}).get(cursor_path)
+                if not next_cursor or len(page_records) < self.page_size:
+                    break
+                cursor = next_cursor
+
+        elif self.pagination_mode == "link":
+            next_url = dataset_url
+            for page in range(self.pagination_max_pages):
+                total_pages += 1
+                extra_params = {self.pagination_limit_param: self.page_size} if page == 0 else {}
+                if page == 0:
+                    payload, response, auth = self._fetch_single_page(extra_params)
+                else:
+                    request_kwargs, auth = self._build_request_kwargs()
+                    request_kwargs["params"] = {}
+                    response = self._execute_request_with_retry(next_url, request_kwargs)
+                    payload = self._parse_response_payload(response, next_url)
+                page_records, _ = extract_records_from_payload(
+                    payload, explicit_records_path=self.records_key or None,
+                )
+                all_records.extend(page_records)
+                link_header = response.headers.get("Link", "")
+                next_url = self._parse_link_next(link_header)
+                if not next_url or len(page_records) < self.page_size:
+                    break
+
+        logger.info("Pagination completed: %s records across %s pages.", len(all_records), total_pages)
+        return all_records, auth, total_pages
+
+    @staticmethod
+    def _parse_link_next(link_header):
+        """Parse RFC 5988 Link header for rel='next'."""
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            if 'rel="next"' in part or "rel='next'" in part:
+                match = re.search(r"<([^>]+)>", part)
+                if match:
+                    return match.group(1)
+        return None
+
+    def fetch_records(self, preview_limit=0):
+        if not self.is_configured():
+            raise RuntimeError(
+                "Internal API endpoint is not configured. "
+                "Set INTERNAL_API_ENDPOINT_URL or INTERNAL_API_BASE_URL."
+            )
+
+        dataset_url = self.get_dataset_url()
+
+        if self._is_pagination_enabled() and preview_limit <= 0:
+            all_records, auth, total_pages = self._fetch_with_pagination()
+            extraction_summary = {
+                "strategy": "paginated",
+                "paginationMode": self.pagination_mode,
+                "pageSize": self.page_size,
+                "totalPages": total_pages,
+                "recordCount": len(all_records),
+            }
+        else:
+            extra_params = {}
+            if preview_limit > 0 and self.page_size > 0:
+                extra_params[self.pagination_limit_param] = preview_limit
+            payload, response, auth = self._fetch_single_page(extra_params)
+            all_records, extraction_summary = extract_records_from_payload(
+                payload,
+                explicit_records_path=self.records_key or None,
+            )
+
         extraction_summary["datasetUrl"] = dataset_url
         extraction_summary["requestMethod"] = self.method
         extraction_summary["authMode"] = "basic" if auth else ("bearer" if self.auth_token else "none")
-        return records, extraction_summary
+        return all_records, extraction_summary
 
 
 class CashOutAPIClient(InternalAPIClient):
@@ -644,6 +878,7 @@ class KnowledgeBase:
             internal_api_dataset_path=INTERNAL_API_DATASET_PATH,
             demo_profile_path=DATA_SOURCE_DEMO_PROFILE_PATH,
             production_profile_path=DATA_SOURCE_PRODUCTION_PROFILE_PATH,
+            config_file_path=INTERNAL_API_CONFIG_FILE,
         )
         self.source_registry = profiles
         self.source_registry_issues = issues
