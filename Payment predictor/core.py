@@ -3755,8 +3755,13 @@ class ReportGenerator:
                     operational_snapshot,
                     before_subheading="Skenario 1-2 Kuartal",
                 )
-                for dashboard_marker in dashboard_markers:
-                    section_body = self._append_marker_block(section_body, dashboard_marker)
+                if dashboard_markers:
+                    section_body = self._inject_subheading_block(
+                        section_body,
+                        "Visual Dashboard Snapshot",
+                        "\n".join(dashboard_markers),
+                        before_subheading="Implikasi terhadap Arus Kas Masuk dan Keluar",
+                    )
             elif section_title == "Rekomendasi Preskriptif":
                 section_body = self._append_marker_block(section_body, flow_marker)
 

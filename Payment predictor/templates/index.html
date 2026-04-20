@@ -204,7 +204,6 @@
             <h2><span style="color: #CC0000;">Inixindo</span> Cashflow Intelligence</h2>
             <p class="sub">Sistem AI akan membaca <strong>histori arus kas masuk, tekanan arus kas keluar, dan karakter penagihan</strong> untuk membuat analisis yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
             <div id="config-operational-status"></div>
-            <div id="data-source-control"></div>
 
             <div class="control-grid">
                 <div>
@@ -293,7 +292,6 @@
             cashOnHandInput: document.getElementById('cash-on-hand'),
             suggestionContainer: document.getElementById('suggestion-container'),
             configOperationalStatus: document.getElementById('config-operational-status'),
-            dataSourceControl: document.getElementById('data-source-control'),
             reviewOperationalStatus: document.getElementById('review-operational-status'),
             reviewText: document.getElementById('review-text'),
             jobStatus: document.getElementById('job-status'),
@@ -316,9 +314,6 @@
             analysisContext: "",
             analysisPayload: null,
             syncStatus: null,
-            dataSourceContract: null,
-            sourceValidation: {},
-            sourceActionPending: false,
             startPicker: null,
             endPicker: null,
             dashboardMode: 'short_term',
@@ -395,139 +390,6 @@
             const markup = buildOperationalStatusMarkup(appState.syncStatus);
             ui.configOperationalStatus.innerHTML = markup;
             ui.reviewOperationalStatus.innerHTML = markup;
-        }
-
-        function buildDataSourceControlMarkup(syncStatus, dataSourceContract) {
-            const financial = syncStatus && syncStatus.financialData ? syncStatus.financialData : {};
-            const availableSources = financial.availableSources || (dataSourceContract && dataSourceContract.availableSources) || [];
-            const activeSourceKey = financial.activeSourceKey || (dataSourceContract && dataSourceContract.activeSourceKey) || '';
-            const registryIssues = financial.sourceRegistryIssues || (dataSourceContract && dataSourceContract.registryIssues) || [];
-
-            const cards = availableSources.map(source => {
-                const validation = appState.sourceValidation[source.key] || null;
-                const validationMarkup = validation ? `
-                    <div class="source-validation">
-                        <strong>${validation.ready ? 'Validasi siap' : 'Validasi gagal'}:</strong>
-                        ${escapeHtml(validation.message || '-')}
-                        ${validation.recordCount !== null && validation.recordCount !== undefined ? `<br><strong>Record:</strong> ${validation.recordCount}` : ''}
-                        ${validation.missingRequiredFields && validation.missingRequiredFields.length ? `<br><strong>Field wajib belum lengkap:</strong> ${escapeHtml(validation.missingRequiredFields.join(', '))}` : ''}
-                    </div>
-                ` : '';
-                const datasetHint = source.type === 'demo_csv'
-                    ? (source.path ? `File: ${escapeHtml(source.path)}` : 'File demo belum diatur')
-                    : (source.datasetUrl ? `${escapeHtml(source.method || 'GET')} ${escapeHtml(source.datasetUrl)}` : 'Endpoint produksi belum diatur');
-                const configuredLabel = source.configured ? 'siap dipakai' : 'belum siap';
-                const activateDisabled = appState.sourceActionPending || !source.configured || source.key === activeSourceKey;
-                const validateDisabled = appState.sourceActionPending || !source.configured;
-
-                return `
-                    <div class="source-card ${source.key === activeSourceKey ? 'active' : ''}">
-                        <div class="source-card-top">
-                            <div>
-                                <div class="source-card-title">${escapeHtml(source.name)}</div>
-                                <div class="mini-note">${escapeHtml(source.description || '')}</div>
-                            </div>
-                            <span class="source-badge">${escapeHtml(source.mode === 'production' ? 'Produksi' : 'Demo')}</span>
-                        </div>
-                        <div class="source-meta">
-                            <div><strong>Status:</strong> ${escapeHtml(configuredLabel)}</div>
-                            <div><strong>Lokasi:</strong> ${datasetHint}</div>
-                            <div><strong>Aktif saat ini:</strong> ${source.key === activeSourceKey ? 'ya' : 'tidak'}</div>
-                        </div>
-                        <div class="source-actions">
-                            <button type="button" class="secondary" data-source-validate="${escapeHtml(source.key)}" ${validateDisabled ? 'disabled' : ''}>Validasi</button>
-                            <button type="button" data-source-activate="${escapeHtml(source.key)}" ${activateDisabled ? 'disabled' : ''}>${source.key === activeSourceKey ? 'Sedang Aktif' : 'Aktifkan'}</button>
-                        </div>
-                        ${validationMarkup}
-                    </div>
-                `;
-            }).join('');
-
-            const issueMarkup = registryIssues.length
-                ? `<ul class="source-registry-issues">${registryIssues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
-                : '';
-
-            return `
-                <div class="source-switcher">
-                    <div class="source-switcher-header">
-                        <div>
-                            <h3>Mode Sumber Data</h3>
-                            <p>Pindah dari demo ke produksi cukup lewat validasi lalu aktivasi. Data lama tetap dipertahankan bila aktivasi gagal.</p>
-                        </div>
-                    </div>
-                    <div class="source-grid">${cards || '<div class="mini-note">Belum ada sumber data yang tersedia.</div>'}</div>
-                    ${issueMarkup}
-                </div>
-            `;
-        }
-
-        function renderDataSourceControl() {
-            ui.dataSourceControl.innerHTML = buildDataSourceControlMarkup(appState.syncStatus, appState.dataSourceContract);
-            ui.dataSourceControl.querySelectorAll('[data-source-validate]').forEach(button => {
-                button.addEventListener('click', () => runSourceValidation(button.getAttribute('data-source-validate')));
-            });
-            ui.dataSourceControl.querySelectorAll('[data-source-activate]').forEach(button => {
-                button.addEventListener('click', () => runSourceActivation(button.getAttribute('data-source-activate')));
-            });
-        }
-
-        async function runSourceValidation(sourceKey) {
-            appState.sourceActionPending = true;
-            renderDataSourceControl();
-            try {
-                const payload = await fetchJson('/api/data-source/validate', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({sourceKey}),
-                });
-                appState.sourceValidation[sourceKey] = payload;
-                appState.syncStatus = payload.syncStatus || appState.syncStatus;
-                renderOperationalStatus();
-                renderDataSourceControl();
-                showToast(payload.message || 'Validasi sumber data selesai.');
-            } catch (error) {
-                showToast(error.message || 'Validasi sumber data gagal.', 'error');
-            } finally {
-                appState.sourceActionPending = false;
-                renderDataSourceControl();
-            }
-        }
-
-        async function runSourceActivation(sourceKey) {
-            appState.sourceActionPending = true;
-            renderDataSourceControl();
-            try {
-                const response = await fetch('/api/data-source/activate', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({sourceKey}),
-                });
-                const payload = await response.json().catch(() => ({}));
-                if (handleUnauthorizedResponse(response, payload)) {
-                    return;
-                }
-                appState.syncStatus = payload.syncStatus || appState.syncStatus;
-                if (payload.reviewContext) {
-                    appState.reviewContext = payload.reviewContext;
-                }
-                if (!response.ok) {
-                    appState.sourceValidation[sourceKey] = payload;
-                    renderOperationalStatus();
-                    renderDataSourceControl();
-                    showToast(payload.message || payload.error || 'Aktivasi sumber data gagal.', 'error');
-                    return;
-                }
-                appState.sourceValidation[sourceKey] = payload;
-                appState.dataSourceContract = { ...(appState.dataSourceContract || {}), activeSourceKey: sourceKey };
-                renderOperationalStatus();
-                renderDataSourceControl();
-                showToast(payload.message || 'Sumber data berhasil diaktifkan.');
-            } catch (error) {
-                showToast(error.message || 'Aktivasi sumber data gagal.', 'error');
-            } finally {
-                appState.sourceActionPending = false;
-                renderDataSourceControl();
-            }
         }
 
         function escapeHtml(text) {
@@ -1180,7 +1042,6 @@
                 `- Periode pilihan: ${selectedPeriod.label}`,
                 '- Seluruh nilai uang dibaca langsung dalam Rupiah (IDR).',
                 `- Cash on hand saat ini: ${formatCurrency(cashOnHand)}`,
-                reviewContext && reviewContext.dataSource ? `- Sumber data aktif: ${reviewContext.dataSource}` : null,
                 syncStatus && syncStatus.financialData ? `- Sinkronisasi data finansial: ${syncStatus.financialData.syncStatus || '-'}, usia data ${formatRelativeMinutes(syncStatus.financialData.sourceAgeMinutes)}.` : null,
                 syncStatus && syncStatus.cashOutSource ? `- Sumber cash out: ${syncStatus.cashOutSource.configured ? (syncStatus.cashOutSource.syncStatus || 'aktif') : 'masih memakai model operating cost bulanan'}.` : null,
                 '',
@@ -1237,8 +1098,6 @@
             const risk = health.dimensions ? health.dimensions.risk : null;
             return `
                 <div class="section-block">
-                    <div class="review-row"><span>Sumber Data</span><span>${escapeHtml((reviewContext && reviewContext.dataSource) || 'Sumber data aktif')}</span></div>
-                    <div class="review-row"><span>Status Data</span><span>${escapeHtml((reviewContext && reviewContext.dataStatus) || 'Data siap dianalisis')}</span></div>
                     <div class="review-row"><span>Periode Pilihan</span><span>${escapeHtml(selectedPeriod.label)}</span></div>
                     <div class="review-row"><span>Kas Tersedia Saat Ini</span><span>${formatCurrency(cashOnHand)}</span></div>
                     <div class="review-row"><span>Prediksi Arus Kas Masuk</span><span>${formatCurrency(forecast.forecast.cash_in.total_predicted_cash_in)}</span></div>
@@ -1247,7 +1106,6 @@
                     <div class="review-row"><span>Ending Cash</span><span>${formatCurrency(forecast.forecast.ending_cash)}</span></div>
                     <p class="mini-note">Formula internal: ${escapeHtml(forecast.forecast.formula)}</p>
                     ${appState.syncStatus && appState.syncStatus.financialData ? `<p class="mini-note"><strong>Freshness:</strong> sinkronisasi ${escapeHtml(appState.syncStatus.financialData.syncStatus || '-')} dengan usia data ${escapeHtml(formatRelativeMinutes(appState.syncStatus.financialData.sourceAgeMinutes))}.</p>` : ''}
-                    ${reviewContext && reviewContext.readinessCaveat ? `<p class="mini-note"><strong>Catatan kesiapan:</strong> ${escapeHtml(reviewContext.readinessCaveat)}</p>` : ''}
                     ${reviewContext && reviewContext.controlNote ? `<p class="mini-note"><strong>Catatan kontrol:</strong> ${escapeHtml(reviewContext.controlNote)}</p>` : ''}
                 </div>
 
@@ -1359,13 +1217,11 @@
                     appState.statusPollIntervalMs = configData.statusPollIntervalMs || 1500;
                     appState.reviewContext = configData.reviewContext || null;
                     appState.syncStatus = configData.syncStatus || null;
-                    appState.dataSourceContract = configData.dataSourceContract || null;
                     const periods = periodData.periods || [];
                     const defaultStart = periods[0] ? periods[0].start.slice(0, 10) : new Date().toISOString().slice(0, 10);
                     const defaultEnd = periods[0] ? periods[0].end.slice(0, 10) : defaultStart;
                     initializeDatePickers(defaultStart, defaultEnd);
                     renderOperationalStatus();
-                    renderDataSourceControl();
 
                     ui.loader.classList.add('hidden');
                     ui.configStep.classList.remove('hidden');
@@ -1730,7 +1586,6 @@
                     }
                     appState.syncStatus = data.syncStatus || appState.syncStatus;
                     renderOperationalStatus();
-                    renderDataSourceControl();
                     showToast('Sinkronisasi data selesai. Preview berikutnya akan memakai data terbaru.');
                 })
                 .catch(error => {

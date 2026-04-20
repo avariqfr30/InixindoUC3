@@ -71,6 +71,50 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertIn("cash keluar", snapshot)
         self.assertIn("ending cash", snapshot)
 
+    def test_finalized_report_keeps_visual_dashboard_snapshot_subheading(self):
+        from core import ReportGenerator
+
+        generator = ReportGenerator(None)
+        raw_text = "\n\n".join(
+            [
+                "# Ringkasan Eksekutif\nRingkas.",
+                "# Analisis Deskriptif Cashflow\nDeskriptif.",
+                "# Analisis Diagnostik Cashflow\nDiagnostik.",
+                "# Analisis Prediktif Cashflow\n### Dasar Proyeksi\nPrediksi inti.",
+                "# Rekomendasi Preskriptif\nRekomendasi.",
+                "# Prioritas Tindakan 30 Hari\nPrioritas.",
+            ]
+        )
+        analysis_payload = {
+            "horizon_snapshot": {
+                "forecasts": {
+                    "short_term": {
+                        "dashboard_snapshot": {
+                            "horizon_key": "short_term",
+                            "horizon_label": "Short Term (0-30 hari)",
+                            "horizon_focus": "Likuiditas",
+                            "status": "AMAN",
+                            "current_cash": 500000000,
+                            "runway_months": 2.5,
+                            "coverage_ratio": 1.8,
+                            "average_delay_days": 35,
+                            "balance_projection_30d": [],
+                            "coverage_chart": {"bars": []},
+                        }
+                    }
+                }
+            }
+        }
+        finalized = generator._finalize_report_content(
+            raw_text=raw_text,
+            report_context={"visual_prompt": ""},
+            macro_osint="-",
+            analysis_payload=analysis_payload,
+        )
+
+        self.assertIn("### Visual Dashboard Snapshot", finalized)
+        self.assertIn("[[DASHBOARD:", finalized)
+
 
 if __name__ == "__main__":
     unittest.main()
