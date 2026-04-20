@@ -636,7 +636,8 @@ def get_internal_api_contract():
             "records": [example_record],
         },
         "notes": [
-            "Cara paling mudah: arahkan app ke endpoint JSON apa pun melalui INTERNAL_API_ENDPOINT_URL.",
+            "Cara termudah untuk operasional adalah siapkan sumber `demo` dan `production`, lalu validasi dan aktivasi dari UI tanpa mengubah alur aplikasi.",
+            "Cara paling mudah untuk konfigurasi developer: arahkan app ke endpoint JSON apa pun melalui INTERNAL_API_ENDPOINT_URL.",
             "Jika endpoint perusahaan memakai POST, isi INTERNAL_API_METHOD=POST.",
             "Jika endpoint perusahaan memakai Basic Auth, isi INTERNAL_API_BASIC_USERNAME dan INTERNAL_API_BASIC_PASSWORD.",
             "Jika endpoint perlu body JSON, isi INTERNAL_API_BODY_JSON sesuai request yang diminta backend internal.",

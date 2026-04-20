@@ -5,6 +5,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
 DATA_ACQUISITION_MODE = os.getenv("DATA_ACQUISITION_MODE", "demo").strip().lower()
+DATA_SOURCE_ACTIVE_STATE_PATH = os.getenv(
+    "DATA_SOURCE_ACTIVE_STATE_PATH",
+    os.path.join(os.path.expanduser("~"), ".inixindo-cashflow", "active-source.json"),
+).strip()
+DATA_SOURCE_DEMO_PROFILE_PATH = os.getenv("DATA_SOURCE_DEMO_PROFILE_PATH", "").strip()
+DATA_SOURCE_PRODUCTION_PROFILE_PATH = os.getenv("DATA_SOURCE_PRODUCTION_PROFILE_PATH", "").strip()
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret-key-in-production")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes"}
 SESSION_LIFETIME_HOURS = int(os.getenv("SESSION_LIFETIME_HOURS", "12"))

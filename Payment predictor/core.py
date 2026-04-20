@@ -47,6 +47,9 @@ from config import (
     CASH_OUT_API_VERIFY_SSL,
     CASH_OUT_FIELD_MAP_JSON,
     DATA_ACQUISITION_MODE,
+    DATA_SOURCE_ACTIVE_STATE_PATH,
+    DATA_SOURCE_DEMO_PROFILE_PATH,
+    DATA_SOURCE_PRODUCTION_PROFILE_PATH,
     DATA_DIR,
     DEFAULT_COLOR,
     DEMO_CSV_PATH,
@@ -88,6 +91,12 @@ from data_contract import (
     normalize_financial_dataframe,
     parse_internal_api_field_map,
 )
+from data_sources import (
+    load_available_source_profiles,
+    resolve_active_source_profile,
+    summarize_source_profile,
+    write_active_source_key,
+)
 from forecast_engine import parse_idr_amount
 
 matplotlib.use("Agg")
@@ -107,24 +116,58 @@ osint_cache = dc.Cache(str(osint_cache_dir))
 
 
 class InternalAPIClient:
-    def __init__(self):
-        self.endpoint_url = INTERNAL_API_ENDPOINT_URL.strip()
-        self.base_url = INTERNAL_API_BASE_URL.rstrip("/")
-        self.dataset_path = INTERNAL_API_DATASET_PATH.strip() or "/api/finance/invoices"
-        self.method = (INTERNAL_API_METHOD or "GET").strip().upper()
-        self.records_key = INTERNAL_API_RECORDS_KEY.strip()
-        self.auth_token = INTERNAL_API_AUTH_TOKEN.strip()
-        self.basic_username = INTERNAL_API_BASIC_USERNAME.strip()
-        self.basic_password = INTERNAL_API_BASIC_PASSWORD
-        self.timeout = INTERNAL_API_TIMEOUT
-        self.verify_ssl = INTERNAL_API_VERIFY_SSL
-        self.headers = self._parse_json_object(INTERNAL_API_HEADERS_JSON, "headers")
-        self.body = self._parse_optional_json_value(INTERNAL_API_BODY_JSON, "body")
-        self.field_map = parse_internal_api_field_map(INTERNAL_API_FIELD_MAP_JSON)
-        self.query_params = self._parse_json_object(
-            INTERNAL_API_QUERY_PARAMS_JSON,
-            "query params",
-        )
+    def __init__(self, source_profile=None):
+        profile = copy.deepcopy(source_profile) if source_profile else {
+            "type": "json_api",
+            "endpoint": {
+                "url": INTERNAL_API_ENDPOINT_URL.strip(),
+                "base_url": INTERNAL_API_BASE_URL.rstrip("/"),
+                "path": INTERNAL_API_DATASET_PATH.strip() or "/api/finance/invoices",
+                "method": (INTERNAL_API_METHOD or "GET").strip().upper(),
+                "timeout": INTERNAL_API_TIMEOUT,
+                "verify_ssl": INTERNAL_API_VERIFY_SSL,
+                "records_key": INTERNAL_API_RECORDS_KEY.strip(),
+            },
+            "auth": {
+                "bearer_token": INTERNAL_API_AUTH_TOKEN.strip(),
+                "basic_username": INTERNAL_API_BASIC_USERNAME.strip(),
+                "basic_password": INTERNAL_API_BASIC_PASSWORD,
+            },
+            "request": {
+                "headers": self._parse_json_object(INTERNAL_API_HEADERS_JSON, "headers"),
+                "query_params": self._parse_json_object(
+                    INTERNAL_API_QUERY_PARAMS_JSON,
+                    "query params",
+                ),
+                "body": self._parse_optional_json_value(INTERNAL_API_BODY_JSON, "body"),
+            },
+            "field_map": parse_internal_api_field_map(INTERNAL_API_FIELD_MAP_JSON),
+        }
+        endpoint = profile.get("endpoint", {}) or {}
+        auth = profile.get("auth", {}) or {}
+        request_config = profile.get("request", {}) or {}
+
+        self.source_profile = profile
+        self.endpoint_url = str(endpoint.get("url") or "").strip()
+        self.base_url = str(endpoint.get("base_url") or "").strip().rstrip("/")
+        self.dataset_path = str(endpoint.get("path") or INTERNAL_API_DATASET_PATH or "/api/finance/invoices").strip()
+        self.method = str(endpoint.get("method") or "GET").strip().upper()
+        self.records_key = str(endpoint.get("records_key") or "").strip()
+        self.auth_token = str(auth.get("bearer_token") or "").strip()
+        self.basic_username = str(auth.get("basic_username") or "").strip()
+        self.basic_password = str(auth.get("basic_password") or "")
+        self.timeout = int(endpoint.get("timeout") or INTERNAL_API_TIMEOUT)
+        verify_ssl_value = endpoint.get("verify_ssl")
+        if isinstance(verify_ssl_value, str):
+            self.verify_ssl = verify_ssl_value.strip().lower() not in {"0", "false", "no"}
+        elif verify_ssl_value is None:
+            self.verify_ssl = INTERNAL_API_VERIFY_SSL
+        else:
+            self.verify_ssl = bool(verify_ssl_value)
+        self.headers = dict(request_config.get("headers") or {})
+        self.body = request_config.get("body")
+        self.query_params = dict(request_config.get("query_params") or {})
+        self.field_map = parse_internal_api_field_map(profile.get("field_map") or {})
 
     @staticmethod
     def _parse_json_object(raw_value, label):
@@ -538,9 +581,14 @@ class KnowledgeBase:
     def __init__(self, db_uri):
         os.makedirs(DATA_DIR, exist_ok=True)
         self.engine = create_engine(db_uri)
-        self.data_mode = "internal_api" if DATA_ACQUISITION_MODE == "internal_api" else "demo"
-        self.table_name = f"invoices_{self.data_mode}"
-        self.internal_api_client = InternalAPIClient()
+        self.source_registry = {}
+        self.source_registry_issues = []
+        self.active_source_state_path = DATA_SOURCE_ACTIVE_STATE_PATH
+        self.active_source_key = "demo"
+        self.source_profile = {}
+        self.data_mode = "demo"
+        self.table_name = "invoices_demo"
+        self.internal_api_client = None
         self.chroma = chromadb.Client(Settings(anonymized_telemetry=False))
         self.embed_fn = embedding_functions.OllamaEmbeddingFunction(
             url=f"{OLLAMA_HOST}/api/embeddings",
@@ -562,6 +610,7 @@ class KnowledgeBase:
         self.last_sync_duration_seconds = None
         self.last_sync_error = None
         self.data_version = 0
+        self._reload_source_registry()
         self.refresh_data()
 
     @staticmethod
@@ -580,66 +629,96 @@ class KnowledgeBase:
         data_frame.columns = [column.strip() for column in data_frame.columns]
         return data_frame
 
-    def _load_demo_data(self):
+    @staticmethod
+    def _build_table_name(source_key):
+        normalized_key = re.sub(r"[^a-z0-9_]+", "_", str(source_key or "demo").strip().lower()).strip("_")
+        return f"invoices_{normalized_key or 'demo'}"
+
+    def _reload_source_registry(self):
+        profiles, issues, default_key = load_available_source_profiles(
+            demo_csv_path=DEMO_CSV_PATH,
+            legacy_data_mode=DATA_ACQUISITION_MODE,
+            internal_api_endpoint_url=INTERNAL_API_ENDPOINT_URL,
+            internal_api_base_url=INTERNAL_API_BASE_URL,
+            internal_api_dataset_path=INTERNAL_API_DATASET_PATH,
+            demo_profile_path=DATA_SOURCE_DEMO_PROFILE_PATH,
+            production_profile_path=DATA_SOURCE_PRODUCTION_PROFILE_PATH,
+        )
+        self.source_registry = profiles
+        self.source_registry_issues = issues
+        selected_key, selected_profile = resolve_active_source_profile(
+            profiles=profiles,
+            state_path=self.active_source_state_path,
+            legacy_default_key=default_key,
+        )
+        self._set_active_source(selected_key, selected_profile, persist=False)
+
+    def _set_active_source(self, source_key, source_profile, persist=True):
+        self.active_source_key = source_key
+        self.source_profile = copy.deepcopy(source_profile or {})
+        self.data_mode = str(self.source_profile.get("mode") or "demo").strip().lower() or "demo"
+        self.table_name = self._build_table_name(source_key)
+        if self.source_profile.get("type") == "json_api":
+            self.internal_api_client = InternalAPIClient(source_profile=self.source_profile)
+        else:
+            self.internal_api_client = None
+        if persist:
+            write_active_source_key(self.active_source_state_path, source_key)
+
+    def _load_demo_data(self, profile=None):
+        active_profile = profile or self.source_profile
+        csv_path = str((active_profile or {}).get("path") or DEMO_CSV_PATH)
         try:
             data_frame = pd.read_sql(f"SELECT * FROM {self.table_name}", self.engine)
         except Exception:
-            csv_path = DEMO_CSV_PATH
             if not os.path.exists(csv_path):
-                logger.error("Financial data source is unavailable.")
-                return None
+                raise FileNotFoundError(f"Demo CSV source is unavailable: {csv_path}")
 
             raw_df = pd.read_csv(csv_path)
             raw_df.columns = [column.strip() for column in raw_df.columns]
             data_frame = raw_df
 
         normalized_df, data_summary = normalize_financial_dataframe(data_frame)
-        self.data_contract_summary = data_summary
-        normalized_df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
-        return normalized_df
+        return normalized_df, data_summary
 
-    def _load_internal_api_data(self):
-        if not self.internal_api_client.is_configured():
-            logger.error("Internal data source is not configured.")
-            return None
+    def _load_internal_api_data(self, profile=None):
+        client = InternalAPIClient(source_profile=profile or self.source_profile)
+        if not client.is_configured():
+            raise RuntimeError("Internal data source is not configured.")
 
-        try:
-            records, extraction_summary = self.internal_api_client.fetch_records()
-        except Exception as exc:
-            logger.error("Internal data sync failed: %s", exc)
-            return None
+        records, extraction_summary = client.fetch_records()
 
         raw_data_frame = self._normalize_records(records)
         if raw_data_frame.empty:
-            logger.error("Internal data source returned no records.")
-            return None
+            raise RuntimeError("Internal data source returned no records.")
 
         normalized_df, _ = normalize_financial_dataframe(
             raw_data_frame,
-            explicit_field_map=self.internal_api_client.field_map,
+            explicit_field_map=client.field_map,
         )
-        self.data_contract_summary = build_internal_data_summary(
+        data_summary = build_internal_data_summary(
             normalized_df,
-            explicit_field_map=self.internal_api_client.field_map,
+            explicit_field_map=client.field_map,
             extraction_summary=extraction_summary,
         )
 
-        if self.data_contract_summary["missingRequiredFields"]:
+        if data_summary["missingRequiredFields"]:
             logger.warning(
                 "Internal data source is missing required fields after normalization: %s",
-                ", ".join(self.data_contract_summary["missingRequiredFields"]),
+                ", ".join(data_summary["missingRequiredFields"]),
             )
 
-        normalized_df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
-        return normalized_df
+        return normalized_df, data_summary
 
-    def _load_source_data(self):
-        if self.data_mode == "internal_api":
-            return self._load_internal_api_data()
-        return self._load_demo_data()
+    def _load_source_data(self, profile=None):
+        active_profile = profile or self.source_profile
+        source_type = str((active_profile or {}).get("type") or "demo_csv").strip().lower()
+        if source_type == "json_api":
+            return self._load_internal_api_data(profile=active_profile)
+        return self._load_demo_data(profile=active_profile)
 
-    def _rebuild_embeddings(self):
-        if self.df is None or self.df.empty:
+    def _rebuild_embeddings(self, data_frame):
+        if data_frame is None or data_frame.empty:
             return False
 
         existing_ids = self.collection.get().get("ids", [])
@@ -650,7 +729,7 @@ class KnowledgeBase:
         documents = []
         metadatas = []
 
-        for index, row in self.df.iterrows():
+        for index, row in data_frame.iterrows():
             text_representation = " | ".join(
                 f"{column}: {value}" for column, value in row.items()
             )
@@ -684,34 +763,82 @@ class KnowledgeBase:
             self.last_sync_started_at = started_at
             self.last_sync_error = None
 
-            self.df = self._load_source_data()
-            if self.df is None or self.df.empty:
+            try:
+                loaded_df, loaded_summary = self._load_source_data()
+            except Exception as exc:
                 completed_at = datetime.now()
                 self.sync_status = "error"
                 self.last_sync_at = completed_at
                 self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
-                self.last_sync_error = "Data finansial tidak tersedia atau kosong."
+                self.last_sync_error = str(exc)
                 return False
 
+            rebuilt = self._rebuild_embeddings(loaded_df)
+            completed_at = datetime.now()
+            self.df = loaded_df
+            self.data_contract_summary = loaded_summary
+            self.df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
             with self.cache_lock:
                 self.report_context_cache = None
-
-            rebuilt = self._rebuild_embeddings()
-            completed_at = datetime.now()
-            if not rebuilt:
-                self.sync_status = "error"
-                self.last_sync_at = completed_at
-                self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
-                self.last_sync_error = "Embedding store gagal diperbarui."
-                return False
-
-            self.sync_status = "ready"
+            self.sync_status = "ready" if rebuilt else "degraded"
             self.last_sync_at = completed_at
             self.last_success_at = completed_at
             self.last_sync_duration_seconds = round((completed_at - started_at).total_seconds(), 2)
-            self.last_sync_error = None
+            self.last_sync_error = None if rebuilt else "Embedding store gagal diperbarui. Dashboard tetap memakai data finansial terbaru."
             self.data_version += 1
             return True
+
+    def validate_source(self, source_key):
+        self._reload_source_registry()
+        profile = self.source_registry.get(source_key)
+        if not profile:
+            raise ValueError(f"Sumber data `{source_key}` tidak tersedia.")
+
+        summary = summarize_source_profile(profile)
+        validation = {
+            "source": summary,
+            "ready": False,
+            "message": "",
+            "recordCount": None,
+            "missingRequiredFields": [],
+            "contractSummary": None,
+        }
+
+        try:
+            data_frame, data_summary = self._load_source_data(profile=profile)
+        except Exception as exc:
+            validation["message"] = str(exc)
+            return validation
+
+        validation["ready"] = bool(data_summary.get("isReady"))
+        validation["message"] = "Sumber data valid dan siap diaktifkan." if validation["ready"] else "Sumber data terbaca, tetapi field wajib belum lengkap."
+        validation["recordCount"] = int(len(data_frame))
+        validation["missingRequiredFields"] = list(data_summary.get("missingRequiredFields") or [])
+        validation["contractSummary"] = data_summary
+        return validation
+
+    def activate_source(self, source_key):
+        validation = self.validate_source(source_key)
+        if not validation["ready"]:
+            return {**validation, "activated": False}
+
+        profile = self.source_registry[source_key]
+        previous_key = self.active_source_key
+        previous_profile = copy.deepcopy(self.source_profile)
+        self._set_active_source(source_key, profile, persist=False)
+        if self.refresh_data():
+            write_active_source_key(self.active_source_state_path, source_key)
+            return {**validation, "activated": True, "activeSourceKey": source_key}
+
+        error_message = self.last_sync_error or "Aktivasi gagal."
+        self._set_active_source(previous_key, previous_profile, persist=False)
+        self.refresh_data()
+        return {
+            **validation,
+            "activated": False,
+            "message": error_message,
+            "activeSourceKey": previous_key,
+        }
 
     def query(self, context_keywords="", max_results=12):
         query_text = (
@@ -762,8 +889,15 @@ class KnowledgeBase:
         contract = get_internal_api_contract()
         contract["currentSummary"] = self.data_contract_summary
         contract["dataMode"] = self.data_mode
-        contract["internalApiConfigured"] = self.internal_api_client.is_configured()
-        contract["datasetUrl"] = self.internal_api_client.get_dataset_url() if self.internal_api_client.is_configured() else None
+        contract["internalApiConfigured"] = bool(self.internal_api_client and self.internal_api_client.is_configured())
+        contract["datasetUrl"] = self.internal_api_client.get_dataset_url() if self.internal_api_client and self.internal_api_client.is_configured() else None
+        contract["activeSourceKey"] = self.active_source_key
+        contract["activeSource"] = summarize_source_profile(self.source_profile)
+        contract["availableSources"] = [
+            summarize_source_profile(profile)
+            for _, profile in sorted(self.source_registry.items(), key=lambda item: item[0])
+        ]
+        contract["registryIssues"] = list(self.source_registry_issues)
         return contract
 
     def get_sync_status(self, refresh_interval_seconds=0):
@@ -788,6 +922,13 @@ class KnowledgeBase:
             "recordCount": 0 if self.df is None else int(len(self.df)),
             "dataVersion": self.data_version,
             "contractReady": bool(self.data_contract_summary.get("isReady")),
+            "activeSourceKey": self.active_source_key,
+            "activeSource": summarize_source_profile(self.source_profile),
+            "availableSources": [
+                summarize_source_profile(profile)
+                for _, profile in sorted(self.source_registry.items(), key=lambda item: item[0])
+            ],
+            "sourceRegistryIssues": list(self.source_registry_issues),
         }
 
 

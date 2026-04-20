@@ -959,6 +959,7 @@ def create_app():
                 "statusPollIntervalMs": current_app.config["status_poll_interval_ms"],
                 "reviewContext": review_context,
                 "syncStatus": _build_sync_snapshot(),
+                "dataSourceContract": active_knowledge_base.get_internal_data_contract(),
             }
         )
 
@@ -1036,6 +1037,44 @@ def create_app():
     @app.route("/api/internal-data/contract", methods=["GET"])
     def get_internal_data_contract():
         return jsonify(current_app.config["knowledge_base"].get_internal_data_contract())
+
+    @app.route("/api/data-source/validate", methods=["POST"])
+    def validate_data_source():
+        payload = request.get_json(silent=True) or {}
+        source_key = str(payload.get("sourceKey") or "").strip().lower()
+        if not source_key:
+            return jsonify({"error": "sourceKey wajib diisi."}), 400
+        try:
+            validation = current_app.config["knowledge_base"].validate_source(source_key)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        return jsonify(
+            {
+                **validation,
+                "syncStatus": _build_sync_snapshot(),
+            }
+        )
+
+    @app.route("/api/data-source/activate", methods=["POST"])
+    def activate_data_source():
+        payload = request.get_json(silent=True) or {}
+        source_key = str(payload.get("sourceKey") or "").strip().lower()
+        if not source_key:
+            return jsonify({"error": "sourceKey wajib diisi."}), 400
+
+        activation = current_app.config["knowledge_base"].activate_source(source_key)
+        current_app.config["forecast_cache"].clear()
+        current_app.config["cash_out_store"].refresh_data()
+        response_payload = {
+            **activation,
+            "syncStatus": _build_sync_snapshot(),
+            "reviewContext": current_app.config["knowledge_base"].get_review_context()
+            if activation.get("activated")
+            else None,
+        }
+        if not activation.get("activated"):
+            return jsonify(response_payload), 409
+        return jsonify(response_payload)
 
     # ==================== CASHFLOW FORECAST ENDPOINTS ====================
     
