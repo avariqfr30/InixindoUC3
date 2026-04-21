@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, current_app, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, current_app, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_cors import CORS
 import pandas as pd
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -28,6 +28,10 @@ class QueueCapacityError(Exception):
         super().__init__(
             f"Queue is full ({active_jobs}/{max_pending_jobs} active jobs). Please try again in a few minutes."
         )
+
+
+class SessionLimitError(Exception):
+    pass
 
 
 class UserStore:
@@ -108,6 +112,229 @@ class UserStore:
         with self.lock, self._connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()
         return bool(row and row["total"] > 0)
+
+
+class ActiveSessionStore:
+    def __init__(self, db_path):
+        self.db_path = str(db_path)
+        self.lock = threading.Lock()
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self):
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    last_seen_at REAL NOT NULL,
+                    revoked_at REAL,
+                    revoked_reason TEXT,
+                    ip_address TEXT,
+                    user_agent TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_active
+                ON auth_sessions (username, revoked_at, last_seen_at)
+                """
+            )
+            connection.commit()
+
+    def _cleanup_expired_unlocked(self, connection, now, idle_timeout_seconds, absolute_timeout_seconds):
+        conditions = []
+        params = []
+        if idle_timeout_seconds > 0:
+            conditions.append("last_seen_at <= ?")
+            params.append(now - idle_timeout_seconds)
+        if absolute_timeout_seconds > 0:
+            conditions.append("created_at <= ?")
+            params.append(now - absolute_timeout_seconds)
+        if not conditions:
+            return
+
+        where_clause = " OR ".join(conditions)
+        connection.execute(
+            f"""
+            UPDATE auth_sessions
+            SET revoked_at = ?, revoked_reason = 'timeout'
+            WHERE revoked_at IS NULL
+              AND ({where_clause})
+            """,
+            (now, *params),
+        )
+
+    def _count_active_unlocked(self, connection):
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM auth_sessions
+            WHERE revoked_at IS NULL
+            """
+        ).fetchone()
+        return int(row["total"] if row else 0)
+
+    def create_session(
+        self,
+        username,
+        ip_address,
+        user_agent,
+        idle_timeout_seconds,
+        absolute_timeout_seconds,
+        max_global_sessions,
+        max_sessions_per_user,
+    ):
+        now = time.time()
+        max_global_sessions = int(max_global_sessions or 0)
+        max_sessions_per_user = int(max_sessions_per_user or 0)
+        with self.lock, self._connect() as connection:
+            self._cleanup_expired_unlocked(connection, now, idle_timeout_seconds, absolute_timeout_seconds)
+
+            active_global = self._count_active_unlocked(connection)
+            if max_global_sessions > 0 and active_global >= max_global_sessions:
+                raise SessionLimitError(
+                    "Akses sementara penuh karena sesi aktif sudah mencapai batas server. Coba lagi beberapa menit lagi."
+                )
+
+            if max_sessions_per_user > 0:
+                active_rows = connection.execute(
+                    """
+                    SELECT session_id
+                    FROM auth_sessions
+                    WHERE username = ? AND revoked_at IS NULL
+                    ORDER BY last_seen_at ASC
+                    """,
+                    (username,),
+                ).fetchall()
+                overflow = len(active_rows) - max_sessions_per_user + 1
+                if overflow > 0:
+                    session_ids_to_revoke = [row["session_id"] for row in active_rows[:overflow]]
+                    connection.executemany(
+                        """
+                        UPDATE auth_sessions
+                        SET revoked_at = ?, revoked_reason = 'superseded'
+                        WHERE session_id = ? AND revoked_at IS NULL
+                        """,
+                        [(now, session_id) for session_id in session_ids_to_revoke],
+                    )
+
+            session_id = uuid.uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO auth_sessions (
+                    session_id,
+                    username,
+                    created_at,
+                    last_seen_at,
+                    ip_address,
+                    user_agent
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (session_id, username, now, now, ip_address, user_agent),
+            )
+            connection.commit()
+            return session_id
+
+    def revoke_session(self, session_id, reason="logout"):
+        if not session_id:
+            return
+        now = time.time()
+        with self.lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE auth_sessions
+                SET revoked_at = ?, revoked_reason = ?
+                WHERE session_id = ? AND revoked_at IS NULL
+                """,
+                (now, reason, session_id),
+            )
+            connection.commit()
+
+    def validate_and_touch(self, session_id, username, idle_timeout_seconds, absolute_timeout_seconds):
+        if not session_id or not username:
+            return False, "missing"
+
+        now = time.time()
+        with self.lock, self._connect() as connection:
+            self._cleanup_expired_unlocked(connection, now, idle_timeout_seconds, absolute_timeout_seconds)
+            row = connection.execute(
+                """
+                SELECT session_id, username, revoked_at
+                FROM auth_sessions
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+
+            if not row:
+                return False, "not_found"
+            if row["revoked_at"] is not None:
+                return False, "revoked"
+            if row["username"] != username:
+                connection.execute(
+                    """
+                    UPDATE auth_sessions
+                    SET revoked_at = ?, revoked_reason = 'identity_mismatch'
+                    WHERE session_id = ? AND revoked_at IS NULL
+                    """,
+                    (now, session_id),
+                )
+                connection.commit()
+                return False, "identity_mismatch"
+
+            connection.execute(
+                """
+                UPDATE auth_sessions
+                SET last_seen_at = ?
+                WHERE session_id = ?
+                """,
+                (now, session_id),
+            )
+            connection.commit()
+            return True, "active"
+
+    def get_security_snapshot(
+        self,
+        idle_timeout_seconds,
+        absolute_timeout_seconds,
+        max_global_sessions,
+        max_sessions_per_user,
+    ):
+        now = time.time()
+        with self.lock, self._connect() as connection:
+            self._cleanup_expired_unlocked(connection, now, idle_timeout_seconds, absolute_timeout_seconds)
+            active_sessions_row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM auth_sessions
+                WHERE revoked_at IS NULL
+                """
+            ).fetchone()
+            active_users_row = connection.execute(
+                """
+                SELECT COUNT(DISTINCT username) AS total
+                FROM auth_sessions
+                WHERE revoked_at IS NULL
+                """
+            ).fetchone()
+            connection.commit()
+
+        return {
+            "activeSessions": int(active_sessions_row["total"] if active_sessions_row else 0),
+            "activeUsers": int(active_users_row["total"] if active_users_row else 0),
+            "maxActiveSessions": int(max_global_sessions or 0),
+            "maxSessionsPerUser": int(max_sessions_per_user or 0),
+            "idleTimeoutMinutes": round((idle_timeout_seconds or 0) / 60, 2),
+            "absoluteTimeoutHours": round((absolute_timeout_seconds or 0) / 3600, 2),
+        }
 
 
 class ReportJobStore:
@@ -558,6 +785,10 @@ class BackgroundRefreshCoordinator:
 def create_app():
     from config import (
         APP_SECRET_KEY,
+        AUTH_MAX_ACTIVE_SESSIONS,
+        AUTH_MAX_SESSIONS_PER_USER,
+        AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS,
+        AUTH_SESSION_IDLE_TIMEOUT_MINUTES,
         DATA_REFRESH_INTERVAL_SECONDS,
         DB_URI,
         FORECAST_CACHE_TTL_SECONDS,
@@ -590,6 +821,7 @@ def create_app():
     report_generator = ReportGenerator(knowledge_base)
     job_store = ReportJobStore(JOB_STATE_DB_PATH, REPORT_ARTIFACTS_DIR)
     user_store = UserStore(JOB_STATE_DB_PATH)
+    session_store = ActiveSessionStore(JOB_STATE_DB_PATH)
     forecast_cache = ForecastSnapshotCache(FORECAST_CACHE_TTL_SECONDS)
     job_manager = ReportJobManager(
         report_generator=report_generator,
@@ -630,14 +862,55 @@ def create_app():
     app.config["job_manager"] = job_manager
     app.config["forecaster"] = forecaster
     app.config["user_store"] = user_store
+    app.config["session_store"] = session_store
     app.config["min_completeness_score"] = REPORT_MIN_COMPLETENESS_SCORE
     app.config["status_poll_interval_ms"] = REPORT_STATUS_POLL_INTERVAL_MS
     app.config["forecast_cache"] = forecast_cache
     app.config["data_refresh_interval_seconds"] = DATA_REFRESH_INTERVAL_SECONDS
     app.config["refresh_coordinator"] = refresh_coordinator
+    app.config["auth_max_active_sessions"] = max(int(AUTH_MAX_ACTIVE_SESSIONS), 1)
+    app.config["auth_max_sessions_per_user"] = max(int(AUTH_MAX_SESSIONS_PER_USER), 1)
+    app.config["auth_session_idle_timeout_seconds"] = max(int(AUTH_SESSION_IDLE_TIMEOUT_MINUTES), 1) * 60
+    app.config["auth_session_absolute_timeout_seconds"] = max(int(AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS), 1) * 3600
+
+    def _start_authenticated_session(username):
+        session_id = session_store.create_session(
+            username=username,
+            ip_address=request.headers.get("X-Forwarded-For", request.remote_addr or ""),
+            user_agent=request.headers.get("User-Agent", ""),
+            idle_timeout_seconds=app.config["auth_session_idle_timeout_seconds"],
+            absolute_timeout_seconds=app.config["auth_session_absolute_timeout_seconds"],
+            max_global_sessions=app.config["auth_max_active_sessions"],
+            max_sessions_per_user=app.config["auth_max_sessions_per_user"],
+        )
+        session.clear()
+        session.permanent = True
+        session["username"] = username
+        session["auth_session_id"] = session_id
+
+    def _invalidate_authenticated_session(reason):
+        session_id = session.get("auth_session_id")
+        if session_id:
+            session_store.revoke_session(session_id, reason=reason)
+        session.clear()
 
     def _is_authenticated():
-        return bool(session.get("username"))
+        username = str(session.get("username") or "").strip()
+        session_id = str(session.get("auth_session_id") or "").strip()
+        if not username or not session_id:
+            return False
+        is_valid, reason = session_store.validate_and_touch(
+            session_id=session_id,
+            username=username,
+            idle_timeout_seconds=app.config["auth_session_idle_timeout_seconds"],
+            absolute_timeout_seconds=app.config["auth_session_absolute_timeout_seconds"],
+        )
+        if not is_valid:
+            logger.info("Auth session rejected for user=%s reason=%s", username, reason)
+            session.clear()
+            return False
+        g.current_username = username
+        return True
 
     def _is_api_request():
         return request.path.startswith("/api/") or request.path.startswith("/jobs/") or request.path in {
@@ -704,9 +977,10 @@ def create_app():
                 username=username,
             ), 401
 
-        session.clear()
-        session.permanent = True
-        session["username"] = authenticated_username
+        try:
+            _start_authenticated_session(authenticated_username)
+        except SessionLimitError as exc:
+            return _render_auth(mode="login", error=str(exc), username=username), 429
         return redirect(url_for("home"))
 
     @app.route("/signup", methods=["GET", "POST"])
@@ -732,14 +1006,15 @@ def create_app():
         except ValueError as exc:
             return _render_auth(mode="signup", error=str(exc), username=username), 400
 
-        session.clear()
-        session.permanent = True
-        session["username"] = created_username
+        try:
+            _start_authenticated_session(created_username)
+        except SessionLimitError as exc:
+            return _render_auth(mode="signup", error=str(exc), username=username), 429
         return redirect(url_for("home"))
 
     @app.route("/logout", methods=["POST"])
     def logout():
-        session.clear()
+        _invalidate_authenticated_session(reason="logout")
         response = redirect(url_for("login"))
         response.delete_cookie(
             app.config.get("SESSION_COOKIE_NAME", "session"),
@@ -975,6 +1250,12 @@ def create_app():
                 "reviewContext": review_context,
                 "syncStatus": _build_sync_snapshot(),
                 "dataSourceContract": active_knowledge_base.get_internal_data_contract(),
+                "authSecurity": session_store.get_security_snapshot(
+                    idle_timeout_seconds=app.config["auth_session_idle_timeout_seconds"],
+                    absolute_timeout_seconds=app.config["auth_session_absolute_timeout_seconds"],
+                    max_global_sessions=app.config["auth_max_active_sessions"],
+                    max_sessions_per_user=app.config["auth_max_sessions_per_user"],
+                ),
             }
         )
 
@@ -1046,6 +1327,12 @@ def create_app():
             internal_data_contract.get("currentSummary", {}).get("isReady")
         )
         health_snapshot["minimumCompletenessScore"] = current_app.config["min_completeness_score"]
+        health_snapshot["authSecurity"] = session_store.get_security_snapshot(
+            idle_timeout_seconds=app.config["auth_session_idle_timeout_seconds"],
+            absolute_timeout_seconds=app.config["auth_session_absolute_timeout_seconds"],
+            max_global_sessions=app.config["auth_max_active_sessions"],
+            max_sessions_per_user=app.config["auth_max_sessions_per_user"],
+        )
         health_snapshot["syncStatus"] = _build_sync_snapshot()
         return jsonify(health_snapshot)
 

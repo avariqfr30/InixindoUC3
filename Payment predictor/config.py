@@ -14,6 +14,12 @@ DATA_SOURCE_PRODUCTION_PROFILE_PATH = os.getenv("DATA_SOURCE_PRODUCTION_PROFILE_
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret-key-in-production")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes"}
 SESSION_LIFETIME_HOURS = int(os.getenv("SESSION_LIFETIME_HOURS", "12"))
+AUTH_MAX_ACTIVE_SESSIONS = int(os.getenv("AUTH_MAX_ACTIVE_SESSIONS", "8"))
+AUTH_MAX_SESSIONS_PER_USER = int(os.getenv("AUTH_MAX_SESSIONS_PER_USER", "1"))
+AUTH_SESSION_IDLE_TIMEOUT_MINUTES = int(os.getenv("AUTH_SESSION_IDLE_TIMEOUT_MINUTES", "30"))
+AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS = int(
+    os.getenv("AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS", str(SESSION_LIFETIME_HOURS))
+)
 APP_SERVER = os.getenv("APP_SERVER", "flask").strip().lower()
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip()
 APP_PORT = int(os.getenv("APP_PORT", "5000"))
