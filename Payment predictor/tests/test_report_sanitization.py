@@ -40,6 +40,28 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertTrue(Researcher._is_company_comparable_entry(comparable_entry, context))
         self.assertFalse(Researcher._is_company_comparable_entry(unrelated_entry, context))
 
+    def test_osint_filter_ranks_authoritative_comparable_sources(self):
+        from core import Researcher
+
+        context = "partner pemerintah, bumn, layanan pelatihan dan invoice termin"
+        entries = [
+            {
+                "title": "Vendor pelatihan menunggu approval pembayaran invoice",
+                "snippet": "Pembayaran invoice vendor jasa pelatihan BUMN tertunda karena approval dokumen.",
+                "domain": "blog-random.example",
+            },
+            {
+                "title": "Aturan pengadaan dan termin pembayaran penyedia pemerintah",
+                "snippet": "Penyedia pelatihan perlu melengkapi BAST agar pembayaran invoice termin dapat diproses.",
+                "domain": "lkpp.go.id",
+            },
+        ]
+
+        filtered = Researcher._filter_company_comparable_entries(entries, context)
+
+        self.assertEqual(filtered[0]["domain"], "lkpp.go.id")
+        self.assertGreater(filtered[0]["relevance_score"], filtered[1]["relevance_score"])
+
     def test_operational_snapshot_includes_cash_in_and_cash_out(self):
         from core import ReportGenerator
 
@@ -114,6 +136,25 @@ class ReportSanitizationTest(unittest.TestCase):
 
         self.assertIn("### Visual Dashboard Snapshot", finalized)
         self.assertIn("[[DASHBOARD:", finalized)
+
+    def test_docx_table_generation_uses_compact_formatted_tables(self):
+        from docx import Document
+        from core import DocumentBuilder
+
+        document = Document()
+        markdown_text = (
+            "| Prioritas | Fokus | Dampak |\n"
+            "| --- | --- | --- |\n"
+            "| 1 | Invoice BUMN | Cash in lebih cepat |\n"
+        )
+
+        DocumentBuilder.process_content(document, markdown_text)
+
+        self.assertEqual(len(document.tables), 1)
+        table = document.tables[0]
+        self.assertEqual(table.alignment, 1)
+        self.assertTrue(table.rows[0].cells[0].paragraphs[0].runs[0].bold)
+        self.assertLessEqual(table.rows[1].cells[0].paragraphs[0].paragraph_format.space_after.pt, 2)
 
 
 if __name__ == "__main__":
