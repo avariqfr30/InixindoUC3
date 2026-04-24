@@ -26,6 +26,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -114,16 +115,11 @@ matplotlib.use("Agg")
 logger = logging.getLogger(__name__)
 
 
-# ==========================================
-# PYDANTIC SCHEMAS & FAST CACHING
-# ==========================================
 class InsightSchema(BaseModel):
     insight: str = Field(description="The extracted insight in Indonesian. 'NOT_FOUND' if missing.")
 
-# Initialize ultra-fast disk caching for OSINT (survives server restarts)
-osint_cache_dir = Path(DATA_DIR) / '.osint_cache' if DATA_DIR else Path('./.osint_cache')
+osint_cache_dir = Path(DATA_DIR) / ".osint_cache" if DATA_DIR else Path("./.osint_cache")
 osint_cache = dc.Cache(str(osint_cache_dir))
-# ==========================================
 
 
 class InternalAPIClient:
@@ -2170,44 +2166,44 @@ class Researcher:
     _OSINT_TOPICS = [
         {
             "topic": "Siklus Anggaran Pemerintah",
-            "query": "siklus pencairan APBN APBD termin pembayaran vendor Indonesia",
+            "query": "siklus pencairan APBN APBD termin pembayaran vendor",
         },
         {
             "topic": "Perilaku Pembayaran BUMN dan Korporasi",
-            "query": "tren keterlambatan pembayaran invoice BUMN swasta Indonesia",
+            "query": "tren keterlambatan pembayaran invoice BUMN swasta",
         },
         {
             "topic": "Likuiditas dan Piutang Bisnis",
-            "query": "risiko likuiditas perusahaan jasa Indonesia karena piutang tertunda",
+            "query": "risiko likuiditas perusahaan jasa karena piutang tertunda",
         },
         {
             "topic": "Regulasi Pengadaan dan Kontrak",
-            "query": "regulasi terbaru pengadaan pemerintah termin pembayaran penyedia Indonesia",
+            "query": "regulasi terbaru pengadaan pemerintah termin pembayaran penyedia",
         },
     ]
 
     _DELAY_FACTOR_TOPICS = [
         {
             "factor": "Siklus anggaran pemerintah",
-            "query": "siklus pencairan APBN APBD keterlambatan pembayaran vendor Indonesia",
+            "query": "siklus pencairan APBN APBD keterlambatan pembayaran vendor",
             "delay_days": (10, 30),
             "impact": "Potensi mundur tambahan ketika termin pembayaran bergantung pada pencairan anggaran.",
         },
         {
             "factor": "Approval korporasi dan BUMN",
-            "query": "approval internal BUMN korporasi keterlambatan pembayaran invoice Indonesia",
+            "query": "approval internal BUMN korporasi keterlambatan pembayaran invoice",
             "delay_days": (7, 21),
             "impact": "Potensi penambahan hari tunggu karena approval berlapis, BAST, atau verifikasi akhir.",
         },
         {
             "factor": "Likuiditas pelanggan",
-            "query": "tekanan likuiditas perusahaan Indonesia keterlambatan pembayaran invoice jasa",
+            "query": "tekanan likuiditas perusahaan keterlambatan pembayaran invoice jasa",
             "delay_days": (14, 45),
             "impact": "Potensi penundaan tambahan ketika pelanggan sedang menjaga kas atau menahan pengeluaran.",
         },
         {
             "factor": "Regulasi pengadaan dan administrasi kontrak",
-            "query": "regulasi pengadaan pemerintah administrasi kontrak termin pembayaran vendor Indonesia",
+            "query": "regulasi pengadaan pemerintah administrasi kontrak termin pembayaran vendor",
             "delay_days": (5, 20),
             "impact": "Potensi penambahan waktu akibat revisi dokumen, termin, atau penyesuaian administrasi kontrak.",
         },
@@ -2224,6 +2220,29 @@ class Researcher:
     }
 
     _STRICT_PROFILE_TAGS = {"government", "bumn", "corporate", "training", "consulting"}
+    _SOURCE_AUTHORITY_WEIGHTS = {
+        "go.id": 4,
+        "lkpp.go.id": 4,
+        "kemenkeu.go.id": 4,
+        "bi.go.id": 4,
+        "ojk.go.id": 4,
+        "bps.go.id": 3,
+        "kontan.co.id": 2,
+        "bisnis.com": 2,
+        "katadata.co.id": 2,
+        "cnbcindonesia.com": 2,
+        "kompas.com": 1,
+        "detik.com": 1,
+    }
+    _OSINT_LOW_VALUE_TERMS = {
+        "crypto",
+        "saham",
+        "forex",
+        "harga minyak",
+        "sepak bola",
+        "hiburan",
+        "bitcoin",
+    }
 
     @staticmethod
     def _is_serper_available():
@@ -2269,6 +2288,9 @@ class Researcher:
         title = str((entry or {}).get("title") or "")
         snippet = str((entry or {}).get("snippet") or "")
         combined = f"{title} {snippet}"
+        lowered = combined.lower()
+        if any(term in lowered for term in Researcher._OSINT_LOW_VALUE_TERMS):
+            return True
         if combined.count("...") >= 2 or combined.count("…") >= 2:
             return True
         if combined.count('"') % 2 == 1:
@@ -2277,11 +2299,11 @@ class Researcher:
         return len(cleaned) < 35
 
     @classmethod
-    def _is_company_comparable_entry(cls, entry, extra_context=""):
+    def _score_company_comparable_entry(cls, entry, extra_context=""):
         context_tags = cls._extract_profile_tags(extra_context)
         profile_tags = context_tags & cls._STRICT_PROFILE_TAGS
         if not profile_tags:
-            return False
+            return 0
 
         entry_text = " ".join(
             [
@@ -2292,17 +2314,41 @@ class Researcher:
         )
         entry_tags = cls._extract_profile_tags(entry_text)
         if not (entry_tags & profile_tags):
-            return False
+            return 0
         if not (entry_tags & {"payment_ops", "liquidity"}):
-            return False
-        return not cls._is_low_signal_fragment(entry)
+            return 0
+        if cls._is_low_signal_fragment(entry):
+            return 0
+
+        domain = str(entry.get("domain") or "").lower()
+        authority_score = 0
+        for domain_fragment, score in cls._SOURCE_AUTHORITY_WEIGHTS.items():
+            if domain_fragment in domain:
+                authority_score = max(authority_score, score)
+
+        profile_score = len(entry_tags & profile_tags) * 3
+        cashflow_score = len(entry_tags & {"payment_ops", "liquidity"}) * 2
+        source_score = min(authority_score, 4)
+        return profile_score + cashflow_score + source_score
+
+    @classmethod
+    def _is_company_comparable_entry(cls, entry, extra_context=""):
+        return cls._score_company_comparable_entry(entry, extra_context) >= 5
 
     @classmethod
     def _filter_company_comparable_entries(cls, entries, extra_context=""):
-        return [
-            entry for entry in entries
-            if cls._is_company_comparable_entry(entry, extra_context)
-        ]
+        scored_entries = []
+        for entry in entries:
+            score = cls._score_company_comparable_entry(entry, extra_context)
+            if score >= 5:
+                enriched_entry = dict(entry)
+                enriched_entry["relevance_score"] = score
+                scored_entries.append(enriched_entry)
+        return sorted(
+            scored_entries,
+            key=lambda item: (item.get("relevance_score", 0), bool(item.get("date"))),
+            reverse=True,
+        )
 
     @classmethod
     def _build_entry_summary(cls, entry):
@@ -2320,8 +2366,30 @@ class Researcher:
             lines.append(headline)
         if summary and summary != headline:
             lines.append(f"  Ringkasan: {summary}")
+        if entry.get("relevance_score"):
+            display_score = min(int(entry["relevance_score"]), 12)
+            lines.append(f"  Relevansi: {display_score}/12 terhadap profil pembayaran perusahaan.")
         lines.append(f"  Sumber: {source}{date}")
         return "\n".join(lines)
+
+    @classmethod
+    def _build_contextual_query(cls, base_query, extra_context=""):
+        tags = cls._extract_profile_tags(extra_context)
+        query_terms = []
+        if {"government", "bumn"} & tags:
+            query_terms.extend(["pengadaan", "termin", "BAST", "pencairan"])
+        if "training" in tags:
+            query_terms.extend(["pelatihan", "sertifikasi", "vendor jasa"])
+        if "consulting" in tags:
+            query_terms.extend(["konsultan", "proyek jasa"])
+        if "corporate" in tags:
+            query_terms.extend(["korporasi", "approval invoice"])
+
+        context_snippet = cls._normalize_osint_fragment(extra_context, max_length=120)
+        parts = [base_query, "Indonesia", *query_terms]
+        if context_snippet:
+            parts.append(context_snippet)
+        return " ".join(part for part in parts if part).strip()
 
     @staticmethod
     def fetch_full_markdown(url):
@@ -2474,10 +2542,7 @@ class Researcher:
             return "OSINT tidak dipakai karena konteks perusahaan yang sebanding belum cukup jelas."
         search_jobs = []
         for topic_config in cls._OSINT_TOPICS:
-            query = topic_config["query"]
-            if context_snippet:
-                query = f"{query} {context_snippet[:180]}"
-
+            query = cls._build_contextual_query(topic_config["query"], context_snippet)
             search_jobs.append((topic_config["topic"], query, "search"))
             search_jobs.append((topic_config["topic"], query, "news"))
 
@@ -2524,6 +2589,12 @@ class Researcher:
         combined = "\n\n".join(blocks).strip()
         if not blocks:
             combined = "OSINT tidak dipakai karena tidak ada sinyal eksternal yang cukup sebanding dengan kondisi perusahaan."
+        else:
+            combined = (
+                "Batas pakai OSINT: sinyal eksternal di bawah hanya dipakai sebagai pembanding untuk profil "
+                "pembayaran, bukan sebagai fakta utama cashflow internal.\n\n"
+                f"{combined}"
+            )
 
         return deep_insight_text + combined
 
@@ -2534,9 +2605,10 @@ class Researcher:
             return "Sinyal OSINT per bab tidak tersedia."
 
         query = (
-            "Indonesia payment behavior invoice collection risk "
+            "payment behavior invoice collection risk Indonesia "
             f"{chapter_keywords or ''} {notes or ''}"
         ).strip()
+        query = cls._build_contextual_query(query, f"{chapter_keywords or ''} {notes or ''}")
 
         results = cls._execute_serper_query(query, mode="search", num_results=5)
         unique_results = cls._filter_company_comparable_entries(
@@ -2565,9 +2637,7 @@ class Researcher:
         factors = []
 
         for topic in cls._DELAY_FACTOR_TOPICS:
-            query = topic["query"]
-            if context_snippet:
-                query = f"{query} {context_snippet[:180]}"
+            query = cls._build_contextual_query(topic["query"], context_snippet)
 
             search_results = cls._execute_serper_query(query, mode="search", num_results=4)
             news_results = cls._execute_serper_query(query, mode="news", num_results=4)
@@ -2690,6 +2760,7 @@ class StyleEngine:
         heading_1.font.color.rgb = RGBColor(*theme_color)
         heading_1.paragraph_format.space_before = Pt(18)
         heading_1.paragraph_format.space_after = Pt(8)
+        heading_1.paragraph_format.keep_with_next = True
 
         heading_2 = doc.styles["Heading 2"]
         heading_2.font.name = "Calibri"
@@ -2698,6 +2769,7 @@ class StyleEngine:
         heading_2.font.color.rgb = RGBColor(0, 0, 0)
         heading_2.paragraph_format.space_before = Pt(14)
         heading_2.paragraph_format.space_after = Pt(4)
+        heading_2.paragraph_format.keep_with_next = True
 
         heading_3 = doc.styles["Heading 3"]
         heading_3.font.name = "Calibri"
@@ -2706,6 +2778,7 @@ class StyleEngine:
         heading_3.font.color.rgb = RGBColor(64, 64, 64)
         heading_3.paragraph_format.space_before = Pt(10)
         heading_3.paragraph_format.space_after = Pt(4)
+        heading_3.paragraph_format.keep_with_next = True
 
         for style_name in [
             "List Bullet",
@@ -2719,6 +2792,7 @@ class StyleEngine:
                 list_style = doc.styles[style_name]
                 list_style.font.name = "Calibri"
                 list_style.font.size = Pt(11)
+                list_style.paragraph_format.line_spacing = 1.05
                 list_style.paragraph_format.space_after = Pt(4)
             except KeyError:
                 continue
@@ -3030,6 +3104,12 @@ class ChartEngine:
 
 
 class DocumentBuilder:
+    VISUAL_MARKER_PREFIXES = {
+        "CHART": "[[CHART:",
+        "DASHBOARD": "[[DASHBOARD:",
+        "FLOW": "[[FLOW:",
+    }
+
     @staticmethod
     def _append_inline_text(paragraph, node, bold=False, italic=False, underline=False, monospace=False):
         if isinstance(node, NavigableString):
@@ -3077,6 +3157,39 @@ class DocumentBuilder:
                 underline=next_underline,
                 monospace=next_monospace,
             )
+
+    @staticmethod
+    def _set_cell_shading(cell, fill):
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), fill)
+        cell._tc.get_or_add_tcPr().append(shading)
+
+    @staticmethod
+    def _format_table_cell(cell, header=False):
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+        for paragraph in cell.paragraphs:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(2)
+            paragraph.paragraph_format.line_spacing = 1.0
+            for run in paragraph.runs:
+                run.font.name = "Calibri"
+                run.font.size = Pt(8.5 if not header else 9)
+                if header:
+                    run.font.bold = True
+                    run.font.color.rgb = RGBColor(255, 255, 255)
+
+    @classmethod
+    def _format_table(cls, table, header=True):
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.autofit = True
+        for row_index, row in enumerate(table.rows):
+            for cell in row.cells:
+                if header and row_index == 0:
+                    cls._set_cell_shading(cell, "C00000")
+                    cls._format_table_cell(cell, header=True)
+                else:
+                    cls._format_table_cell(cell, header=False)
 
     @staticmethod
     def _resolve_list_style(doc, ordered, level):
@@ -3147,6 +3260,7 @@ class DocumentBuilder:
                 if column_index < len(html_cells):
                     value = html_cells[column_index].get_text(" ", strip=True)
                 table_cells[column_index].text = value
+        DocumentBuilder._format_table(table)
 
     @classmethod
     def parse_html_to_docx(cls, doc, html_content, theme_color):
@@ -3174,6 +3288,8 @@ class DocumentBuilder:
                 continue
 
             if element.name == "p":
+                if not element.get_text(" ", strip=True):
+                    continue
                 paragraph = doc.add_paragraph()
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 for child in element.children:
@@ -3196,7 +3312,8 @@ class DocumentBuilder:
         if not markdown_text:
             return
 
-        html_content = markdown.markdown(markdown_text, extensions=["tables"])
+        markdown_text = re.sub(r"\n{3,}", "\n\n", markdown_text)
+        html_content = markdown.markdown(markdown_text, extensions=["tables", "sane_lists"])
         cls.parse_html_to_docx(doc, html_content, theme_color)
 
     @staticmethod
@@ -3238,34 +3355,25 @@ class DocumentBuilder:
 
         for raw_line in raw_text.splitlines():
             stripped_line = raw_line.strip()
-
-            if stripped_line.startswith("[[CHART:") and stripped_line.endswith("]]"
-            ):
+            marker_type, marker_payload = cls._parse_visual_marker(stripped_line)
+            if marker_type:
                 cls._flush_markdown_block(doc, markdown_buffer, theme_color)
                 markdown_buffer = []
-                payload = stripped_line.replace("[[CHART:", "", 1).rsplit("]]", 1)[0].strip()
-                cls._add_visual(doc, "CHART", payload, theme_color)
-                continue
-
-            if stripped_line.startswith("[[DASHBOARD:") and stripped_line.endswith("]]"
-            ):
-                cls._flush_markdown_block(doc, markdown_buffer, theme_color)
-                markdown_buffer = []
-                payload = stripped_line.replace("[[DASHBOARD:", "", 1).rsplit("]]", 1)[0].strip()
-                cls._add_visual(doc, "DASHBOARD", payload, theme_color)
-                continue
-
-            if stripped_line.startswith("[[FLOW:") and stripped_line.endswith("]]"
-            ):
-                cls._flush_markdown_block(doc, markdown_buffer, theme_color)
-                markdown_buffer = []
-                payload = stripped_line.replace("[[FLOW:", "", 1).rsplit("]]", 1)[0].strip()
-                cls._add_visual(doc, "FLOW", payload, theme_color)
+                cls._add_visual(doc, marker_type, marker_payload, theme_color)
                 continue
 
             markdown_buffer.append(raw_line.rstrip())
 
         cls._flush_markdown_block(doc, markdown_buffer, theme_color)
+
+    @classmethod
+    def _parse_visual_marker(cls, stripped_line):
+        if not stripped_line.endswith("]]"):
+            return None, None
+        for marker_type, prefix in cls.VISUAL_MARKER_PREFIXES.items():
+            if stripped_line.startswith(prefix):
+                return marker_type, stripped_line.replace(prefix, "", 1).rsplit("]]", 1)[0].strip()
+        return None, None
 
     @staticmethod
     def create_cover(doc, theme_color=DEFAULT_COLOR):
@@ -3320,6 +3428,7 @@ class DocumentBuilder:
             right_cell.text = value
             if left_cell.paragraphs[0].runs:
                 left_cell.paragraphs[0].runs[0].bold = True
+        DocumentBuilder._format_table(metadata_table, header=False)
 
         doc.add_page_break()
 
@@ -4038,12 +4147,12 @@ class ReportGenerator:
 
                 try:
                     caption = document.add_paragraph(
-                        f"Dashboard snapshot — {horizon_label}",
+                        f"Dashboard snapshot - {horizon_label}",
                         style="Caption",
                     )
                 except KeyError:
                     caption = document.add_paragraph(
-                        f"Dashboard snapshot — {horizon_label}"
+                        f"Dashboard snapshot - {horizon_label}"
                     )
                 caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in caption.runs:

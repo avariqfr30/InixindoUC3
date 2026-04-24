@@ -125,6 +125,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
             import core as core_module
 
             fake_response = mock.Mock()
+            fake_response.status_code = 200
             fake_response.raise_for_status.return_value = None
             fake_response.json.return_value = {
                 "success": True,
