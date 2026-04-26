@@ -11,6 +11,7 @@ WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 sys.path.insert(0, str(WORKSPACE))
 
 from data_sources import (
+    build_internal_api_profile_template,
     load_available_source_profiles,
     read_active_source_key,
     resolve_active_source_profile,
@@ -33,6 +34,7 @@ class DataSourceProfilesTest(unittest.TestCase):
             "INTERNAL_API_FIELD_MAP_JSON": os.environ.get("INTERNAL_API_FIELD_MAP_JSON"),
             "INTERNAL_API_BASIC_USERNAME": os.environ.get("INTERNAL_API_BASIC_USERNAME"),
             "INTERNAL_API_BASIC_PASSWORD": os.environ.get("INTERNAL_API_BASIC_PASSWORD"),
+            "INTERNAL_API_CONFIG_FILE": os.environ.get("INTERNAL_API_CONFIG_FILE"),
         }
 
     def tearDown(self):
@@ -63,6 +65,28 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertIn("demo", profiles)
         self.assertIn("production", profiles)
         self.assertEqual(profiles["production"]["endpoint"]["method"], "POST")
+        self.assertEqual(profiles["production"]["request"]["body"]["dataset_code"], "ClassReport")
+
+    def test_single_file_internal_api_profile_is_supported(self):
+        profile = build_internal_api_profile_template()
+        profile["endpoint"]["url"] = "https://example.com/api/Resource/dataset"
+        profile["request"]["body"] = {"dataset_code": "ClassReport"}
+        profile["field_map"] = {}
+        profile_path = os.path.join(self.tmpdir, "production-profile.json")
+        Path(profile_path).write_text(json.dumps(profile), encoding="utf-8")
+
+        profiles, issues, default_key = load_available_source_profiles(
+            demo_csv_path=self.demo_csv,
+            legacy_data_mode="internal_api",
+            internal_api_endpoint_url="",
+            internal_api_base_url="",
+            internal_api_dataset_path="/api/finance/invoices",
+            config_file_path=profile_path,
+        )
+
+        self.assertEqual(default_key, "production")
+        self.assertEqual(issues, [])
+        self.assertEqual(profiles["production"]["endpoint"]["url"], "https://example.com/api/Resource/dataset")
         self.assertEqual(profiles["production"]["request"]["body"]["dataset_code"], "ClassReport")
 
     def test_active_source_state_roundtrip(self):

@@ -32,6 +32,59 @@ def _parse_optional_json_value(raw_value, label):
         raise ValueError(f"{label} must be valid JSON: {exc}") from exc
 
 
+def build_internal_api_profile_template():
+    return {
+        "key": "production",
+        "name": "Produksi API Internal",
+        "mode": "production",
+        "type": "json_api",
+        "description": "Sumber JSON API internal perusahaan.",
+        "endpoint": {
+            "url": "https://internal.example.com/api/Resource/dataset",
+            "method": "POST",
+            "timeout": 20,
+            "verify_ssl": True,
+            "records_key": "data.dataset_result",
+        },
+        "auth": {
+            "basic_username": "your_username",
+            "basic_password": "your_password",
+            "bearer_token": "",
+        },
+        "request": {
+            "headers": {},
+            "query_params": {},
+            "body": {"dataset_code": "ClassReport"},
+        },
+        "field_map": {
+            "period": "your_period_field",
+            "partner_type": "your_partner_type_field",
+            "service": "your_service_field",
+            "payment_class": "your_payment_class_field",
+            "invoice_value": "your_invoice_value_field",
+            "delay_note": "your_delay_note_field",
+        },
+        "pagination": {
+            "mode": "",
+            "page_size": 0,
+            "cursor_key": "",
+            "offset_param": "offset",
+            "limit_param": "limit",
+            "max_pages": 50,
+        },
+        "retry": {
+            "max_retries": 3,
+            "backoff_base": 1.0,
+        },
+    }
+
+
+def _is_full_source_profile(payload):
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("type") == "json_api" and isinstance(payload.get("endpoint"), dict)
+
+
 def _build_demo_profile(csv_path):
     return {
         "key": "demo",
@@ -55,6 +108,14 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
                     file_defaults = {}
             except (json.JSONDecodeError, OSError):
                 file_defaults = {}
+
+    if _is_full_source_profile(file_defaults):
+        profile = deepcopy(file_defaults)
+        profile.setdefault("key", key)
+        profile.setdefault("name", name)
+        profile.setdefault("mode", mode)
+        profile.setdefault("description", "Sumber JSON API internal perusahaan.")
+        return _apply_env_overrides_to_json_api_profile(profile, prefix, endpoint_url, base_url, dataset_path)
 
     # Env vars override file values; file values override built-in defaults
     endpoint_url = str(endpoint_url or file_defaults.get("url") or "").strip()
@@ -109,6 +170,80 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
             "backoff_base": float(os.getenv(f"{prefix}_RETRY_BACKOFF_BASE", str(file_retry.get("backoff_base") or 1.0))),
         },
     }
+    return profile
+
+
+def _apply_env_overrides_to_json_api_profile(profile, prefix, endpoint_url, base_url, dataset_path):
+    profile = deepcopy(profile)
+    endpoint = profile.setdefault("endpoint", {})
+    auth = profile.setdefault("auth", {})
+    request = profile.setdefault("request", {})
+    pagination = profile.setdefault("pagination", {})
+    retry = profile.setdefault("retry", {})
+
+    if endpoint_url:
+        endpoint["url"] = str(endpoint_url).strip()
+    if base_url:
+        endpoint["base_url"] = str(base_url).strip()
+    if dataset_path:
+        endpoint["path"] = str(dataset_path).strip()
+
+    env_method = os.getenv(f"{prefix}_METHOD", "").strip().upper()
+    if env_method:
+        endpoint["method"] = env_method
+    env_records_key = os.getenv(f"{prefix}_RECORDS_KEY", "").strip()
+    if env_records_key:
+        endpoint["records_key"] = env_records_key
+
+    if os.getenv(f"{prefix}_AUTH_TOKEN", "").strip():
+        auth["bearer_token"] = os.getenv(f"{prefix}_AUTH_TOKEN", "").strip()
+    if os.getenv(f"{prefix}_BASIC_USERNAME", "").strip():
+        auth["basic_username"] = os.getenv(f"{prefix}_BASIC_USERNAME", "").strip()
+    if os.getenv(f"{prefix}_BASIC_PASSWORD", "").strip():
+        auth["basic_password"] = os.getenv(f"{prefix}_BASIC_PASSWORD", "")
+
+    headers = _parse_json_object(os.getenv(f"{prefix}_HEADERS_JSON", ""), f"{prefix}_HEADERS_JSON")
+    if headers:
+        request["headers"] = headers
+    query_params = _parse_json_object(os.getenv(f"{prefix}_QUERY_PARAMS_JSON", ""), f"{prefix}_QUERY_PARAMS_JSON")
+    if query_params:
+        request["query_params"] = query_params
+    body = _parse_optional_json_value(os.getenv(f"{prefix}_BODY_JSON", ""), f"{prefix}_BODY_JSON")
+    if body is not None:
+        request["body"] = body
+    field_map = _parse_json_object(os.getenv(f"{prefix}_FIELD_MAP_JSON", ""), f"{prefix}_FIELD_MAP_JSON")
+    if field_map:
+        profile["field_map"] = field_map
+
+    for env_name, target, caster in (
+        (f"{prefix}_TIMEOUT", endpoint, int),
+        (f"{prefix}_PAGE_SIZE", pagination, int),
+        (f"{prefix}_PAGINATION_MAX_PAGES", pagination, int),
+        (f"{prefix}_MAX_RETRIES", retry, int),
+        (f"{prefix}_RETRY_BACKOFF_BASE", retry, float),
+    ):
+        raw_value = os.getenv(env_name, "").strip()
+        if raw_value:
+            target_key = {
+                f"{prefix}_TIMEOUT": "timeout",
+                f"{prefix}_PAGE_SIZE": "page_size",
+                f"{prefix}_PAGINATION_MAX_PAGES": "max_pages",
+                f"{prefix}_MAX_RETRIES": "max_retries",
+                f"{prefix}_RETRY_BACKOFF_BASE": "backoff_base",
+            }[env_name]
+            target[target_key] = caster(raw_value)
+
+    if os.getenv(f"{prefix}_VERIFY_SSL", "").strip():
+        endpoint["verify_ssl"] = os.getenv(f"{prefix}_VERIFY_SSL", "").strip().lower() not in {"0", "false", "no"}
+    if os.getenv(f"{prefix}_PAGINATION_MODE", "").strip():
+        pagination["mode"] = os.getenv(f"{prefix}_PAGINATION_MODE", "").strip().lower()
+    if os.getenv(f"{prefix}_PAGINATION_CURSOR_KEY", "").strip():
+        pagination["cursor_key"] = os.getenv(f"{prefix}_PAGINATION_CURSOR_KEY", "").strip()
+    if os.getenv(f"{prefix}_PAGINATION_OFFSET_PARAM", "").strip():
+        pagination["offset_param"] = os.getenv(f"{prefix}_PAGINATION_OFFSET_PARAM", "").strip()
+    if os.getenv(f"{prefix}_PAGINATION_LIMIT_PARAM", "").strip():
+        pagination["limit_param"] = os.getenv(f"{prefix}_PAGINATION_LIMIT_PARAM", "").strip()
+
     return profile
 
 

@@ -63,7 +63,10 @@ class InternalDataContractUnitTest(unittest.TestCase):
         contract = get_internal_api_contract()
         self.assertEqual(contract["fieldMapEnvVar"], "INTERNAL_API_FIELD_MAP_JSON")
         self.assertEqual(contract["endpointUrlEnvVar"], "INTERNAL_API_ENDPOINT_URL")
+        self.assertEqual(contract["profileConfigFileEnvVar"], "INTERNAL_API_CONFIG_FILE")
         self.assertIn("period", contract["fieldMapTemplate"])
+        self.assertIn("recommendedProductionProfile", contract)
+        self.assertIn("handoverChecklist", contract)
         self.assertIn("records", contract["exampleResponse"])
 
     def test_extract_records_and_infer_fields_from_nested_json(self):
@@ -102,6 +105,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertIn("Kelas Pembayaran", normalized_df.columns)
         self.assertIn("Nilai Invoice", normalized_df.columns)
         self.assertTrue(summary["isReady"])
+        self.assertIn("fieldMapSuggestionJson", summary)
 
     def test_post_basic_auth_client_supports_body_json(self):
         old_env = {

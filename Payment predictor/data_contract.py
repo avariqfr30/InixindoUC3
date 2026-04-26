@@ -3,6 +3,7 @@ import re
 from copy import deepcopy
 
 import pandas as pd
+from data_sources import build_internal_api_profile_template
 
 
 INTERNAL_API_FIELD_SPECS = {
@@ -619,12 +620,24 @@ def build_internal_data_summary(data_frame, explicit_field_map=None, extraction_
             for canonical_key in resolved_columns
         },
         "sourceColumns": resolved_columns,
+        "fieldMapSuggestion": {
+            canonical_key: source_column
+            for canonical_key, source_column in resolved_columns.items()
+        },
+        "fieldMapSuggestionJson": json.dumps(
+            {
+                canonical_key: source_column
+                for canonical_key, source_column in resolved_columns.items()
+            },
+            ensure_ascii=False,
+        ),
         "fields": fields,
         "recordsPath": extraction_summary.get("resolvedRecordsPath"),
         "recordsPathStrategy": extraction_summary.get("strategy"),
         "recordCount": extraction_summary.get("recordCount"),
         "candidateRecordSetsScanned": extraction_summary.get("candidateCount"),
         "isReady": not missing_required,
+        "handoverReady": bool(not missing_required and not low_confidence_fields),
     }
 
 
@@ -648,13 +661,25 @@ def get_internal_api_contract():
         "basicPasswordEnvVar": "INTERNAL_API_BASIC_PASSWORD",
         "bodyJsonEnvVar": "INTERNAL_API_BODY_JSON",
         "fieldMapEnvVar": "INTERNAL_API_FIELD_MAP_JSON",
+        "profileConfigFileEnvVar": "INTERNAL_API_CONFIG_FILE",
+        "productionProfilePathEnvVar": "DATA_SOURCE_PRODUCTION_PROFILE_PATH",
         "fieldMapTemplate": field_map_template,
+        "recommendedProductionProfile": build_internal_api_profile_template(),
         "fields": fields,
         "exampleResponse": {
             "records": [example_record],
         },
+        "handoverChecklist": [
+            "Edit satu file JSON profile produksi, idealnya dari template `deployment/internal-api.production.example.json`.",
+            "Isi endpoint.url, endpoint.method, auth, request.body, dan endpoint.records_key bila payload bersarang.",
+            "Biarkan field_map kosong dulu jika nama field API cukup jelas; gunakan fieldMapSuggestionJson dari endpoint kontrak bila perlu mapping eksplisit.",
+            "Set DATA_ACQUISITION_MODE=internal_api dan INTERNAL_API_CONFIG_FILE=/path/profile.json di environment service.",
+            "Jalankan validasi sumber `production`; aktifkan hanya jika currentSummary.isReady bernilai true.",
+            "Pertahankan sumber `demo` untuk smoke test dan rollback cepat saat API internal belum siap.",
+        ],
         "notes": [
             "Cara termudah untuk operasional adalah siapkan sumber `demo` dan `production`, lalu validasi dan aktivasi dari UI tanpa mengubah alur aplikasi.",
+            "Untuk handover, cara paling sederhana adalah memakai satu file JSON profile produksi melalui INTERNAL_API_CONFIG_FILE atau DATA_SOURCE_PRODUCTION_PROFILE_PATH.",
             "Cara paling mudah untuk konfigurasi developer: arahkan app ke endpoint JSON apa pun melalui INTERNAL_API_ENDPOINT_URL.",
             "Jika endpoint perusahaan memakai POST, isi INTERNAL_API_METHOD=POST.",
             "Jika endpoint perusahaan memakai Basic Auth, isi INTERNAL_API_BASIC_USERNAME dan INTERNAL_API_BASIC_PASSWORD.",

@@ -61,31 +61,40 @@ Mode demo mempertahankan perilaku saat ini dan memakai SQLite/CSV lokal:
 python3 app.py --data-mode demo
 ```
 
-Mode internal API mengambil data finansial internal dari endpoint API, lalu memproses OSINT hanya sebagai konteks eksternal:
+Mode internal API mengambil data finansial internal dari endpoint API, lalu memproses OSINT hanya sebagai konteks eksternal. Untuk handover, cara paling sederhana adalah memakai satu file profile produksi:
+```bash
+cp "Payment predictor/deployment/internal-api.production.example.json" /etc/payment-app.production.json
+sudo nano /etc/payment-app.production.json
+```
+
+Isi bagian ini di JSON profile:
+* `endpoint.url`: endpoint APIDog/API perusahaan
+* `endpoint.method`: biasanya `POST`
+* `endpoint.records_key`: path array record utama, misalnya `data.dataset_result`
+* `auth.basic_username` dan `auth.basic_password`, atau `auth.bearer_token`
+* `request.body`: body POST yang diminta backend, misalnya `{"dataset_code":"ClassReport"}`
+* `field_map`: kosongkan dulu bila nama field API mudah ditebak; isi hanya jika validasi belum siap
+
+Lalu arahkan service ke profile itu:
 ```bash
 DATA_ACQUISITION_MODE=internal_api \
-INTERNAL_API_ENDPOINT_URL=https://internal.example.com/api/finance/invoices \
-INTERNAL_API_AUTH_TOKEN=your_token \
+INTERNAL_API_CONFIG_FILE=/etc/payment-app.production.json \
 python3 app.py
 ```
 
-Jika endpoint perusahaan memakai method selain `GET`, Basic Auth, atau butuh body JSON, gunakan env var berikut:
+Demo mode tetap tersedia untuk testing/rollback:
+```bash
+DATA_ACQUISITION_MODE=demo python3 app.py
+```
+
+Mode env-var lama tetap didukung bila tidak ingin memakai file JSON:
 ```bash
 DATA_ACQUISITION_MODE=internal_api \
 INTERNAL_API_ENDPOINT_URL=https://internal.example.com/api/Resource/dataset \
 INTERNAL_API_METHOD=POST \
 INTERNAL_API_BASIC_USERNAME=your_username \
 INTERNAL_API_BASIC_PASSWORD=your_password \
-INTERNAL_API_BODY_JSON='{"tag":"cashin"}' \
-python3 app.py
-```
-
-Jika Anda lebih suka memisahkan host dan path seperti sebelumnya, mode lama masih didukung:
-```bash
-DATA_ACQUISITION_MODE=internal_api \
-INTERNAL_API_BASE_URL=https://internal.example.com \
-INTERNAL_API_DATASET_PATH=/api/finance/invoices \
-INTERNAL_API_AUTH_TOKEN=your_token \
+INTERNAL_API_BODY_JSON='{"dataset_code":"ClassReport"}' \
 python3 app.py
 ```
 
@@ -101,9 +110,12 @@ Kalau tidak diisi, app sekarang akan mencoba menebak sendiri:
 * field mana yang tampaknya mewakili periode, partner, layanan, kelas pembayaran, nilai invoice, dan catatan keterlambatan
 
 Dengan kata lain, untuk banyak endpoint internal nanti alurnya cukup:
-1. isi `INTERNAL_API_ENDPOINT_URL`
-2. cek `GET /api/internal-data/contract`
-3. tambahkan `INTERNAL_API_RECORDS_KEY` atau `INTERNAL_API_FIELD_MAP_JSON` hanya jika inference belum tepat
+1. edit satu file `internal-api.production.json`
+2. set `DATA_ACQUISITION_MODE=internal_api` dan `INTERNAL_API_CONFIG_FILE=/path/profile.json`
+3. login ke app lalu validasi source `production`
+4. cek `GET /api/internal-data/contract`
+5. tambahkan `endpoint.records_key` atau `field_map` hanya jika inference belum tepat
+6. aktifkan source `production` setelah `isReady=true`
 
 Cara termudah untuk tim internal nanti adalah mengikuti key canonical berikut langsung di response API:
 * `period`
@@ -121,6 +133,9 @@ Endpoint ini menampilkan:
 * alias yang masih diterima
 * contoh response
 * template `INTERNAL_API_FIELD_MAP_JSON`
+* template JSON profile produksi
+* `fieldMapSuggestionJson` dari payload aktif
+* checklist handover API internal
 * endpoint env var yang bisa dipakai
 * env var method/auth/body untuk endpoint non-GET
 * ringkasan apakah dataset aktif saat ini sudah memenuhi kontrak atau belum
