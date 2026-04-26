@@ -482,6 +482,10 @@ class InternalAPIClient:
                 payload,
                 explicit_records_path=self.records_key or None,
             )
+            if preview_limit > 0:
+                all_records = all_records[:preview_limit]
+                extraction_summary["previewLimit"] = preview_limit
+                extraction_summary["recordCount"] = len(all_records)
 
         extraction_summary["datasetUrl"] = dataset_url
         extraction_summary["requestMethod"] = self.method
@@ -1034,6 +1038,7 @@ class KnowledgeBase:
             "recordCount": None,
             "missingRequiredFields": [],
             "contractSummary": None,
+            "nextSteps": [],
         }
 
         try:
@@ -1047,7 +1052,25 @@ class KnowledgeBase:
         validation["recordCount"] = int(len(data_frame))
         validation["missingRequiredFields"] = list(data_summary.get("missingRequiredFields") or [])
         validation["contractSummary"] = data_summary
+        validation["nextSteps"] = self._build_source_validation_next_steps(data_summary)
         return validation
+
+    @staticmethod
+    def _build_source_validation_next_steps(data_summary):
+        steps = []
+        if not data_summary.get("recordsPath"):
+            steps.append("Isi endpoint.records_key jika array record utama belum terdeteksi dengan benar.")
+        if data_summary.get("missingRequiredFields"):
+            missing = ", ".join(data_summary.get("missingRequiredFields") or [])
+            steps.append(f"Lengkapi field_map untuk field wajib yang belum terbaca: {missing}.")
+        if data_summary.get("lowConfidenceFields"):
+            low_confidence = ", ".join(data_summary.get("lowConfidenceFields") or [])
+            steps.append(f"Review mapping otomatis untuk field ber-confidence rendah: {low_confidence}.")
+        if data_summary.get("fieldMapSuggestionJson"):
+            steps.append("Gunakan fieldMapSuggestionJson sebagai draft field_map bila perlu mapping eksplisit.")
+        if not steps:
+            steps.append("Sumber data siap diaktifkan sebagai production knowledge base.")
+        return steps
 
     def activate_source(self, source_key):
         validation = self.validate_source(source_key)

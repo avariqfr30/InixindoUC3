@@ -1,0 +1,46 @@
+{
+  "key": "production",
+  "name": "Produksi API Internal",
+  "mode": "production",
+  "type": "json_api",
+  "description": "Sumber JSON API internal perusahaan untuk cashflow dashboard dan laporan.",
+  "endpoint": {
+    "url": "https://inworx.inixindojogja.co.id/api/Resource/dataset",
+    "method": "POST",
+    "timeout": 20,
+    "verify_ssl": true,
+    "records_key": "data.dataset_result"
+  },
+  "auth": {
+    "basic_username": "your_username",
+    "basic_password": "your_password",
+    "bearer_token": ""
+  },
+  "request": {
+    "headers": {},
+    "query_params": {},
+    "body": {
+      "dataset_code": "ClassReport"
+    }
+  },
+  "field_map": {
+    "period": "your_period_field",
+    "partner_type": "your_partner_type_field",
+    "service": "your_service_field",
+    "payment_class": "your_payment_class_field",
+    "invoice_value": "your_invoice_value_field",
+    "delay_note": "your_delay_note_field"
+  },
+  "pagination": {
+    "mode": "",
+    "page_size": 0,
+    "cursor_key": "",
+    "offset_param": "offset",
+    "limit_param": "limit",
+    "max_pages": 50
+  },
+  "retry": {
+    "max_retries": 3,
+    "backoff_base": 1.0
+  }
+}
