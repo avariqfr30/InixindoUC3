@@ -2,10 +2,9 @@
 Cashflow Forecast Engine
 Generates predictions for Cash In, Cash Out, and Safety Status
 """
-import json
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import pandas as pd
 import statistics
 
