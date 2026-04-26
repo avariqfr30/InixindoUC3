@@ -78,8 +78,11 @@ INTERNAL_API_VERIFY_SSL = os.getenv("INTERNAL_API_VERIFY_SSL", "true").strip().l
     "no",
 }
 
-# Consolidated config: point to a single JSON file instead of 17 env vars
-INTERNAL_API_CONFIG_FILE = os.getenv("INTERNAL_API_CONFIG_FILE", "").strip()
+# Consolidated config: point to one JSON file, or let the app create it from the UI.
+INTERNAL_API_CONFIG_FILE = os.getenv(
+    "INTERNAL_API_CONFIG_FILE",
+    os.path.join(os.path.expanduser("~"), ".inixindo-cashflow", "production-source.json"),
+).strip()
 
 # Pagination support
 INTERNAL_API_PAGINATION_MODE = os.getenv("INTERNAL_API_PAGINATION_MODE", "").strip().lower()  # offset, cursor, link, or empty
