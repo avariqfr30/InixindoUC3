@@ -40,6 +40,7 @@ def create_app():
     from core import CashOutStore, KnowledgeBase, ReportGenerator, Researcher
     from data_sources import summarize_source_profile
     from forecast_engine import CashflowForecaster, parse_idr_amount
+    from internal_api_connection import connect_internal_data_source as connect_internal_data_source_service
 
     app = Flask(__name__)
     app.secret_key = APP_SECRET_KEY
@@ -572,6 +573,32 @@ def create_app():
     @app.route("/api/internal-data/contract", methods=["GET"])
     def get_internal_data_contract():
         return jsonify(current_app.config["knowledge_base"].get_internal_data_contract())
+
+    @app.route("/api/internal-data/connect", methods=["POST"])
+    def connect_internal_data_source():
+        payload = request.get_json(silent=True) or {}
+        try:
+            response_payload, status_code = connect_internal_data_source_service(
+                payload=payload,
+                knowledge_base=current_app.config["knowledge_base"],
+                forecast_cache=current_app.config["forecast_cache"],
+                cash_out_store=current_app.config["cash_out_store"],
+                sync_snapshot=_build_sync_snapshot,
+            )
+            return jsonify(response_payload), status_code
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify(
+                {
+                    "ready": False,
+                    "activated": False,
+                    "profileSaved": False,
+                    "message": str(exc),
+                    "error": str(exc),
+                    "syncStatus": _build_sync_snapshot(),
+                }
+            ), 400
 
     @app.route("/api/data-source/validate", methods=["POST"])
     def validate_data_source():
