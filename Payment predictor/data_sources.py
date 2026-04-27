@@ -3,6 +3,7 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _normalize_key(value):
@@ -77,6 +78,143 @@ def build_internal_api_profile_template():
             "backoff_base": 1.0,
         },
     }
+
+
+def _parse_json_payload_value(value, label, default=None):
+    if value in (None, ""):
+        return deepcopy(default)
+    if isinstance(value, (dict, list)):
+        return deepcopy(value)
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return deepcopy(default)
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be valid JSON: {exc}") from exc
+
+
+def _clean_mapping(mapping):
+    if not isinstance(mapping, dict):
+        return {}
+    return {
+        str(key).strip(): str(value).strip()
+        for key, value in mapping.items()
+        if str(key).strip() and str(value).strip()
+    }
+
+
+def _coerce_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def build_internal_api_profile_from_connection_payload(payload):
+    payload = payload or {}
+    endpoint_url = str(
+        payload.get("endpointUrl")
+        or payload.get("endpoint_url")
+        or payload.get("url")
+        or ""
+    ).strip()
+    if not endpoint_url:
+        raise ValueError("Endpoint API wajib diisi.")
+
+    parsed_url = urlparse(endpoint_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ValueError("Endpoint API harus berupa URL http atau https yang lengkap.")
+
+    body = _parse_json_payload_value(
+        payload.get("bodyJson", payload.get("body")),
+        "Request body",
+        default=None,
+    )
+    headers = _clean_mapping(
+        _parse_json_payload_value(
+            payload.get("headersJson", payload.get("headers")),
+            "Headers",
+            default={},
+        )
+    )
+    query_params = _clean_mapping(
+        _parse_json_payload_value(
+            payload.get("queryParamsJson", payload.get("query_params")),
+            "Query params",
+            default={},
+        )
+    )
+    field_map = _clean_mapping(
+        _parse_json_payload_value(
+            payload.get("fieldMapJson", payload.get("field_map")),
+            "Field map",
+            default={},
+        )
+    )
+
+    raw_method = str(payload.get("method") or ("POST" if body is not None else "GET")).strip().upper()
+    if raw_method not in {"GET", "POST", "PUT", "PATCH"}:
+        raise ValueError("Method API hanya boleh GET, POST, PUT, atau PATCH.")
+
+    timeout = int(payload.get("timeout") or 20)
+    if timeout < 3 or timeout > 120:
+        raise ValueError("Timeout API harus berada di antara 3 dan 120 detik.")
+
+    profile = build_internal_api_profile_template()
+    profile.update(
+        {
+            "key": "production",
+            "name": "API Internal",
+            "mode": "production",
+            "type": "json_api",
+            "description": "Sumber JSON API internal yang disambungkan dari aplikasi.",
+        }
+    )
+    profile["endpoint"] = {
+        "url": endpoint_url,
+        "method": raw_method,
+        "timeout": timeout,
+        "verify_ssl": _coerce_bool(payload.get("verifySsl"), default=True),
+        "records_key": str(payload.get("recordsKey") or payload.get("records_key") or "").strip(),
+    }
+    profile["auth"] = {
+        "basic_username": str(payload.get("basicUsername") or payload.get("username") or "").strip(),
+        "basic_password": str(payload.get("basicPassword") or payload.get("password") or ""),
+        "bearer_token": str(payload.get("bearerToken") or payload.get("token") or "").strip(),
+    }
+    profile["request"] = {
+        "headers": headers,
+        "query_params": query_params,
+        "body": body,
+    }
+    profile["field_map"] = field_map
+    profile["pagination"] = {
+        "mode": "",
+        "page_size": 0,
+        "cursor_key": "",
+        "offset_param": "offset",
+        "limit_param": "limit",
+        "max_pages": 50,
+    }
+    profile["retry"] = {
+        "max_retries": 2,
+        "backoff_base": 0.8,
+    }
+    return profile
+
+
+def write_source_profile(path, profile):
+    if not path:
+        raise ValueError("Path profile API internal belum dikonfigurasi.")
+    profile_path = Path(path).expanduser()
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(
+        json.dumps(profile, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return str(profile_path)
 
 
 def _is_full_source_profile(payload):

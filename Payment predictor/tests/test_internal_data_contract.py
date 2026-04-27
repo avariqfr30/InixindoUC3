@@ -175,10 +175,20 @@ class InternalDataContractRouteTest(unittest.TestCase):
         os.environ["JOB_STATE_DB_PATH"] = os.path.join(cls._tmpdir, "jobs.db")
         os.environ["REPORT_ARTIFACTS_DIR"] = os.path.join(cls._tmpdir, "artifacts")
         os.environ["DATA_SOURCE_ACTIVE_STATE_PATH"] = os.path.join(cls._tmpdir, "active-source.json")
+        os.environ["INTERNAL_API_CONFIG_FILE"] = os.path.join(cls._tmpdir, "production-source.json")
         os.environ["APP_SECRET_KEY"] = "test-secret-key"
         os.environ["SESSION_COOKIE_SECURE"] = "false"
 
-        for module_name in ("app", "config"):
+        for module_name in (
+            "app",
+            "config",
+            "core",
+            "finance_api_clients",
+            "cashflow_analysis",
+            "osint_research",
+            "docx_rendering",
+            "report_generation",
+        ):
             if module_name in sys.modules:
                 del sys.modules[module_name]
 
@@ -221,6 +231,65 @@ class InternalDataContractRouteTest(unittest.TestCase):
         self.assertIn("currentSummary", payload)
         self.assertIn("fields", payload)
         self.assertTrue(payload["currentSummary"]["isReady"])
+
+    def test_internal_api_connector_is_not_user_facing(self):
+        template = (WORKSPACE / "templates" / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("Sambungkan API Internal", template)
+        self.assertNotIn("btn-connect-api", template)
+        self.assertNotIn("api-connect", template)
+
+    def test_connect_endpoint_saves_and_activates_ready_api_profile(self):
+        import core as core_module
+
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "success": True,
+            "code": 200,
+            "message": "OK",
+            "data": {
+                "dataset_result": [
+                    {
+                        "reporting_period": "Januari 2026",
+                        "segmentasi_customer": "Instansi Pemerintah",
+                        "produk_utama": "Audit SPBE",
+                        "bucket_pembayaran": "Kelas B (Telat 1-2 Minggu)",
+                        "nominal_tagihan": 275000000,
+                        "hambatan_penagihan": "Dokumen termin menunggu approval internal.",
+                    },
+                    {
+                        "reporting_period": "Februari 2026",
+                        "segmentasi_customer": "Swasta",
+                        "produk_utama": "Pelatihan AI",
+                        "bucket_pembayaran": "Kelas C (Telat 1-2 Bulan)",
+                        "nominal_tagihan": 120000000,
+                        "hambatan_penagihan": "Customer meminta jadwal ulang invoice.",
+                    },
+                ]
+            },
+        }
+
+        with mock.patch.object(core_module.requests, "request", return_value=fake_response):
+            response = self.client.post(
+                "/api/internal-data/connect",
+                json={
+                    "endpointUrl": "https://example.com/api/Resource/dataset",
+                    "method": "POST",
+                    "basicUsername": "demo-user",
+                    "basicPassword": "demo-pass",
+                    "bodyJson": {"dataset_code": "ClassReport"},
+                    "recordsKey": "data.dataset_result",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ready"])
+        self.assertTrue(payload["activated"])
+        self.assertTrue(payload["profileSaved"])
+        self.assertEqual(payload["syncStatus"]["financialData"]["activeSourceKey"], "production")
+        self.assertTrue(Path(os.environ["INTERNAL_API_CONFIG_FILE"]).exists())
 
 
 if __name__ == "__main__":

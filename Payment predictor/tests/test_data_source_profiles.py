@@ -11,6 +11,7 @@ WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 sys.path.insert(0, str(WORKSPACE))
 
 from data_sources import (
+    build_internal_api_profile_from_connection_payload,
     build_internal_api_profile_template,
     load_available_source_profiles,
     read_active_source_key,
@@ -136,6 +137,27 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertTrue(summary["basicAuthConfigured"])
         self.assertTrue(summary["bodyConfigured"])
         self.assertNotIn("basic_password", json.dumps(summary))
+
+    def test_connection_payload_builds_runtime_profile(self):
+        profile = build_internal_api_profile_from_connection_payload(
+            {
+                "endpointUrl": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "basicUsername": "demo-user",
+                "basicPassword": "demo-pass",
+                "bodyJson": {"dataset_code": "ClassReport"},
+                "recordsKey": "data.dataset_result",
+                "fieldMapJson": {"invoice_value": "amount_idr"},
+            }
+        )
+
+        self.assertEqual(profile["key"], "production")
+        self.assertEqual(profile["endpoint"]["url"], "https://example.com/api/Resource/dataset")
+        self.assertEqual(profile["endpoint"]["method"], "POST")
+        self.assertEqual(profile["endpoint"]["records_key"], "data.dataset_result")
+        self.assertEqual(profile["auth"]["basic_username"], "demo-user")
+        self.assertEqual(profile["request"]["body"]["dataset_code"], "ClassReport")
+        self.assertEqual(profile["field_map"]["invoice_value"], "amount_idr")
 
 
 if __name__ == "__main__":
