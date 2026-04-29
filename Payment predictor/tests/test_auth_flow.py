@@ -10,6 +10,9 @@ WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 
 
 class AuthFlowTestCase(unittest.TestCase):
+    TEST_USERNAME = "bootstrap_owner"
+    TEST_PASSWORD = "password123"
+
     @classmethod
     def setUpClass(cls):
         cls._tmpdir = tempfile.mkdtemp(prefix="cashin-auth-flow-")
@@ -40,7 +43,7 @@ class AuthFlowTestCase(unittest.TestCase):
     def setUp(self):
         self.client = self.flask_app.test_client()
 
-    def _signup(self, client, username, password="password123"):
+    def _signup(self, client, username, password=TEST_PASSWORD):
         return client.post(
             "/signup",
             data={
@@ -51,6 +54,23 @@ class AuthFlowTestCase(unittest.TestCase):
             follow_redirects=False,
         )
 
+    def _signup_or_login(self, client, username=TEST_USERNAME, password=TEST_PASSWORD):
+        signup = self._signup(client, username, password=password)
+        if signup.status_code == 302:
+            return signup
+        if signup.status_code == 202:
+            return signup
+        if signup.status_code not in (400, 403):
+            raise AssertionError(f"Unexpected signup status: {signup.status_code}")
+        login = client.post(
+            "/login",
+            data={"username": username, "password": password},
+            follow_redirects=False,
+        )
+        if login.status_code != 302:
+            raise AssertionError(f"Unexpected login status: {login.status_code}")
+        return login
+
     def test_login_logout_flow_and_cache_headers(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 302)
@@ -60,7 +80,7 @@ class AuthFlowTestCase(unittest.TestCase):
         self.assertEqual(login_page.status_code, 200)
         self.assertIn("no-store", login_page.headers.get("Cache-Control", ""))
 
-        signup = self._signup(self.client, "tester_auth")
+        signup = self._signup_or_login(self.client)
         self.assertEqual(signup.status_code, 302)
         self.assertTrue(signup.location.endswith("/"))
 
@@ -68,6 +88,7 @@ class AuthFlowTestCase(unittest.TestCase):
         self.assertEqual(home.status_code, 200)
         self.assertIn("Masuk sebagai", home.get_data(as_text=True))
         self.assertIn("Pengaturan Data", home.get_data(as_text=True))
+        self.assertIn("Persetujuan Akun", home.get_data(as_text=True))
         self.assertIn("no-store", home.headers.get("Cache-Control", ""))
 
         settings = self.client.get("/settings")
@@ -96,7 +117,7 @@ class AuthFlowTestCase(unittest.TestCase):
 
     def test_new_login_revokes_previous_active_session_for_same_user(self):
         client_one = self.flask_app.test_client()
-        signup = self._signup(client_one, "single_session_user")
+        signup = self._signup_or_login(client_one)
         self.assertEqual(signup.status_code, 302)
         first_access = client_one.get("/get-config")
         self.assertEqual(first_access.status_code, 200)
@@ -104,7 +125,7 @@ class AuthFlowTestCase(unittest.TestCase):
         client_two = self.flask_app.test_client()
         login = client_two.post(
             "/login",
-            data={"username": "single_session_user", "password": "password123"},
+            data={"username": self.TEST_USERNAME, "password": self.TEST_PASSWORD},
             follow_redirects=False,
         )
         self.assertEqual(login.status_code, 302)
@@ -117,19 +138,91 @@ class AuthFlowTestCase(unittest.TestCase):
         self.assertEqual(revoked_payload["error"], "Autentikasi diperlukan.")
 
     def test_session_without_server_side_id_is_rejected(self):
-        signup = self._signup(self.client, "tampered_session_user")
+        signup = self._signup_or_login(self.client)
         self.assertEqual(signup.status_code, 302)
         authorized = self.client.get("/get-config")
         self.assertEqual(authorized.status_code, 200)
 
         with self.client.session_transaction() as auth_session:
             auth_session.pop("auth_session_id", None)
-            auth_session["username"] = "tampered_session_user"
+            auth_session["username"] = self.TEST_USERNAME
 
         unauthorized = self.client.get("/get-config")
         self.assertEqual(unauthorized.status_code, 401)
         payload = unauthorized.get_json()
         self.assertEqual(payload["error"], "Autentikasi diperlukan.")
+
+    def test_signup_requires_admin_approval_after_bootstrap_account_exists(self):
+        first_signup = self._signup_or_login(self.client)
+        self.assertEqual(first_signup.status_code, 302)
+
+        self.client.post("/logout", follow_redirects=False)
+
+        signup_page = self.client.get("/signup")
+        self.assertEqual(signup_page.status_code, 200)
+        html = signup_page.get_data(as_text=True)
+        self.assertIn("disetujui admin", html)
+        self.assertIn(">Daftar</a>", html)
+
+        second_signup = self._signup(self.client, "second_user")
+        self.assertEqual(second_signup.status_code, 202)
+        self.assertIn(
+            "Pendaftaran berhasil dikirim",
+            second_signup.get_data(as_text=True),
+        )
+        blocked_login = self.client.post(
+            "/login",
+            data={"username": "second_user", "password": self.TEST_PASSWORD},
+            follow_redirects=False,
+        )
+        self.assertEqual(blocked_login.status_code, 403)
+        self.assertIn("menunggu persetujuan admin", blocked_login.get_data(as_text=True))
+
+        admin_login = self.client.post(
+            "/login",
+            data={"username": self.TEST_USERNAME, "password": self.TEST_PASSWORD},
+            follow_redirects=False,
+        )
+        self.assertEqual(admin_login.status_code, 302)
+
+        admin_page = self.client.get("/admin/users")
+        self.assertEqual(admin_page.status_code, 200)
+        self.assertIn("second_user", admin_page.get_data(as_text=True))
+
+        approve = self.client.post("/admin/users/second_user/approve", follow_redirects=False)
+        self.assertEqual(approve.status_code, 302)
+
+        self.client.post("/logout", follow_redirects=False)
+        approved_login = self.client.post(
+            "/login",
+            data={"username": "second_user", "password": self.TEST_PASSWORD},
+            follow_redirects=False,
+        )
+        self.assertEqual(approved_login.status_code, 302)
+
+    def test_non_admin_cannot_access_user_approval_page(self):
+        self._signup_or_login(self.client)
+        self.client.post("/logout", follow_redirects=False)
+
+        second_signup = self._signup(self.client, "pending_user")
+        self.assertEqual(second_signup.status_code, 202)
+
+        self.client.post(
+            "/login",
+            data={"username": self.TEST_USERNAME, "password": self.TEST_PASSWORD},
+            follow_redirects=False,
+        )
+        approve = self.client.post("/admin/users/pending_user/approve", follow_redirects=False)
+        self.assertEqual(approve.status_code, 302)
+        self.client.post("/logout", follow_redirects=False)
+
+        self.client.post(
+            "/login",
+            data={"username": "pending_user", "password": self.TEST_PASSWORD},
+            follow_redirects=False,
+        )
+        forbidden = self.client.get("/admin/users")
+        self.assertEqual(forbidden.status_code, 403)
 
 
 if __name__ == "__main__":

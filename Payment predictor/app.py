@@ -18,8 +18,11 @@ logger = logging.getLogger(__name__)
 def create_app():
     from config import (
         APP_SECRET_KEY,
+        AUTH_ALLOW_SELF_SIGNUP,
+        AUTH_ENABLE_SIGNUP_REQUESTS,
         AUTH_MAX_ACTIVE_SESSIONS,
         AUTH_MAX_SESSIONS_PER_USER,
+        AUTH_REQUIRE_SIGNUP_APPROVAL,
         AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS,
         AUTH_SESSION_IDLE_TIMEOUT_MINUTES,
         DATA_REFRESH_INTERVAL_SECONDS,
@@ -106,6 +109,9 @@ def create_app():
     app.config["auth_max_sessions_per_user"] = max(int(AUTH_MAX_SESSIONS_PER_USER), 1)
     app.config["auth_session_idle_timeout_seconds"] = max(int(AUTH_SESSION_IDLE_TIMEOUT_MINUTES), 1) * 60
     app.config["auth_session_absolute_timeout_seconds"] = max(int(AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS), 1) * 3600
+    app.config["auth_allow_self_signup"] = AUTH_ALLOW_SELF_SIGNUP
+    app.config["auth_enable_signup_requests"] = AUTH_ENABLE_SIGNUP_REQUESTS
+    app.config["auth_require_signup_approval"] = AUTH_REQUIRE_SIGNUP_APPROVAL
 
     def _start_authenticated_session(username):
         session_id = session_store.create_session(
@@ -133,6 +139,10 @@ def create_app():
         session_id = str(session.get("auth_session_id") or "").strip()
         if not username or not session_id:
             return False
+        current_user = user_store.get_user(username)
+        if not current_user or current_user["status"] != "approved":
+            session.clear()
+            return False
         is_valid, reason = session_store.validate_and_touch(
             session_id=session_id,
             username=username,
@@ -143,7 +153,9 @@ def create_app():
             logger.info("Auth session rejected for user=%s reason=%s", username, reason)
             session.clear()
             return False
+        g.current_user = current_user
         g.current_username = username
+        g.current_is_admin = bool(current_user["is_admin"])
         return True
 
     def _is_api_request():
@@ -158,6 +170,18 @@ def create_app():
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         return response
+
+    def _is_signup_enabled():
+        if not user_store.has_users():
+            return True
+        return bool(app.config.get("auth_enable_signup_requests", True))
+
+    def _requires_signup_approval():
+        return bool(app.config.get("auth_require_signup_approval", True))
+
+    def _is_admin():
+        current_user = getattr(g, "current_user", None) or user_store.get_user(session.get("username", ""))
+        return bool(current_user and current_user["is_admin"])
 
     @app.before_request
     def require_authentication():
@@ -184,13 +208,16 @@ def create_app():
             return response
         return _attach_no_store_headers(response)
 
-    def _render_auth(mode="login", error=None, username=""):
+    def _render_auth(mode="login", error=None, username="", notice=None):
         return render_template(
             "auth.html",
             mode=mode,
             error=error,
+            notice=notice,
             username=username,
             has_users=user_store.has_users(),
+            signup_enabled=_is_signup_enabled(),
+            signup_requires_approval=_requires_signup_approval(),
         )
 
     @app.route("/login", methods=["GET", "POST"])
@@ -203,8 +230,20 @@ def create_app():
 
         username = str(request.form.get("username", "")).strip()
         password = request.form.get("password", "")
-        authenticated_username = user_store.authenticate(username, password)
-        if not authenticated_username:
+        authenticated_user, auth_reason = user_store.authenticate(username, password)
+        if not authenticated_user:
+            if auth_reason == "pending":
+                return _render_auth(
+                    mode="login",
+                    error="Akun Anda masih menunggu persetujuan admin.",
+                    username=username,
+                ), 403
+            if auth_reason == "rejected":
+                return _render_auth(
+                    mode="login",
+                    error="Pendaftaran akun ditolak. Hubungi administrator internal.",
+                    username=username,
+                ), 403
             return _render_auth(
                 mode="login",
                 error="Nama pengguna atau kata sandi salah.",
@@ -212,7 +251,7 @@ def create_app():
             ), 401
 
         try:
-            _start_authenticated_session(authenticated_username)
+            _start_authenticated_session(authenticated_user["username"])
         except SessionLimitError as exc:
             return _render_auth(mode="login", error=str(exc), username=username), 429
         return redirect(url_for("home"))
@@ -222,8 +261,20 @@ def create_app():
         if _is_authenticated():
             return redirect(url_for("home"))
 
+        signup_enabled = _is_signup_enabled()
         if request.method == "GET":
+            if not signup_enabled:
+                return _render_auth(
+                    mode="login",
+                    error="Pendaftaran akun dinonaktifkan. Hubungi administrator internal.",
+                ), 403
             return _render_auth(mode="signup")
+
+        if not signup_enabled:
+            return _render_auth(
+                mode="login",
+                error="Pendaftaran akun dinonaktifkan. Hubungi administrator internal.",
+            ), 403
 
         username = str(request.form.get("username", "")).strip()
         password = request.form.get("password", "")
@@ -235,10 +286,25 @@ def create_app():
                 username=username,
             ), 400
 
+        is_first_user = not user_store.has_users()
+        auto_approve = is_first_user or (not _requires_signup_approval()) or app.config.get("auth_allow_self_signup", False)
         try:
-            created_username = user_store.create_user(username, password)
+            created_username = user_store.create_user(
+                username,
+                password,
+                auto_approve=auto_approve,
+                is_admin=is_first_user,
+                approved_by=username if is_first_user else None,
+            )
         except ValueError as exc:
             return _render_auth(mode="signup", error=str(exc), username=username), 400
+
+        if not auto_approve:
+            return _render_auth(
+                mode="login",
+                notice="Pendaftaran berhasil dikirim. Akun Anda akan aktif setelah disetujui admin.",
+                username=created_username,
+            ), 202
 
         try:
             _start_authenticated_session(created_username)
@@ -468,17 +534,75 @@ def create_app():
 
     @app.route("/")
     def home():
-        return render_template("index.html", current_username=session.get("username", ""))
+        return render_template(
+            "index.html",
+            current_username=session.get("username", ""),
+            current_is_admin=_is_admin(),
+        )
 
     @app.route("/settings")
     def data_settings():
-        return render_template("data_settings.html", current_username=session.get("username", ""))
+        return render_template(
+            "data_settings.html",
+            current_username=session.get("username", ""),
+            current_is_admin=_is_admin(),
+        )
+
+    @app.route("/admin/users")
+    def admin_users():
+        if not _is_admin():
+            return render_template(
+                "admin_users.html",
+                current_username=session.get("username", ""),
+                current_is_admin=False,
+                users=[],
+                error="Akses admin diperlukan.",
+            ), 403
+        return render_template(
+            "admin_users.html",
+            current_username=session.get("username", ""),
+            current_is_admin=True,
+            users=user_store.list_users(),
+            error=None,
+        )
+
+    @app.route("/admin/users/<username>/approve", methods=["POST"])
+    def approve_user(username):
+        if not _is_admin():
+            return jsonify({"error": "Akses admin diperlukan."}), 403
+        try:
+            user_store.approve_user(username, session.get("username", ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return redirect(url_for("admin_users"))
+
+    @app.route("/admin/users/<username>/reject", methods=["POST"])
+    def reject_user(username):
+        if not _is_admin():
+            return jsonify({"error": "Akses admin diperlukan."}), 403
+        try:
+            user_store.reject_user(username, session.get("username", ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return redirect(url_for("admin_users"))
 
     @app.route("/get-config")
     def get_config():
         active_knowledge_base = current_app.config["knowledge_base"]
         if active_knowledge_base.df is None or active_knowledge_base.df.empty:
-            return jsonify({"error": "Financial data is currently unavailable.", "syncStatus": _build_sync_snapshot()})
+            return jsonify(
+                {
+                    "error": "Financial data is currently unavailable.",
+                    "syncStatus": _build_sync_snapshot(),
+                    "dataSourceContract": active_knowledge_base.get_internal_data_contract(),
+                    "authSecurity": session_store.get_security_snapshot(
+                        idle_timeout_seconds=app.config["auth_session_idle_timeout_seconds"],
+                        absolute_timeout_seconds=app.config["auth_session_absolute_timeout_seconds"],
+                        max_global_sessions=app.config["auth_max_active_sessions"],
+                        max_sessions_per_user=app.config["auth_max_sessions_per_user"],
+                    ),
+                }
+            )
         review_context = active_knowledge_base.get_review_context()
 
         return jsonify(
