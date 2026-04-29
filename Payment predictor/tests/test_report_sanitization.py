@@ -156,6 +156,30 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertTrue(table.rows[0].cells[0].paragraphs[0].runs[0].bold)
         self.assertLessEqual(table.rows[1].cells[0].paragraphs[0].paragraph_format.space_after.pt, 2)
 
+    def test_docx_body_text_is_left_aligned_and_ordered_lists_restart(self):
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from core import DocumentBuilder
+
+        document = Document()
+        DocumentBuilder.parse_html_to_docx(
+            document,
+            (
+                "<p>Paragraf ringkas untuk laporan.</p>"
+                "<ol><li>Prioritas pertama</li><li>Prioritas kedua</li></ol>"
+                "<ol><li>Restart prioritas baru</li><li>Lanjutannya</li></ol>"
+            ),
+            (204, 0, 0),
+        )
+
+        paragraph_texts = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+
+        self.assertEqual(document.paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.LEFT)
+        self.assertIn("1. Prioritas pertama", paragraph_texts)
+        self.assertIn("2. Prioritas kedua", paragraph_texts)
+        self.assertIn("1. Restart prioritas baru", paragraph_texts)
+        self.assertIn("2. Lanjutannya", paragraph_texts)
+
 
 if __name__ == "__main__":
     unittest.main()

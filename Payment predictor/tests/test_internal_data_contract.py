@@ -167,6 +167,65 @@ class InternalDataContractUnitTest(unittest.TestCase):
                 if module_name in sys.modules:
                     del sys.modules[module_name]
 
+    def test_profile_client_supports_form_body_and_env_bearer_token(self):
+        old_env = {"INTERNAL_API_AUTH_TOKEN": os.environ.get("INTERNAL_API_AUTH_TOKEN")}
+        try:
+            os.environ["INTERNAL_API_AUTH_TOKEN"] = "env-token"
+            for module_name in ("core", "config", "finance_api_clients"):
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
+
+            import core as core_module
+
+            fake_response = mock.Mock()
+            fake_response.status_code = 200
+            fake_response.raise_for_status.return_value = None
+            fake_response.json.return_value = {
+                "success": True,
+                "data": [
+                    {
+                        "period": "Q1 2026",
+                        "partner_type": "Instansi Pemerintah",
+                        "service": "Audit SPBE",
+                        "payment_class": "Kelas B",
+                        "invoice_value": "Rp 200.000.000",
+                    }
+                ],
+            }
+            profile = {
+                "type": "json_api",
+                "endpoint": {
+                    "url": "https://example.com/api/Resource/dataset",
+                    "method": "POST",
+                    "timeout": 20,
+                    "verify_ssl": True,
+                    "records_key": "",
+                },
+                "auth": {"bearer_token": "__ENV__"},
+                "request": {
+                    "body_format": "form",
+                    "body": {"dataset_code": "ClassReport"},
+                },
+            }
+
+            with mock.patch.object(core_module.requests, "request", return_value=fake_response) as request_mock:
+                client = core_module.InternalAPIClient(source_profile=profile)
+                records, _ = client.fetch_records()
+
+            self.assertEqual(records[0]["period"], "Q1 2026")
+            _, kwargs = request_mock.call_args
+            self.assertEqual(kwargs["headers"]["Authorization"], "Bearer env-token")
+            self.assertEqual(kwargs["data"], {"dataset_code": "ClassReport"})
+            self.assertNotIn("json", kwargs)
+        finally:
+            if old_env["INTERNAL_API_AUTH_TOKEN"] is None:
+                os.environ.pop("INTERNAL_API_AUTH_TOKEN", None)
+            else:
+                os.environ["INTERNAL_API_AUTH_TOKEN"] = old_env["INTERNAL_API_AUTH_TOKEN"]
+            for module_name in ("core", "config", "finance_api_clients"):
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
+
 
 class InternalDataContractRouteTest(unittest.TestCase):
     @classmethod
@@ -232,11 +291,14 @@ class InternalDataContractRouteTest(unittest.TestCase):
         self.assertIn("fields", payload)
         self.assertTrue(payload["currentSummary"]["isReady"])
 
-    def test_internal_api_connector_is_not_user_facing(self):
+    def test_internal_api_connector_is_isolated_to_settings_page(self):
         template = (WORKSPACE / "templates" / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("Sambungkan API Internal", template)
         self.assertNotIn("btn-connect-api", template)
         self.assertNotIn("api-connect", template)
+        settings_template = (WORKSPACE / "templates" / "data_settings.html").read_text(encoding="utf-8")
+        self.assertIn("Internal API / APIDog", settings_template)
+        self.assertIn("Simpan & Aktifkan Internal API", settings_template)
 
     def test_connect_endpoint_saves_and_activates_ready_api_profile(self):
         import core as core_module
@@ -290,6 +352,53 @@ class InternalDataContractRouteTest(unittest.TestCase):
         self.assertTrue(payload["profileSaved"])
         self.assertEqual(payload["syncStatus"]["financialData"]["activeSourceKey"], "production")
         self.assertTrue(Path(os.environ["INTERNAL_API_CONFIG_FILE"]).exists())
+
+    def test_connect_preview_does_not_persist_profile(self):
+        import core as core_module
+
+        config_path = Path(os.environ["INTERNAL_API_CONFIG_FILE"])
+        if config_path.exists():
+            config_path.unlink()
+
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "success": True,
+            "code": 200,
+            "message": "OK",
+            "data": {
+                "dataset_result": [
+                    {
+                        "reporting_period": "Januari 2026",
+                        "segmentasi_customer": "Instansi Pemerintah",
+                        "produk_utama": "Audit SPBE",
+                        "bucket_pembayaran": "Kelas B",
+                        "nominal_tagihan": 275000000,
+                    }
+                ]
+            },
+        }
+
+        with mock.patch.object(core_module.requests, "request", return_value=fake_response):
+            response = self.client.post(
+                "/api/internal-data/connect",
+                json={
+                    "endpointUrl": "https://example.com/api/Resource/dataset",
+                    "method": "POST",
+                    "bodyFormat": "form",
+                    "bodyJson": {"dataset_code": "ClassReport"},
+                    "recordsKey": "data.dataset_result",
+                    "activate": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["activated"])
+        self.assertFalse(payload["profileSaved"])
+        self.assertFalse(config_path.exists())
 
 
 if __name__ == "__main__":

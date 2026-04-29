@@ -16,12 +16,13 @@ def connect_internal_data_source(payload, knowledge_base, forecast_cache, cash_o
     raw_df = knowledge_base._normalize_records(records)
 
     if raw_df.empty:
-        write_source_profile(INTERNAL_API_CONFIG_FILE, profile)
-        knowledge_base._reload_source_registry()
+        if should_activate:
+            write_source_profile(INTERNAL_API_CONFIG_FILE, profile)
+            knowledge_base._reload_source_registry()
         return {
             "ready": False,
             "activated": False,
-            "profileSaved": True,
+            "profileSaved": bool(should_activate),
             "message": "API terbaca, tetapi tidak ada record yang dapat dianalisis.",
             "recordCount": 0,
             "nextSteps": [
@@ -40,8 +41,9 @@ def connect_internal_data_source(payload, knowledge_base, forecast_cache, cash_o
         explicit_field_map=client.field_map,
         extraction_summary=extraction_summary,
     )
-    write_source_profile(INTERNAL_API_CONFIG_FILE, profile)
-    knowledge_base._reload_source_registry()
+    if should_activate:
+        write_source_profile(INTERNAL_API_CONFIG_FILE, profile)
+        knowledge_base._reload_source_registry()
 
     ready = bool(data_summary.get("isReady"))
     next_steps = knowledge_base._build_source_validation_next_steps(data_summary)
@@ -55,11 +57,20 @@ def connect_internal_data_source(payload, knowledge_base, forecast_cache, cash_o
     response_payload = {
         "ready": ready,
         "activated": bool(activation.get("activated")),
-        "profileSaved": True,
+        "profileSaved": bool(should_activate),
         "message": (
             "API internal berhasil disambungkan dan data sudah aktif."
             if activation.get("activated")
-            else "API internal tersimpan, tetapi field wajib belum lengkap untuk dipakai sebagai basis analisis."
+            else (
+                "Mapping API berhasil dicek. Klik Simpan & Aktifkan bila struktur data sudah benar."
+                if not should_activate
+                and ready
+                else (
+                    "API berhasil dicek, tetapi field wajib belum lengkap untuk dipakai sebagai basis analisis."
+                    if not should_activate
+                    else "API internal tersimpan, tetapi field wajib belum lengkap untuk dipakai sebagai basis analisis."
+                )
+            )
         ),
         "recordCount": int(len(records)),
         "previewRows": len(sample_records),

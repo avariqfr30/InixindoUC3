@@ -93,18 +93,18 @@ class StyleEngine:
         normal_style.font.size = Pt(11)
         normal_style.font.color.rgb = RGBColor(33, 37, 41)
         normal_paragraph = normal_style.paragraph_format
-        normal_paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        normal_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
         normal_paragraph.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-        normal_paragraph.line_spacing = 1.15
-        normal_paragraph.space_after = Pt(8)
+        normal_paragraph.line_spacing = 1.12
+        normal_paragraph.space_after = Pt(10)
 
         heading_1 = doc.styles["Heading 1"]
         heading_1.font.name = "Calibri"
         heading_1.font.size = Pt(16)
         heading_1.font.bold = True
         heading_1.font.color.rgb = RGBColor(*theme_color)
-        heading_1.paragraph_format.space_before = Pt(18)
-        heading_1.paragraph_format.space_after = Pt(8)
+        heading_1.paragraph_format.space_before = Pt(22)
+        heading_1.paragraph_format.space_after = Pt(10)
         heading_1.paragraph_format.keep_with_next = True
 
         heading_2 = doc.styles["Heading 2"]
@@ -112,8 +112,8 @@ class StyleEngine:
         heading_2.font.size = Pt(13)
         heading_2.font.bold = True
         heading_2.font.color.rgb = RGBColor(0, 0, 0)
-        heading_2.paragraph_format.space_before = Pt(14)
-        heading_2.paragraph_format.space_after = Pt(4)
+        heading_2.paragraph_format.space_before = Pt(16)
+        heading_2.paragraph_format.space_after = Pt(7)
         heading_2.paragraph_format.keep_with_next = True
 
         heading_3 = doc.styles["Heading 3"]
@@ -121,8 +121,8 @@ class StyleEngine:
         heading_3.font.size = Pt(12)
         heading_3.font.bold = True
         heading_3.font.color.rgb = RGBColor(64, 64, 64)
-        heading_3.paragraph_format.space_before = Pt(10)
-        heading_3.paragraph_format.space_after = Pt(4)
+        heading_3.paragraph_format.space_before = Pt(12)
+        heading_3.paragraph_format.space_after = Pt(6)
         heading_3.paragraph_format.keep_with_next = True
 
         for style_name in [
@@ -137,8 +137,8 @@ class StyleEngine:
                 list_style = doc.styles[style_name]
                 list_style.font.name = "Calibri"
                 list_style.font.size = Pt(11)
-                list_style.paragraph_format.line_spacing = 1.05
-                list_style.paragraph_format.space_after = Pt(4)
+                list_style.paragraph_format.line_spacing = 1.08
+                list_style.paragraph_format.space_after = Pt(6)
             except KeyError:
                 continue
 
@@ -535,23 +535,48 @@ class DocumentBuilder:
                     cls._format_table_cell(cell, header=False)
 
     @staticmethod
-    def _resolve_list_style(doc, ordered, level):
-        ordered_styles = ["List Number", "List Number 2", "List Number 3"]
-        bullet_styles = ["List Bullet", "List Bullet 2", "List Bullet 3"]
-        style_names = ordered_styles if ordered else bullet_styles
-        preferred_style = style_names[min(level, len(style_names) - 1)]
+    def _format_ordered_marker(index, level):
+        if level % 3 == 1:
+            return f"{chr(96 + ((index - 1) % 26) + 1)}."
+        if level % 3 == 2:
+            roman_pairs = [
+                (10, "x"),
+                (9, "ix"),
+                (5, "v"),
+                (4, "iv"),
+                (1, "i"),
+            ]
+            remaining = max(index, 1)
+            marker = ""
+            for value, numeral in roman_pairs:
+                while remaining >= value:
+                    marker += numeral
+                    remaining -= value
+            return f"{marker}."
+        return f"{index}."
 
-        try:
-            doc.styles[preferred_style]
-            return preferred_style
-        except KeyError:
-            return "List Number" if ordered else "List Bullet"
+    @classmethod
+    def _add_list_paragraph(cls, doc, marker, inline_nodes, level):
+        paragraph = doc.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        paragraph.paragraph_format.left_indent = Inches(0.28 + (level * 0.22))
+        paragraph.paragraph_format.first_line_indent = Inches(-0.2)
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(6)
+        paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+        paragraph.paragraph_format.line_spacing = 1.08
+
+        marker_run = paragraph.add_run(f"{marker} ")
+        marker_run.font.name = "Calibri"
+        marker_run.font.size = Pt(11)
+
+        for node in inline_nodes:
+            cls._append_inline_text(paragraph, node)
+        return paragraph
 
     @classmethod
     def _add_list(cls, doc, list_tag, level=0, ordered=False):
-        style_name = cls._resolve_list_style(doc, ordered, level)
-
-        for list_item in list_tag.find_all("li", recursive=False):
+        for item_index, list_item in enumerate(list_tag.find_all("li", recursive=False), start=1):
             inline_nodes = []
             nested_lists = []
 
@@ -562,10 +587,8 @@ class DocumentBuilder:
                     inline_nodes.append(child)
 
             if inline_nodes:
-                paragraph = doc.add_paragraph(style=style_name)
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                for node in inline_nodes:
-                    cls._append_inline_text(paragraph, node)
+                marker = cls._format_ordered_marker(item_index, level) if ordered else "•"
+                cls._add_list_paragraph(doc, marker, inline_nodes, level)
 
             for nested_list in nested_lists:
                 cls._add_list(
@@ -614,7 +637,7 @@ class DocumentBuilder:
                 if not str(element).strip():
                     continue
                 paragraph = doc.add_paragraph(str(element).strip())
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 continue
 
             if not isinstance(element, Tag):
@@ -634,7 +657,10 @@ class DocumentBuilder:
                 if not element.get_text(" ", strip=True):
                     continue
                 paragraph = doc.add_paragraph()
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                paragraph.paragraph_format.space_after = Pt(10)
+                paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                paragraph.paragraph_format.line_spacing = 1.12
                 for child in element.children:
                     cls._append_inline_text(paragraph, child)
                 continue
