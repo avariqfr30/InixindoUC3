@@ -265,7 +265,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
         signup = self.client.post(
             "/signup",
             data={
-                "username": "contract_user",
+                "username": "contract_user@inixindojogja.co.id",
                 "password": "password123",
                 "confirm_password": "password123",
             },
@@ -277,7 +277,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
         if signup.status_code in (400, 403):
             login = self.client.post(
                 "/login",
-                data={"username": "contract_user", "password": "password123"},
+                data={"username": "contract_user@inixindojogja.co.id", "password": "password123"},
                 follow_redirects=False,
             )
             if login.status_code != 302:

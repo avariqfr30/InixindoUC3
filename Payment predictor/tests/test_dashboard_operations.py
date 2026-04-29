@@ -77,7 +77,7 @@ class DashboardOperationRouteTest(unittest.TestCase):
         signup = self.client.post(
             "/signup",
             data={
-                "username": "dashboard_ops_user",
+                "username": "dashboard_ops_user@inixindojogja.co.id",
                 "password": "password123",
                 "confirm_password": "password123",
             },
@@ -86,7 +86,7 @@ class DashboardOperationRouteTest(unittest.TestCase):
         if signup.status_code in (400, 403):
             login = self.client.post(
                 "/login",
-                data={"username": "dashboard_ops_user", "password": "password123"},
+                data={"username": "dashboard_ops_user@inixindojogja.co.id", "password": "password123"},
                 follow_redirects=False,
             )
             if login.status_code != 302:

@@ -183,7 +183,7 @@
             </div>
             <div>
                 <p>Gunakan akun internal sederhana untuk mengakses dasbor, meninjau proyeksi, dan menjalankan alur pembuatan laporan.</p>
-                <p>Ini adalah lapisan akses ringan untuk pengujian bersama. Sederhana, tetapi kata sandi tetap disimpan dalam bentuk hash, bukan teks biasa.</p>
+                <p>Pendaftaran dibatasi untuk email internal perusahaan. Kata sandi tetap disimpan dalam bentuk hash, bukan teks biasa.</p>
             </div>
         </section>
 
@@ -198,9 +198,9 @@
             <h2>{% if mode == 'signup' %}Buat Akun{% else %}Selamat Datang Kembali{% endif %}</h2>
             <p>
                 {% if mode == 'signup' %}
-                Buat nama pengguna dan kata sandi internal sederhana untuk mengakses aplikasi.
+                Daftarkan email dan kata sandi untuk mengakses aplikasi.
                 {% else %}
-                Masuk dengan akun internal pengujian Anda untuk melanjutkan.
+                Masuk dengan email yang sudah terdaftar untuk melanjutkan.
                 {% endif %}
             </p>
 
@@ -214,9 +214,9 @@
             {% if mode == 'signup' %}
             <form method="post" action="{{ url_for('signup') }}">
                 <div>
-                    <label for="username">Nama Pengguna</label>
-                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username or '' }}">
-                    <div class="field-hint">Gunakan 3-32 karakter. Hanya huruf, angka, atau garis bawah.</div>
+                    <label for="username">Email Kerja</label>
+                    <input id="username" name="username" type="email" required autocomplete="email" value="{{ username or '' }}">
+                    <div class="field-hint">Hanya email dengan domain `@{{ allowed_email_domain }}` yang diizinkan.</div>
                 </div>
                 <div>
                     <label for="password">Kata Sandi</label>
@@ -230,17 +230,14 @@
                 <button type="submit">Buat Akun</button>
             </form>
             <div class="auth-footer">
-                {% if signup_requires_approval %}
-                Setelah daftar, akun baru harus disetujui admin sebelum bisa masuk.
-                {% else %}
-                Sudah punya akun? <a href="{{ url_for('login') }}">Masuk di sini</a>.
-                {% endif %}
+                Jika email memakai domain internal yang benar dan belum terdaftar, akun akan langsung aktif. Sudah punya akun? <a href="{{ url_for('login') }}">Masuk di sini</a>.
             </div>
             {% else %}
             <form method="post" action="{{ url_for('login') }}">
                 <div>
-                    <label for="username">Nama Pengguna</label>
-                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username or '' }}">
+                    <label for="username">Email Kerja</label>
+                    <input id="username" name="username" type="email" required autocomplete="email" value="{{ username or '' }}">
+                    <div class="field-hint">Gunakan email `@{{ allowed_email_domain }}` yang sudah terdaftar.</div>
                 </div>
                 <div>
                     <label for="password">Kata Sandi</label>
