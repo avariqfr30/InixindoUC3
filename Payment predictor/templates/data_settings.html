@@ -214,9 +214,6 @@
                 <p class="sub">Masukkan endpoint dataset internal. Sistem akan membuat mapping dasar, menyimpan config, mengaktifkan sumber data API bila siap, lalu refresh knowledge base di background.</p>
             </div>
             <nav class="nav-actions" aria-label="Navigasi">
-                {% if current_is_admin %}
-                <a class="nav-link" href="{{ url_for('admin_users') }}">Persetujuan Akun</a>
-                {% endif %}
                 <a class="nav-link" href="{{ url_for('home') }}">Kembali ke Dashboard</a>
                 <a class="nav-link" href="{{ url_for('logout') }}" onclick="event.preventDefault(); document.getElementById('logout-form').submit();">Keluar</a>
             </nav>

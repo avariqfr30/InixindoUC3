@@ -20,24 +20,7 @@ AUTH_SESSION_IDLE_TIMEOUT_MINUTES = int(os.getenv("AUTH_SESSION_IDLE_TIMEOUT_MIN
 AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS = int(
     os.getenv("AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS", str(SESSION_LIFETIME_HOURS))
 )
-AUTH_ALLOW_SELF_SIGNUP = os.getenv("AUTH_ALLOW_SELF_SIGNUP", "false").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-AUTH_ENABLE_SIGNUP_REQUESTS = os.getenv("AUTH_ENABLE_SIGNUP_REQUESTS", "true").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-AUTH_REQUIRE_SIGNUP_APPROVAL = os.getenv("AUTH_REQUIRE_SIGNUP_APPROVAL", "true").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+AUTH_ALLOWED_EMAIL_DOMAIN = os.getenv("AUTH_ALLOWED_EMAIL_DOMAIN", "inixindojogja.co.id").strip().lower()
 APP_SERVER = os.getenv("APP_SERVER", "flask").strip().lower()
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip()
 APP_PORT = int(os.getenv("APP_PORT", "5000"))

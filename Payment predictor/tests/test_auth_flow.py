@@ -10,7 +10,7 @@ WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 
 
 class AuthFlowTestCase(unittest.TestCase):
-    TEST_USERNAME = "bootstrap_owner"
+    TEST_USERNAME = "bootstrap_owner@inixindojogja.co.id"
     TEST_PASSWORD = "password123"
 
     @classmethod
@@ -88,7 +88,7 @@ class AuthFlowTestCase(unittest.TestCase):
         self.assertEqual(home.status_code, 200)
         self.assertIn("Masuk sebagai", home.get_data(as_text=True))
         self.assertIn("Pengaturan Data", home.get_data(as_text=True))
-        self.assertIn("Persetujuan Akun", home.get_data(as_text=True))
+        self.assertNotIn("Persetujuan Akun", home.get_data(as_text=True))
         self.assertIn("no-store", home.headers.get("Cache-Control", ""))
 
         settings = self.client.get("/settings")
@@ -152,7 +152,7 @@ class AuthFlowTestCase(unittest.TestCase):
         payload = unauthorized.get_json()
         self.assertEqual(payload["error"], "Autentikasi diperlukan.")
 
-    def test_signup_requires_admin_approval_after_bootstrap_account_exists(self):
+    def test_signup_allows_company_email_after_bootstrap_account_exists(self):
         first_signup = self._signup_or_login(self.client)
         self.assertEqual(first_signup.status_code, 302)
 
@@ -161,68 +161,37 @@ class AuthFlowTestCase(unittest.TestCase):
         signup_page = self.client.get("/signup")
         self.assertEqual(signup_page.status_code, 200)
         html = signup_page.get_data(as_text=True)
-        self.assertIn("disetujui admin", html)
+        self.assertIn("@inixindojogja.co.id", html)
         self.assertIn(">Daftar</a>", html)
 
-        second_signup = self._signup(self.client, "second_user")
-        self.assertEqual(second_signup.status_code, 202)
-        self.assertIn(
-            "Pendaftaran berhasil dikirim",
-            second_signup.get_data(as_text=True),
-        )
-        blocked_login = self.client.post(
-            "/login",
-            data={"username": "second_user", "password": self.TEST_PASSWORD},
-            follow_redirects=False,
-        )
-        self.assertEqual(blocked_login.status_code, 403)
-        self.assertIn("menunggu persetujuan admin", blocked_login.get_data(as_text=True))
-
-        admin_login = self.client.post(
-            "/login",
-            data={"username": self.TEST_USERNAME, "password": self.TEST_PASSWORD},
-            follow_redirects=False,
-        )
-        self.assertEqual(admin_login.status_code, 302)
-
-        admin_page = self.client.get("/admin/users")
-        self.assertEqual(admin_page.status_code, 200)
-        self.assertIn("second_user", admin_page.get_data(as_text=True))
-
-        approve = self.client.post("/admin/users/second_user/approve", follow_redirects=False)
-        self.assertEqual(approve.status_code, 302)
+        second_signup = self._signup(self.client, "second_user@inixindojogja.co.id")
+        self.assertEqual(second_signup.status_code, 302)
 
         self.client.post("/logout", follow_redirects=False)
         approved_login = self.client.post(
             "/login",
-            data={"username": "second_user", "password": self.TEST_PASSWORD},
+            data={"username": "second_user@inixindojogja.co.id", "password": self.TEST_PASSWORD},
             follow_redirects=False,
         )
         self.assertEqual(approved_login.status_code, 302)
 
-    def test_non_admin_cannot_access_user_approval_page(self):
+    def test_signup_rejects_invalid_email_format_and_non_company_domain(self):
         self._signup_or_login(self.client)
         self.client.post("/logout", follow_redirects=False)
 
-        second_signup = self._signup(self.client, "pending_user")
-        self.assertEqual(second_signup.status_code, 202)
-
-        self.client.post(
-            "/login",
-            data={"username": self.TEST_USERNAME, "password": self.TEST_PASSWORD},
-            follow_redirects=False,
+        rejected_signup = self._signup(self.client, "not-an-email")
+        self.assertEqual(rejected_signup.status_code, 400)
+        self.assertIn(
+            "Email harus memakai format alamat email yang valid.",
+            rejected_signup.get_data(as_text=True),
         )
-        approve = self.client.post("/admin/users/pending_user/approve", follow_redirects=False)
-        self.assertEqual(approve.status_code, 302)
-        self.client.post("/logout", follow_redirects=False)
 
-        self.client.post(
-            "/login",
-            data={"username": "pending_user", "password": self.TEST_PASSWORD},
-            follow_redirects=False,
+        external_signup = self._signup(self.client, "external@example.com")
+        self.assertEqual(external_signup.status_code, 400)
+        self.assertIn(
+            "Hanya email @inixindojogja.co.id yang diizinkan.",
+            external_signup.get_data(as_text=True),
         )
-        forbidden = self.client.get("/admin/users")
-        self.assertEqual(forbidden.status_code, 403)
 
 
 if __name__ == "__main__":
