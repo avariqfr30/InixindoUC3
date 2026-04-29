@@ -67,7 +67,13 @@ class AuthFlowTestCase(unittest.TestCase):
         home = self.client.get("/")
         self.assertEqual(home.status_code, 200)
         self.assertIn("Masuk sebagai", home.get_data(as_text=True))
+        self.assertIn("Pengaturan Data", home.get_data(as_text=True))
         self.assertIn("no-store", home.headers.get("Cache-Control", ""))
+
+        settings = self.client.get("/settings")
+        self.assertEqual(settings.status_code, 200)
+        self.assertIn("Internal API / APIDog", settings.get_data(as_text=True))
+        self.assertIn("no-store", settings.headers.get("Cache-Control", ""))
 
         auth_login_redirect = self.client.get("/login", follow_redirects=False)
         self.assertEqual(auth_login_redirect.status_code, 302)

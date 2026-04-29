@@ -470,6 +470,10 @@ def create_app():
     def home():
         return render_template("index.html", current_username=session.get("username", ""))
 
+    @app.route("/settings")
+    def data_settings():
+        return render_template("data_settings.html", current_username=session.get("username", ""))
+
     @app.route("/get-config")
     def get_config():
         active_knowledge_base = current_app.config["knowledge_base"]

@@ -13,6 +13,9 @@
         .hidden { display: none; }
         .app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
         .user-chip { display: inline-flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 999px; background: #fff7f7; border: 1px solid #f1d5d5; color: #7f1d1d; font-size: 0.88rem; font-weight: 700; }
+        .header-actions { display: flex; align-items: center; gap: 10px; }
+        .header-link { display: inline-flex; align-items: center; justify-content: center; padding: 9px 14px; border-radius: 999px; border: 1px solid #e2e8f0; color: #475569; background: #ffffff; text-decoration: none; font-size: 0.88rem; font-weight: 700; }
+        .header-link:hover { background: #f8fafc; border-color: #cbd5e1; color: #0f172a; }
         .logout-form { margin: 0; }
         .logout-button { width: auto; margin: 0; padding: 9px 14px; font-size: 0.88rem; background: white; color: #7f1d1d; border: 1px solid #f1d5d5; }
         .logout-button:hover { background: #fff0f0; }
@@ -55,29 +58,12 @@
         .chip-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
         .chip { background: #f1f5f9; color: #475569; padding: 6px 12px; border-radius: 16px; font-size: 0.85rem; cursor: pointer; transition: 0.2s; border: 1px solid #cbd5e1; }
         .chip:hover { background: #fff0f0; border-color: #CC0000; color: #CC0000; }
-        .operational-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; margin: 0 0 18px 0; }
-        .operational-pill { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; min-height: 68px; }
-        .operational-pill-label { display: block; color: #64748b; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 6px; }
-        .operational-pill-value { display: block; color: #0f172a; font-size: 0.95rem; font-weight: 700; line-height: 1.35; }
-        .operational-pill-note { display: block; color: #64748b; font-size: 0.78rem; line-height: 1.35; margin-top: 4px; }
-        .source-switcher { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; margin: 0 0 18px 0; }
-        .source-switcher-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
-        .source-switcher-header h3 { margin: 0; font-size: 1rem; color: #0f172a; }
-        .source-switcher-header p { margin: 0; color: #64748b; font-size: 0.82rem; }
-        .source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .source-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; background: #f8fafc; }
-        .source-card.active { border-color: #CC0000; background: #fff7f7; box-shadow: inset 0 0 0 1px rgba(204, 0, 0, 0.08); }
-        .source-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 8px; }
-        .source-card-title { font-size: 0.96rem; font-weight: 800; color: #0f172a; }
-        .source-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; font-size: 0.76rem; font-weight: 700; text-transform: uppercase; }
-        .source-card.active .source-badge { background: #fee2e2; color: #b91c1c; }
-        .source-meta { display: grid; gap: 6px; color: #475569; font-size: 0.86rem; }
-        .source-actions { display: flex; gap: 10px; margin-top: 12px; }
-        .source-actions button { margin-bottom: 0; padding: 10px 12px; font-size: 0.88rem; }
-        .source-actions button.secondary { border-width: 1px; }
-        .source-validation { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e2e8f0; color: #475569; font-size: 0.82rem; line-height: 1.45; }
-        .source-validation strong { color: #0f172a; }
-        .source-registry-issues { margin: 12px 0 0 18px; color: #b45309; font-size: 0.82rem; }
+        .data-status-card { display: flex; justify-content: space-between; gap: 14px; align-items: center; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border: 1px solid #e2e8f0; border-left: 4px solid #CC0000; border-radius: 14px; padding: 14px 16px; margin: 0 0 18px 0; }
+        .data-status-title { color: #0f172a; font-size: 0.98rem; font-weight: 800; margin-bottom: 4px; }
+        .data-status-note { color: #64748b; font-size: 0.86rem; line-height: 1.4; }
+        .data-status-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+        .data-status-actions a { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; border-radius: 999px; border: 1px solid #cbd5e1; color: #475569; background: #ffffff; padding: 8px 12px; text-decoration: none; font-size: 0.84rem; font-weight: 800; }
+        .data-status-actions a:hover { border-color: #CC0000; color: #991b1b; background: #fff7f7; }
         .section-block { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e2e8f0; }
         .section-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
         .section-block h3 { margin: 0 0 10px 0; font-size: 1rem; color: #0f172a; }
@@ -168,8 +154,8 @@
         @media (max-width: 760px) {
             .control-grid { grid-template-columns: 1fr; }
             .horizon-grid { grid-template-columns: 1fr; }
-            .operational-strip { grid-template-columns: 1fr; }
-            .source-grid { grid-template-columns: 1fr; }
+            .data-status-card { flex-direction: column; align-items: stretch; }
+            .data-status-actions { flex-direction: column; }
             .review-row { flex-direction: column; gap: 4px; }
             .review-row span:last-child { text-align: left; }
             .review-action-buttons { flex-direction: column; }
@@ -190,9 +176,12 @@
                 <span>Masuk sebagai</span>
                 <strong>{{ current_username }}</strong>
             </div>
-            <form class="logout-form" method="post" action="{{ url_for('logout') }}">
-                <button type="submit" class="logout-button">Keluar</button>
-            </form>
+            <div class="header-actions">
+                <a class="header-link" href="{{ url_for('data_settings') }}">Pengaturan Data</a>
+                <form class="logout-form" method="post" action="{{ url_for('logout') }}">
+                    <button type="submit" class="logout-button">Keluar</button>
+                </form>
+            </div>
         </div>
         <div id="toast-notification" class="toast-notification hidden" role="status" aria-live="polite"></div>
         <div id="loader" style="text-align:center; padding: 40px;">
@@ -253,7 +242,7 @@
             <div id="suggestion-container" class="chip-container"></div>
             
             <button type="button" id="btn-review">Tinjau Parameter Finansial</button>
-            <button type="button" id="btn-refresh" class="secondary" style="font-size:0.9rem; padding:10px;">🔄 Sync Financial Database</button>
+            <button type="button" id="btn-refresh" class="secondary" style="font-size:0.9rem; padding:10px;">Refresh Data</button>
         </div>
 
         <div id="step-review" class="hidden">
@@ -353,34 +342,22 @@
         function buildOperationalStatusMarkup(syncStatus) {
             const financial = syncStatus && syncStatus.financialData ? syncStatus.financialData : {};
             const cashOut = syncStatus && syncStatus.cashOutSource ? syncStatus.cashOutSource : {};
-            const refreshIntervalSeconds = Number(syncStatus && syncStatus.refreshIntervalSeconds || 0);
-            const cadenceLabel = refreshIntervalSeconds > 0 ? `${Math.round(refreshIntervalSeconds / 60)} menit` : 'manual';
-            const financialSyncLabel = financial.syncStatus || 'unknown';
-            const cashOutLabel = cashOut.configured
-                ? (cashOut.syncStatus || 'unknown')
-                : 'belum dikonfigurasi';
+            const recordCount = Number(financial.recordCount || 0);
+            const dataReady = financial.syncStatus === 'ready' || recordCount > 0;
+            const title = dataReady ? 'Data siap dianalisis' : 'Data belum siap';
+            const cashOutLabel = cashOut.configured ? `${cashOut.recordCount || 0} komitmen cash out aktif` : 'cash out memakai model biaya operasional';
+            const note = dataReady
+                ? `${recordCount} record aktif. ${cashOutLabel}.`
+                : 'Refresh data atau cek pengaturan API internal sebelum membuat laporan.';
 
             return `
-                <div class="operational-strip">
-                    <div class="operational-pill">
-                        <span class="operational-pill-label">Sinkronisasi Data</span>
-                        <span class="operational-pill-value">${escapeHtml(financialSyncLabel)}</span>
-                        <span class="operational-pill-note">Last success: ${escapeHtml(financial.lastSuccessAt ? formatDateForDisplay(financial.lastSuccessAt.slice(0, 10)) : 'belum ada')}</span>
+                <div class="data-status-card">
+                    <div>
+                        <div class="data-status-title">${escapeHtml(title)}</div>
+                        <div class="data-status-note">${escapeHtml(note)}</div>
                     </div>
-                    <div class="operational-pill">
-                        <span class="operational-pill-label">Usia Data</span>
-                        <span class="operational-pill-value">${escapeHtml(formatRelativeMinutes(financial.sourceAgeMinutes))}</span>
-                        <span class="operational-pill-note">${financial.recordCount || 0} record aktif</span>
-                    </div>
-                    <div class="operational-pill">
-                        <span class="operational-pill-label">Cash Out Source</span>
-                        <span class="operational-pill-value">${escapeHtml(cashOutLabel)}</span>
-                        <span class="operational-pill-note">${cashOut.configured ? `${cashOut.recordCount || 0} komitmen aktif` : 'Masih memakai model operating cost bulanan'}</span>
-                    </div>
-                    <div class="operational-pill">
-                        <span class="operational-pill-label">Cadence Refresh</span>
-                        <span class="operational-pill-value">${escapeHtml(cadenceLabel)}</span>
-                        <span class="operational-pill-note">${financial.nextRefreshAt ? `Next: ${escapeHtml(financial.nextRefreshAt.replace('T', ' ').slice(0, 16))}` : 'Refresh manual tersedia'}</span>
+                    <div class="data-status-actions">
+                        <a href="/settings">Pengaturan API</a>
                     </div>
                 </div>
             `;

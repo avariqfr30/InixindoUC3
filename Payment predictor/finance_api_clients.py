@@ -103,7 +103,8 @@ class InternalAPIClient:
         self.dataset_path = str(endpoint.get("path") or INTERNAL_API_DATASET_PATH or "/api/finance/invoices").strip()
         self.method = str(endpoint.get("method") or "GET").strip().upper()
         self.records_key = str(endpoint.get("records_key") or "").strip()
-        self.auth_token = str(auth.get("bearer_token") or "").strip()
+        raw_auth_token = str(auth.get("bearer_token") or "").strip()
+        self.auth_token = INTERNAL_API_AUTH_TOKEN.strip() if raw_auth_token == "__ENV__" else raw_auth_token
         self.basic_username = str(auth.get("basic_username") or "").strip()
         self.basic_password = str(auth.get("basic_password") or "")
         self.timeout = int(endpoint.get("timeout") or INTERNAL_API_TIMEOUT)
@@ -116,6 +117,7 @@ class InternalAPIClient:
             self.verify_ssl = bool(verify_ssl_value)
         self.headers = dict(request_config.get("headers") or {})
         self.body = request_config.get("body")
+        self.body_format = str(request_config.get("body_format") or "json").strip().lower()
         self.query_params = dict(request_config.get("query_params") or {})
         self.field_map = parse_internal_api_field_map(profile.get("field_map") or {})
 
@@ -205,8 +207,12 @@ class InternalAPIClient:
         if auth:
             request_kwargs["auth"] = auth
         if self.method != "GET" and self.body is not None:
-            request_kwargs["json"] = self.body
-            headers.setdefault("Content-Type", "application/json")
+            if self.body_format == "form":
+                request_kwargs["data"] = self.body
+                headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            else:
+                request_kwargs["json"] = self.body
+                headers.setdefault("Content-Type", "application/json")
 
         return request_kwargs, auth
 

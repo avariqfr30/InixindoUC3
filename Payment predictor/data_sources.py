@@ -112,6 +112,15 @@ def _coerce_bool(value, default=True):
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _normalize_body_format(value):
+    raw_value = str(value or "json").strip().lower()
+    if raw_value in {"form", "x-www-form-urlencoded", "urlencoded"}:
+        return "form"
+    if raw_value in {"none", "empty", "kosong"}:
+        return "none"
+    return "json"
+
+
 def build_internal_api_profile_from_connection_payload(payload):
     payload = payload or {}
     endpoint_url = str(
@@ -127,11 +136,14 @@ def build_internal_api_profile_from_connection_payload(payload):
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         raise ValueError("Endpoint API harus berupa URL http atau https yang lengkap.")
 
+    body_format = _normalize_body_format(payload.get("bodyFormat", payload.get("body_format")))
     body = _parse_json_payload_value(
         payload.get("bodyJson", payload.get("body")),
         "Request body",
         default=None,
     )
+    if body_format == "none":
+        body = None
     headers = _clean_mapping(
         _parse_json_payload_value(
             payload.get("headersJson", payload.get("headers")),
@@ -182,12 +194,17 @@ def build_internal_api_profile_from_connection_payload(payload):
     profile["auth"] = {
         "basic_username": str(payload.get("basicUsername") or payload.get("username") or "").strip(),
         "basic_password": str(payload.get("basicPassword") or payload.get("password") or ""),
-        "bearer_token": str(payload.get("bearerToken") or payload.get("token") or "").strip(),
+        "bearer_token": (
+            "__ENV__"
+            if _coerce_bool(payload.get("useEnvBearerToken"), default=False)
+            else str(payload.get("bearerToken") or payload.get("token") or "").strip()
+        ),
     }
     profile["request"] = {
         "headers": headers,
         "query_params": query_params,
         "body": body,
+        "body_format": body_format,
     }
     profile["field_map"] = field_map
     profile["pagination"] = {

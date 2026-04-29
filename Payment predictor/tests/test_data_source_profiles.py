@@ -159,6 +159,21 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertEqual(profile["request"]["body"]["dataset_code"], "ClassReport")
         self.assertEqual(profile["field_map"]["invoice_value"], "amount_idr")
 
+    def test_connection_payload_supports_form_body_and_env_bearer_marker(self):
+        profile = build_internal_api_profile_from_connection_payload(
+            {
+                "endpointUrl": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "bodyFormat": "form",
+                "bodyJson": {"dataset_code": "ClassReport"},
+                "useEnvBearerToken": True,
+            }
+        )
+
+        self.assertEqual(profile["request"]["body_format"], "form")
+        self.assertEqual(profile["request"]["body"]["dataset_code"], "ClassReport")
+        self.assertEqual(profile["auth"]["bearer_token"], "__ENV__")
+
 
 if __name__ == "__main__":
     unittest.main()

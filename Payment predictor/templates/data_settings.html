@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pengaturan Data | Inixindo Cashflow Intelligence</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #f8fafc;
+            color: #344154;
+            font-family: "Segoe UI", sans-serif;
+        }
+        .settings-shell {
+            width: min(1180px, 94vw);
+            margin: 34px auto;
+            background: #ffffff;
+            border-radius: 22px;
+            border-top: 6px solid #CC0000;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+            padding: 34px;
+        }
+        .settings-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            align-items: flex-start;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 22px;
+            margin-bottom: 28px;
+        }
+        h1 {
+            margin: 0 0 12px 0;
+            color: #243247;
+            font-size: 2.15rem;
+            line-height: 1.15;
+        }
+        .sub {
+            margin: 0;
+            color: #64748b;
+            line-height: 1.55;
+            font-size: 1rem;
+            max-width: 900px;
+        }
+        .nav-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .nav-link,
+        button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            font-size: 0.98rem;
+            font-weight: 800;
+            text-decoration: none;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        .nav-link {
+            padding: 11px 14px;
+            border: 1px solid #cbd5e1;
+            color: #475569;
+            background: #ffffff;
+        }
+        .nav-link:hover {
+            border-color: #CC0000;
+            color: #991b1b;
+            background: #fff7f7;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px 22px;
+        }
+        .field.full {
+            grid-column: 1 / -1;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #344154;
+            font-weight: 800;
+            font-size: 0.98rem;
+        }
+        input,
+        select,
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            padding: 13px 15px;
+            color: #1f2937;
+            background: #ffffff;
+            font-family: "Segoe UI", sans-serif;
+            font-size: 1rem;
+        }
+        textarea {
+            min-height: 96px;
+            resize: vertical;
+            font-family: "Consolas", monospace;
+            font-size: 0.92rem;
+        }
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #CC0000;
+            box-shadow: 0 0 0 4px rgba(204, 0, 0, 0.1);
+        }
+        .field-hint {
+            margin: 8px 0 0 0;
+            color: #64748b;
+            font-size: 0.84rem;
+            line-height: 1.45;
+        }
+        .status-panel {
+            margin: 24px 0;
+            padding: 18px 20px;
+            border-radius: 16px;
+            border: 1px solid #dbe4ef;
+            background: #f8fafc;
+            line-height: 1.55;
+        }
+        .status-panel strong {
+            color: #243247;
+        }
+        .status-panel ul {
+            margin: 10px 0 0 20px;
+            padding: 0;
+        }
+        .action-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 14px;
+            margin-top: 22px;
+        }
+        button {
+            width: 100%;
+            min-height: 52px;
+            border: none;
+            background: #CC0000;
+            color: #ffffff;
+        }
+        button:hover {
+            background: #990000;
+        }
+        button.secondary {
+            background: #ffffff;
+            color: #475569;
+            border: 1px solid #cbd5e1;
+        }
+        button.secondary:hover {
+            background: #f8fafc;
+            border-color: #94a3b8;
+        }
+        button:disabled {
+            background: #94a3b8;
+            border-color: #94a3b8;
+            cursor: not-allowed;
+        }
+        .message {
+            display: none;
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid #bfdbfe;
+            background: #eff6ff;
+            color: #1e3a8a;
+            line-height: 1.5;
+        }
+        .message.active {
+            display: block;
+        }
+        .message.success {
+            border-color: #bbf7d0;
+            background: #f0fdf4;
+            color: #166534;
+        }
+        .message.error {
+            border-color: #fecaca;
+            background: #fef2f2;
+            color: #991b1b;
+        }
+        .hidden {
+            display: none;
+        }
+        @media (max-width: 780px) {
+            .settings-shell {
+                padding: 24px;
+                margin: 20px auto;
+            }
+            .settings-header,
+            .action-row {
+                grid-template-columns: 1fr;
+                flex-direction: column;
+            }
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="settings-shell">
+        <header class="settings-header">
+            <div>
+                <h1>Internal API / APIDog</h1>
+                <p class="sub">Masukkan endpoint dataset internal. Sistem akan membuat mapping dasar, menyimpan config, mengaktifkan sumber data API bila siap, lalu refresh knowledge base di background.</p>
+            </div>
+            <nav class="nav-actions" aria-label="Navigasi">
+                <a class="nav-link" href="{{ url_for('home') }}">Kembali ke Dashboard</a>
+                <a class="nav-link" href="{{ url_for('logout') }}" onclick="event.preventDefault(); document.getElementById('logout-form').submit();">Keluar</a>
+            </nav>
+        </header>
+
+        <form id="logout-form" class="hidden" method="post" action="{{ url_for('logout') }}"></form>
+
+        <section class="form-grid">
+            <div class="field full">
+                <label for="endpoint-url">Endpoint API Dataset</label>
+                <input id="endpoint-url" type="url" placeholder="https://xxx.com/api/Resource/dataset" required>
+            </div>
+
+            <div class="field">
+                <label for="auth-mode">Mode Auth</label>
+                <select id="auth-mode">
+                    <option value="env_bearer">Bearer Token dari environment</option>
+                    <option value="basic">Basic Auth</option>
+                    <option value="none">Tanpa Auth</option>
+                </select>
+                <p class="field-hint">Gunakan environment untuk token agar secret tidak perlu diketik di browser.</p>
+            </div>
+
+            <div class="field">
+                <label for="body-format">Format Body</label>
+                <select id="body-format">
+                    <option value="form">Form</option>
+                    <option value="json">JSON</option>
+                    <option value="none">Kosong</option>
+                </select>
+            </div>
+
+            <div class="field auth-basic hidden">
+                <label for="basic-username">Username API</label>
+                <input id="basic-username" type="text" autocomplete="off" placeholder="username">
+            </div>
+
+            <div class="field auth-basic hidden">
+                <label for="basic-password">Password API</label>
+                <input id="basic-password" type="password" autocomplete="new-password" placeholder="password">
+            </div>
+
+            <div class="field">
+                <label for="method">Method</label>
+                <select id="method">
+                    <option value="POST">POST</option>
+                    <option value="GET">GET</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="records-key">Path Record</label>
+                <input id="records-key" type="text" placeholder="data.dataset_result">
+                <p class="field-hint">Kosongkan jika array record langsung terbaca otomatis.</p>
+            </div>
+
+            <div class="field full" id="body-json-field">
+                <label for="body-json">Body</label>
+                <textarea id="body-json" spellcheck="false" placeholder='{"dataset_code":"ClassReport"}'></textarea>
+                <p class="field-hint">Untuk format Form, isi tetap ditulis sebagai JSON object; aplikasi akan mengirimnya sebagai form-urlencoded.</p>
+            </div>
+
+            <div class="field full">
+                <label for="field-map-json">Field Map JSON (Opsional)</label>
+                <textarea id="field-map-json" spellcheck="false" placeholder='{"invoice_value":"nominal_tagihan","payment_class":"bucket_pembayaran"}'></textarea>
+            </div>
+        </section>
+
+        <section id="settings-status" class="status-panel">Memuat status konfigurasi...</section>
+
+        <div class="action-row">
+            <button type="button" id="btn-preview" class="secondary">Cek Mapping Saja</button>
+            <button type="button" id="btn-save">Simpan & Aktifkan Internal API</button>
+        </div>
+        <div id="settings-message" class="message" role="status" aria-live="polite"></div>
+    </main>
+
+    <script>
+        const ui = {
+            endpointUrl: document.getElementById('endpoint-url'),
+            authMode: document.getElementById('auth-mode'),
+            bodyFormat: document.getElementById('body-format'),
+            method: document.getElementById('method'),
+            basicUsername: document.getElementById('basic-username'),
+            basicPassword: document.getElementById('basic-password'),
+            recordsKey: document.getElementById('records-key'),
+            bodyJson: document.getElementById('body-json'),
+            bodyJsonField: document.getElementById('body-json-field'),
+            fieldMapJson: document.getElementById('field-map-json'),
+            status: document.getElementById('settings-status'),
+            message: document.getElementById('settings-message'),
+            btnPreview: document.getElementById('btn-preview'),
+            btnSave: document.getElementById('btn-save'),
+        };
+
+        function escapeHtml(text) {
+            return String(text || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function parseOptionalJson(rawValue, label) {
+            const value = String(rawValue || '').trim();
+            if (!value) {
+                return null;
+            }
+            try {
+                return JSON.parse(value);
+            } catch (error) {
+                throw new Error(`${label} harus berupa JSON valid.`);
+            }
+        }
+
+        async function fetchJson(url, options = {}) {
+            const response = await fetch(url, options);
+            const text = await response.text();
+            const data = text ? JSON.parse(text) : {};
+            if (response.status === 401) {
+                window.location.href = (data && data.loginUrl) || '/login';
+                throw new Error('Autentikasi diperlukan.');
+            }
+            if (!response.ok) {
+                throw new Error(data.error || data.message || `Request failed: ${response.status}`);
+            }
+            return data;
+        }
+
+        function renderMessage(payload, variant = 'active') {
+            const nextSteps = (payload.nextSteps || [])
+                .map(step => `<li>${escapeHtml(step)}</li>`)
+                .join('');
+            ui.message.className = `message active ${variant}`;
+            ui.message.innerHTML = `
+                <strong>${escapeHtml(payload.message || '-')}</strong>
+                <div>${Number(payload.recordCount || 0)} record terbaca${payload.activated ? ' dan sudah aktif dipakai.' : '.'}</div>
+                ${nextSteps ? `<ul>${nextSteps}</ul>` : ''}
+            `;
+        }
+
+        function renderStatus(config) {
+            const source = config && config.syncStatus && config.syncStatus.financialData ? config.syncStatus.financialData : {};
+            const active = source.activeSource || {};
+            const issues = (source.sourceRegistryIssues || []).map(issue => `<li>${escapeHtml(issue)}</li>`).join('');
+            const configured = active.configured ? 'ada' : 'belum ada';
+            ui.status.innerHTML = `
+                <div>Config: <strong>${escapeHtml(configured)}</strong></div>
+                <div>Project data source: <strong>${escapeHtml(active.type || 'local')}</strong></div>
+                <div>Record aktif: <strong>${Number(source.recordCount || 0)}</strong></div>
+                <div>Status data: <strong>${escapeHtml(source.syncStatus || '-')}</strong></div>
+                ${issues ? `<ul>${issues}</ul>` : ''}
+            `;
+        }
+
+        function toggleAuthAndBodyFields() {
+            document.querySelectorAll('.auth-basic').forEach(el => {
+                el.classList.toggle('hidden', ui.authMode.value !== 'basic');
+            });
+            ui.bodyJsonField.classList.toggle('hidden', ui.bodyFormat.value === 'none');
+        }
+
+        function buildConnectionPayload(activate) {
+            const endpointUrl = ui.endpointUrl.value.trim();
+            if (!endpointUrl) {
+                throw new Error('Endpoint API Dataset wajib diisi.');
+            }
+            const bodyJson = ui.bodyFormat.value === 'none' ? null : parseOptionalJson(ui.bodyJson.value, 'Body');
+            const fieldMapJson = parseOptionalJson(ui.fieldMapJson.value, 'Field Map JSON');
+            const payload = {
+                endpointUrl,
+                method: ui.method.value,
+                bodyFormat: ui.bodyFormat.value,
+                bodyJson,
+                recordsKey: ui.recordsKey.value,
+                fieldMapJson,
+                activate,
+                previewRows: activate ? 10 : 5,
+            };
+            if (ui.authMode.value === 'basic') {
+                payload.basicUsername = ui.basicUsername.value;
+                payload.basicPassword = ui.basicPassword.value;
+            }
+            if (ui.authMode.value === 'env_bearer') {
+                payload.useEnvBearerToken = true;
+            }
+            return payload;
+        }
+
+        async function runConnection(activate) {
+            const button = activate ? ui.btnSave : ui.btnPreview;
+            const originalLabel = button.textContent;
+            ui.btnSave.disabled = true;
+            ui.btnPreview.disabled = true;
+            button.textContent = activate ? 'Menyimpan...' : 'Mengecek...';
+            try {
+                const payload = buildConnectionPayload(activate);
+                const data = await fetchJson('/api/internal-data/connect', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+                renderMessage(data, data.activated || data.ready ? 'success' : 'active');
+                const config = await fetchJson('/get-config');
+                renderStatus(config);
+            } catch (error) {
+                renderMessage({message: error.message, recordCount: 0}, 'error');
+            } finally {
+                ui.btnSave.disabled = false;
+                ui.btnPreview.disabled = false;
+                button.textContent = originalLabel;
+            }
+        }
+
+        ui.authMode.onchange = toggleAuthAndBodyFields;
+        ui.bodyFormat.onchange = toggleAuthAndBodyFields;
+        ui.btnPreview.onclick = () => runConnection(false);
+        ui.btnSave.onclick = () => runConnection(true);
+
+        Promise.all([fetchJson('/get-config'), fetchJson('/api/internal-data/contract')])
+            .then(([config]) => {
+                renderStatus(config);
+                toggleAuthAndBodyFields();
+            })
+            .catch(error => {
+                ui.status.innerHTML = `<span style="color:#991b1b;font-weight:800;">${escapeHtml(error.message)}</span>`;
+            });
+    </script>
+</body>
+</html>
