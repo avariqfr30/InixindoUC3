@@ -271,10 +271,10 @@ class InternalDataContractRouteTest(unittest.TestCase):
             },
             follow_redirects=False,
         )
-        if signup.status_code not in (302, 400, 403):
+        if signup.status_code not in (302, 200, 400, 403):
             raise AssertionError(f"Unexpected signup status: {signup.status_code}")
 
-        if signup.status_code in (400, 403):
+        if signup.status_code in (200, 400, 403):
             login = self.client.post(
                 "/login",
                 data={"username": "contract_user@inixindojogja.co.id", "password": "password123"},

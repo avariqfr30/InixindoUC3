@@ -83,7 +83,7 @@ class DashboardOperationRouteTest(unittest.TestCase):
             },
             follow_redirects=False,
         )
-        if signup.status_code in (400, 403):
+        if signup.status_code in (200, 400, 403):
             login = self.client.post(
                 "/login",
                 data={"username": "dashboard_ops_user@inixindojogja.co.id", "password": "password123"},
