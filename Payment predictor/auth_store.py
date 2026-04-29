@@ -32,10 +32,26 @@ class UserStore:
                     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'approved',
+                    is_admin INTEGER NOT NULL DEFAULT 0,
+                    approved_at REAL,
+                    approved_by TEXT
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(users)").fetchall()
+            }
+            if "status" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'")
+            if "is_admin" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+            if "approved_at" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN approved_at REAL")
+            if "approved_by" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN approved_by TEXT")
             connection.commit()
 
     @classmethod
@@ -52,19 +68,39 @@ class UserStore:
             raise ValueError("Kata sandi harus minimal 8 karakter.")
         return normalized
 
-    def create_user(self, username, password):
+    def create_user(self, username, password, auto_approve=False, is_admin=False, approved_by=None):
         normalized_username = self.validate_username(username)
         normalized_password = self.validate_password(password)
         password_hash = generate_password_hash(normalized_password, method="pbkdf2:sha256")
+        now = time.time()
+        status = "approved" if auto_approve else "pending"
+        approved_at = now if auto_approve else None
+        approver = normalized_username if auto_approve and approved_by is None else approved_by
 
         with self.lock, self._connect() as connection:
             try:
                 connection.execute(
                     """
-                    INSERT INTO users (username, password_hash, created_at)
-                    VALUES (?, ?, ?)
+                    INSERT INTO users (
+                        username,
+                        password_hash,
+                        created_at,
+                        status,
+                        is_admin,
+                        approved_at,
+                        approved_by
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (normalized_username, password_hash, time.time()),
+                    (
+                        normalized_username,
+                        password_hash,
+                        now,
+                        status,
+                        1 if is_admin else 0,
+                        approved_at,
+                        approver,
+                    ),
                 )
                 connection.commit()
             except sqlite3.IntegrityError as exc:
@@ -77,18 +113,125 @@ class UserStore:
         normalized_password = str(password or "")
         with self.lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT username, password_hash FROM users WHERE username = ?",
+                """
+                SELECT username, password_hash, status, is_admin
+                FROM users
+                WHERE username = ?
+                """,
                 (normalized_username,),
             ).fetchone()
 
         if not row or not check_password_hash(row["password_hash"], normalized_password):
-            return None
-        return row["username"]
+            return None, "invalid"
+        if row["status"] != "approved":
+            return None, row["status"]
+        return {
+            "username": row["username"],
+            "is_admin": bool(row["is_admin"]),
+            "status": row["status"],
+        }, "approved"
 
     def has_users(self):
         with self.lock, self._connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()
         return bool(row and row["total"] > 0)
+
+    def get_user(self, username):
+        normalized_username = str(username or "").strip()
+        if not normalized_username:
+            return None
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT username, status, is_admin, created_at, approved_at, approved_by
+                FROM users
+                WHERE username = ?
+                """,
+                (normalized_username,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "username": row["username"],
+            "status": row["status"],
+            "is_admin": bool(row["is_admin"]),
+            "created_at": row["created_at"],
+            "approved_at": row["approved_at"],
+            "approved_by": row["approved_by"],
+        }
+
+    def list_users(self):
+        with self.lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT username, status, is_admin, created_at, approved_at, approved_by
+                FROM users
+                ORDER BY
+                    CASE status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+                    created_at ASC
+                """
+            ).fetchall()
+        return [
+            {
+                "username": row["username"],
+                "status": row["status"],
+                "is_admin": bool(row["is_admin"]),
+                "created_at": row["created_at"],
+                "approved_at": row["approved_at"],
+                "approved_by": row["approved_by"],
+            }
+            for row in rows
+        ]
+
+    def approve_user(self, username, approved_by):
+        normalized_username = self.validate_username(username)
+        approver_username = self.validate_username(approved_by)
+        now = time.time()
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM users WHERE username = ?",
+                (normalized_username,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Pengguna tidak ditemukan.")
+            if row["status"] == "approved":
+                return
+            connection.execute(
+                """
+                UPDATE users
+                SET status = 'approved',
+                    approved_at = ?,
+                    approved_by = ?
+                WHERE username = ?
+                """,
+                (now, approver_username, normalized_username),
+            )
+            connection.commit()
+
+    def reject_user(self, username, approved_by):
+        normalized_username = self.validate_username(username)
+        approver_username = self.validate_username(approved_by)
+        now = time.time()
+        with self.lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT is_admin FROM users WHERE username = ?",
+                (normalized_username,),
+            ).fetchone()
+            if not row:
+                raise ValueError("Pengguna tidak ditemukan.")
+            if row["is_admin"]:
+                raise ValueError("Akun admin tidak dapat ditolak.")
+            connection.execute(
+                """
+                UPDATE users
+                SET status = 'rejected',
+                    approved_at = ?,
+                    approved_by = ?
+                WHERE username = ?
+                """,
+                (now, approver_username, normalized_username),
+            )
+            connection.commit()
 
 
 class ActiveSessionStore:

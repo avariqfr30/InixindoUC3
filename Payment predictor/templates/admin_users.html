@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Persetujuan Akun | Inixindo Cashflow Intelligence</title>
+    <style>
+        body { margin: 0; background: #f8fafc; font-family: "Segoe UI", sans-serif; color: #1f2937; }
+        .shell { width: min(1100px, 94vw); margin: 32px auto; background: #ffffff; border-radius: 20px; box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08); border-top: 6px solid #cc0000; padding: 28px; }
+        .header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; }
+        .header h1 { margin: 0 0 8px 0; font-size: 2rem; color: #0f172a; }
+        .header p { margin: 0; color: #64748b; line-height: 1.5; }
+        .nav { display: flex; gap: 10px; align-items: center; }
+        .nav a, .nav button { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; padding: 10px 14px; text-decoration: none; border: 1px solid #e2e8f0; background: #ffffff; color: #475569; font-weight: 700; }
+        .nav button { cursor: pointer; }
+        .nav a:hover, .nav button:hover { background: #fff7f7; color: #991b1b; border-color: #f1d5d5; }
+        .alert { margin-bottom: 16px; padding: 12px 14px; border-radius: 12px; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; font-weight: 600; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 14px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: middle; }
+        th { background: #fff7f7; color: #7f1d1d; font-size: 0.9rem; }
+        .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; font-size: 0.82rem; font-weight: 800; }
+        .pill.pending { background: #fff7ed; color: #b45309; border: 1px solid #fed7aa; }
+        .pill.approved { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+        .pill.rejected { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+        .pill.admin { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+        .actions { display: flex; gap: 8px; }
+        .actions form { margin: 0; }
+        .actions button { border: none; border-radius: 10px; padding: 9px 12px; font-weight: 800; cursor: pointer; }
+        .approve { background: #cc0000; color: #ffffff; }
+        .reject { background: #ffffff; color: #7f1d1d; border: 1px solid #f1d5d5; }
+        .empty { padding: 18px; border: 1px dashed #cbd5e1; border-radius: 14px; color: #64748b; text-align: center; }
+        @media (max-width: 860px) {
+            .header { flex-direction: column; align-items: flex-start; }
+            table, thead, tbody, tr, th, td { display: block; }
+            thead { display: none; }
+            tr { padding: 14px 0; border-bottom: 1px solid #e2e8f0; }
+            td { border-bottom: none; padding: 8px 0; }
+        }
+    </style>
+</head>
+<body>
+    <main class="shell">
+        <header class="header">
+            <div>
+                <h1>Persetujuan Akun</h1>
+                <p>Tinjau pendaftaran baru sebelum akun dapat mengakses aplikasi.</p>
+            </div>
+            <nav class="nav" aria-label="Navigasi admin">
+                <a href="{{ url_for('home') }}">Dashboard</a>
+                <a href="{{ url_for('data_settings') }}">Pengaturan Data</a>
+                <form method="post" action="{{ url_for('logout') }}">
+                    <button type="submit">Keluar</button>
+                </form>
+            </nav>
+        </header>
+
+        {% if error %}
+        <div class="alert">{{ error }}</div>
+        {% endif %}
+
+        {% if users %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Pengguna</th>
+                    <th>Status</th>
+                    <th>Peran</th>
+                    <th>Disetujui Oleh</th>
+                    <th>Tindakan</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user.username }}</td>
+                    <td><span class="pill {{ user.status }}">{{ user.status|capitalize }}</span></td>
+                    <td>{% if user.is_admin %}<span class="pill admin">Admin</span>{% else %}-{% endif %}</td>
+                    <td>{% if user.approved_by %}{{ user.approved_by }}{% else %}-{% endif %}</td>
+                    <td>
+                        {% if user.status == 'pending' and not user.is_admin %}
+                        <div class="actions">
+                            <form method="post" action="{{ url_for('approve_user', username=user.username) }}">
+                                <button class="approve" type="submit">Setujui</button>
+                            </form>
+                            <form method="post" action="{{ url_for('reject_user', username=user.username) }}">
+                                <button class="reject" type="submit">Tolak</button>
+                            </form>
+                        </div>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">Belum ada data akun.</div>
+        {% endif %}
+    </main>
+</body>
+</html>

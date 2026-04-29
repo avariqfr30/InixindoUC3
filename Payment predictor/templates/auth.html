@@ -99,6 +99,16 @@
             font-size: 0.95rem;
             font-weight: 600;
         }
+        .notice-banner {
+            margin-bottom: 18px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1d4ed8;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
         form {
             display: grid;
             gap: 16px;
@@ -180,7 +190,9 @@
         <section class="auth-panel">
             <div class="auth-tabs">
                 <a href="{{ url_for('login') }}" class="auth-tab {% if mode == 'login' %}active{% endif %}">Masuk</a>
+                {% if signup_enabled %}
                 <a href="{{ url_for('signup') }}" class="auth-tab {% if mode == 'signup' %}active{% endif %}">Daftar</a>
+                {% endif %}
             </div>
 
             <h2>{% if mode == 'signup' %}Buat Akun{% else %}Selamat Datang Kembali{% endif %}</h2>
@@ -194,6 +206,9 @@
 
             {% if error %}
             <div class="error-banner">{{ error }}</div>
+            {% endif %}
+            {% if notice %}
+            <div class="notice-banner">{{ notice }}</div>
             {% endif %}
 
             {% if mode == 'signup' %}
@@ -215,7 +230,11 @@
                 <button type="submit">Buat Akun</button>
             </form>
             <div class="auth-footer">
+                {% if signup_requires_approval %}
+                Setelah daftar, akun baru harus disetujui admin sebelum bisa masuk.
+                {% else %}
                 Sudah punya akun? <a href="{{ url_for('login') }}">Masuk di sini</a>.
+                {% endif %}
             </div>
             {% else %}
             <form method="post" action="{{ url_for('login') }}">
@@ -230,7 +249,11 @@
                 <button type="submit">Masuk</button>
             </form>
             <div class="auth-footer">
+                {% if signup_enabled %}
                 Belum punya akun? <a href="{{ url_for('signup') }}">Buat akun di sini</a>.
+                {% else %}
+                Akses akun baru hanya bisa dibuat oleh administrator internal.
+                {% endif %}
             </div>
             {% endif %}
         </section>
