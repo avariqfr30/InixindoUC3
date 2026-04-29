@@ -60,7 +60,7 @@ class AuthFlowTestCase(unittest.TestCase):
             return signup
         if signup.status_code == 202:
             return signup
-        if signup.status_code not in (400, 403):
+        if signup.status_code not in (200, 400, 403):
             raise AssertionError(f"Unexpected signup status: {signup.status_code}")
         login = client.post(
             "/login",
@@ -180,18 +180,31 @@ class AuthFlowTestCase(unittest.TestCase):
         self.client.post("/logout", follow_redirects=False)
 
         rejected_signup = self._signup(self.client, "not-an-email")
-        self.assertEqual(rejected_signup.status_code, 400)
+        self.assertEqual(rejected_signup.status_code, 200)
         self.assertIn(
             "Email harus memakai format alamat email yang valid.",
             rejected_signup.get_data(as_text=True),
         )
 
         external_signup = self._signup(self.client, "external@example.com")
-        self.assertEqual(external_signup.status_code, 400)
+        self.assertEqual(external_signup.status_code, 200)
         self.assertIn(
             "Hanya email @inixindojogja.co.id yang diizinkan.",
             external_signup.get_data(as_text=True),
         )
+
+    def test_signup_password_mismatch_stays_on_form_without_bad_request(self):
+        response = self.client.post(
+            "/signup",
+            data={
+                "username": "mismatch@inixindojogja.co.id",
+                "password": "password123",
+                "confirm_password": "password456",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Konfirmasi kata sandi tidak cocok.", response.get_data(as_text=True))
 
 
 if __name__ == "__main__":

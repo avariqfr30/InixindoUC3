@@ -253,12 +253,12 @@ def create_app():
                 mode="signup",
                 error="Konfirmasi kata sandi tidak cocok.",
                 username=username,
-            ), 400
+            )
 
         try:
             created_username = user_store.create_user(username, password)
         except ValueError as exc:
-            return _render_auth(mode="signup", error=str(exc), username=username), 400
+            return _render_auth(mode="signup", error=str(exc), username=username)
 
         try:
             _start_authenticated_session(created_username)
