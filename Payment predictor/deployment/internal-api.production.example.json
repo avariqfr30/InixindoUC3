@@ -19,8 +19,9 @@
   "request": {
     "headers": {},
     "query_params": {},
+    "body_format": "form",
     "body": {
-      "dataset_code": "ClassReport"
+      "dataset": "FinanceInvoice"
     }
   },
   "field_map": {

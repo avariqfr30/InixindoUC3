@@ -72,7 +72,7 @@ Isi bagian ini di JSON profile:
 * `endpoint.method`: biasanya `POST`
 * `endpoint.records_key`: path array record utama, misalnya `data.dataset_result`
 * `auth.basic_username` dan `auth.basic_password`, atau `auth.bearer_token`
-* `request.body`: body POST yang diminta backend, misalnya `{"dataset_code":"ClassReport"}`
+* `request.body`: body POST yang diminta backend APIDog, yaitu `{"dataset":"FinanceInvoice"}`
 * `field_map`: kosongkan dulu bila nama field API mudah ditebak; isi hanya jika validasi belum siap
 
 Lalu arahkan service ke profile itu:
@@ -94,7 +94,7 @@ INTERNAL_API_ENDPOINT_URL=https://internal.example.com/api/Resource/dataset \
 INTERNAL_API_METHOD=POST \
 INTERNAL_API_BASIC_USERNAME=your_username \
 INTERNAL_API_BASIC_PASSWORD=your_password \
-INTERNAL_API_BODY_JSON='{"dataset_code":"ClassReport"}' \
+INTERNAL_API_BODY_JSON='{"dataset":"FinanceInvoice"}' \
 python3 app.py
 ```
 
@@ -140,6 +140,38 @@ Endpoint ini menampilkan:
 * env var method/auth/body untuk endpoint non-GET
 * ringkasan apakah dataset aktif saat ini sudah memenuhi kontrak atau belum
 * path record JSON yang terdeteksi dari payload aktif
+
+### CLI Doctor Source Produksi (Handover API Internal)
+Jalankan doctor non-UI ini sebelum source API internal diaktifkan di produksi. Alur ini memakai loader profile produksi, `InternalAPIClient`, ekstraksi record, dan kontrak mapping field yang sama dengan aplikasi:
+
+```bash
+cp "Payment predictor/deployment/internal-api.production.example.json" /etc/payment-app.production.json
+sudo nano /etc/payment-app.production.json
+
+DATA_ACQUISITION_MODE=internal_api \
+INTERNAL_API_CONFIG_FILE=/etc/payment-app.production.json \
+INTERNAL_API_AUTH_TOKEN="$INTERNAL_API_AUTH_TOKEN" \
+python3 "Payment predictor/internal_api_doctor.py" --profile /etc/payment-app.production.json --preview-rows 10
+```
+
+Doctor ini mengecek semuanya di satu tempat:
+* konfigurasi profile produksi dan bentuk request
+* bentuk auth tanpa menampilkan secret
+* konektivitas endpoint
+* resolusi path record, termasuk `endpoint.records_key`
+* kesiapan mapping field terhadap kontrak data finance
+* kesiapan aktivasi berdasarkan kode aktivasi aplikasi saat ini
+
+Untuk otomasi, gunakan output JSON dan gagalkan deployment bila command keluar dengan exit code non-zero:
+
+```bash
+python3 "Payment predictor/internal_api_doctor.py" \
+  --profile /etc/payment-app.production.json \
+  --preview-rows 10 \
+  --json
+```
+
+Jika output menampilkan `Activation ready: yes`, source sudah memenuhi gate aktivasi aplikasi. Jika ada warning bahwa path record masih terdeteksi otomatis, salin path yang dilaporkan ke `endpoint.records_key` sebelum handover agar produksi tidak bergantung pada inference.
 
 Untuk sesi uji bersama di jaringan internal perusahaan, gunakan Waitress dan bind aplikasi ke semua interface:
 ```bash

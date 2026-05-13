@@ -2,12 +2,81 @@ import sys
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 
 WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 sys.path.insert(0, str(WORKSPACE))
 
 
 class ReportSanitizationTest(unittest.TestCase):
+    def test_cashflow_intelligence_desk_adds_guarded_evidence_to_context(self):
+        from core import FinancialAnalyzer
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "periode": "2026-01",
+                    "partner": "BUMN A",
+                    "layanan": "Pelatihan",
+                    "kelas pembayaran": "E",
+                    "nilai invoice": "Rp 900.000.000",
+                    "catatan keterlambatan": "BAST belum lengkap dan approval direksi klien belum turun.",
+                },
+                {
+                    "periode": "2026-02",
+                    "partner": "Korporasi B",
+                    "layanan": "Sertifikasi",
+                    "kelas pembayaran": "B",
+                    "nilai invoice": "Rp 250.000.000",
+                    "catatan keterlambatan": "Menunggu jadwal pembayaran normal.",
+                },
+            ]
+        )
+
+        context = FinancialAnalyzer.build_report_context(frame, data_mode="internal")
+
+        self.assertIn("agent_evidence_ledger", context)
+        self.assertIn("agent_evidence_brief", context)
+        self.assertIn("Invoice Evidence Analyst", context["agent_evidence_brief"])
+        self.assertIn("Control Reviewer", context["agent_evidence_brief"])
+        self.assertGreaterEqual(len(context["agent_evidence_ledger"]), 4)
+        self.assertTrue(
+            all("allowed_use" in item and "confidence" in item for item in context["agent_evidence_ledger"])
+        )
+        self.assertIn("Jangan klaim", context["agent_evidence_brief"])
+
+    def test_report_prompt_includes_hidden_intelligence_desk_brief(self):
+        from core import ReportGenerator
+
+        generator = ReportGenerator(None)
+        report_context = {
+            "financial_summary": "- Total invoice: Rp 1.150.000.000",
+            "management_brief": "- Fakta manajemen.",
+            "evidence": "- Bukti internal.",
+            "readiness_signals": "- Siap dengan caveat.",
+            "visual_prompt": "",
+            "agent_evidence_brief": (
+                "## Invoice Evidence Analyst\n"
+                "- Klaim: Rp 900.000.000 tertahan pada BUMN A.\n"
+                "## Control Reviewer\n"
+                "- Jangan klaim penyebab eksternal tanpa OSINT pembanding."
+            ),
+        }
+
+        prompt = generator._build_report_prompt(
+            report_context=report_context,
+            notes="",
+            analysis_context="",
+            macro_osint="-",
+            active_sections=["Ringkasan Eksekutif"],
+            include_visuals=False,
+        )
+
+        self.assertIn("CASHFLOW INTELLIGENCE DESK EVIDENCE", prompt)
+        self.assertIn("Invoice Evidence Analyst", prompt)
+        self.assertIn("Jangan klaim penyebab eksternal", prompt)
+
     def test_internal_note_trimming_removes_ellipsis_artifacts(self):
         from core import FinancialAnalyzer
 
@@ -137,6 +206,39 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertIn("### Visual Dashboard Snapshot", finalized)
         self.assertIn("[[DASHBOARD:", finalized)
 
+    def test_finalized_report_injects_executive_headlines_before_caveats(self):
+        from core import ReportGenerator
+
+        generator = ReportGenerator(None)
+        raw_text = "\n\n".join(
+            [
+                "# Ringkasan Eksekutif\n### Tingkat Keyakinan dan Caveat\nCatatan teknis.",
+                "# Analisis Deskriptif Cashflow\n### Batasan Data dan Asumsi\nAsumsi teknis.",
+            ]
+        )
+
+        finalized = generator._finalize_report_content(
+            raw_text=raw_text,
+            report_context={
+                "executive_headlines": (
+                    "- Rp 2,4 miliar invoice berisiko perlu masuk agenda manajemen minggu ini.\n"
+                    "- Satu bottleneck approval paling menentukan ending cash 30 hari."
+                ),
+                "visual_prompt": "",
+            },
+            macro_osint="-",
+        )
+
+        self.assertIn("### Headline Utama untuk Manajemen", finalized)
+        self.assertLess(
+            finalized.index("### Headline Utama untuk Manajemen"),
+            finalized.index("### Tingkat Keyakinan dan Caveat"),
+        )
+        self.assertLess(
+            finalized.index("### Headline Utama untuk Manajemen"),
+            finalized.index("# Analisis Deskriptif Cashflow"),
+        )
+
     def test_docx_table_generation_uses_compact_formatted_tables(self):
         from docx import Document
         from core import DocumentBuilder
@@ -175,10 +277,50 @@ class ReportSanitizationTest(unittest.TestCase):
         paragraph_texts = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
 
         self.assertEqual(document.paragraphs[0].alignment, WD_ALIGN_PARAGRAPH.LEFT)
-        self.assertIn("1. Prioritas pertama", paragraph_texts)
-        self.assertIn("2. Prioritas kedua", paragraph_texts)
-        self.assertIn("1. Restart prioritas baru", paragraph_texts)
-        self.assertIn("2. Lanjutannya", paragraph_texts)
+        self.assertIn("Prioritas pertama", paragraph_texts)
+        self.assertIn("Prioritas kedua", paragraph_texts)
+        self.assertIn("Restart prioritas baru", paragraph_texts)
+        self.assertIn("Lanjutannya", paragraph_texts)
+        self.assertFalse(any(text.startswith(("1.", "2.")) for text in paragraph_texts))
+
+        list_paragraphs = [paragraph for paragraph in document.paragraphs if "Prioritas" in paragraph.text or "Restart" in paragraph.text or "Lanjutannya" in paragraph.text]
+        self.assertEqual(len(list_paragraphs), 4)
+        self.assertTrue(all(paragraph._p.pPr is not None and paragraph._p.pPr.numPr is not None for paragraph in list_paragraphs))
+        first_list_num_id = list_paragraphs[0]._p.pPr.numPr.numId.val
+        second_list_num_id = list_paragraphs[2]._p.pPr.numPr.numId.val
+        self.assertNotEqual(first_list_num_id, second_list_num_id)
+        self.assertEqual(list_paragraphs[0]._p.pPr.numPr.ilvl.val, 0)
+        self.assertEqual(list_paragraphs[0].paragraph_format.left_indent.inches, list_paragraphs[2].paragraph_format.left_indent.inches)
+
+    def test_docx_nested_list_indentation_and_bullet_numbering_are_structured(self):
+        from docx import Document
+        from core import DocumentBuilder
+
+        document = Document()
+        DocumentBuilder.parse_html_to_docx(
+            document,
+            (
+                "<h1>Bab Satu</h1>"
+                "<p>Kalimat pembuka <strong>dengan prioritas</strong>:</p>"
+                "<ol><li>Langkah utama<ul><li>Catatan detail</li></ul></li><li>Langkah lanjutan</li></ol>"
+                "<h1>Bab Dua</h1>"
+                "<ol><li>Nomor kembali satu</li></ol>"
+            ),
+            (204, 0, 0),
+        )
+
+        list_paragraphs = [
+            paragraph
+            for paragraph in document.paragraphs
+            if paragraph.text.strip() in {"Langkah utama", "Catatan detail", "Langkah lanjutan", "Nomor kembali satu"}
+        ]
+
+        self.assertEqual([paragraph.text for paragraph in list_paragraphs], ["Langkah utama", "Catatan detail", "Langkah lanjutan", "Nomor kembali satu"])
+        self.assertTrue(all(paragraph._p.pPr is not None and paragraph._p.pPr.numPr is not None for paragraph in list_paragraphs))
+        self.assertEqual(list_paragraphs[0]._p.pPr.numPr.ilvl.val, 0)
+        self.assertEqual(list_paragraphs[1]._p.pPr.numPr.ilvl.val, 1)
+        self.assertGreater(list_paragraphs[1].paragraph_format.left_indent.inches, list_paragraphs[0].paragraph_format.left_indent.inches)
+        self.assertNotEqual(list_paragraphs[0]._p.pPr.numPr.numId.val, list_paragraphs[3]._p.pPr.numPr.numId.val)
 
 
 if __name__ == "__main__":

@@ -55,7 +55,8 @@ def build_internal_api_profile_template():
         "request": {
             "headers": {},
             "query_params": {},
-            "body": {"dataset_code": "ClassReport"},
+            "body": {"dataset": "FinanceInvoice"},
+            "body_format": "form",
         },
         "field_map": {
             "period": "your_period_field",
@@ -114,6 +115,8 @@ def _coerce_bool(value, default=True):
 
 def _normalize_body_format(value):
     raw_value = str(value or "json").strip().lower()
+    if raw_value in {"multipart", "form-data", "multipart/form-data"}:
+        return "multipart"
     if raw_value in {"form", "x-www-form-urlencoded", "urlencoded"}:
         return "form"
     if raw_value in {"none", "empty", "kosong"}:
@@ -310,6 +313,9 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
                 f"{prefix}_QUERY_PARAMS_JSON",
             ) or (file_defaults.get("query_params") if isinstance(file_defaults.get("query_params"), dict) else {}),
             "body": _parse_optional_json_value(os.getenv(f"{prefix}_BODY_JSON", ""), f"{prefix}_BODY_JSON") or file_defaults.get("body"),
+            "body_format": _normalize_body_format(
+                os.getenv(f"{prefix}_BODY_FORMAT", file_defaults.get("body_format") or "json")
+            ),
         },
         "field_map": _parse_json_object(os.getenv(f"{prefix}_FIELD_MAP_JSON", ""), f"{prefix}_FIELD_MAP_JSON") or (file_defaults.get("field_map") if isinstance(file_defaults.get("field_map"), dict) else {}),
         "pagination": {
@@ -366,6 +372,9 @@ def _apply_env_overrides_to_json_api_profile(profile, prefix, endpoint_url, base
     body = _parse_optional_json_value(os.getenv(f"{prefix}_BODY_JSON", ""), f"{prefix}_BODY_JSON")
     if body is not None:
         request["body"] = body
+    body_format = os.getenv(f"{prefix}_BODY_FORMAT", "").strip()
+    if body_format:
+        request["body_format"] = _normalize_body_format(body_format)
     field_map = _parse_json_object(os.getenv(f"{prefix}_FIELD_MAP_JSON", ""), f"{prefix}_FIELD_MAP_JSON")
     if field_map:
         profile["field_map"] = field_map

@@ -195,6 +195,35 @@ def _value_to_text(value):
     return str(value).strip()
 
 
+def _naturalize_report_value(value):
+    text = re.sub(r"\s+", " ", _value_to_text(value)).strip(" .:-")
+    if not text:
+        return ""
+    if text.isupper() and len(text) > 3:
+        preserved = {"AI", "API", "BPR", "BPRS", "BUMN", "DIPA", "IDR", "ISO", "IT", "PO", "PT", "SPBE"}
+        words = []
+        for word in text.split():
+            stripped = re.sub(r"[^A-Za-z0-9/]+", "", word)
+            if stripped in preserved:
+                words.append(word)
+            else:
+                words.append(word.lower().capitalize())
+        text = " ".join(words)
+    return text
+
+
+def _normalize_payment_class_value(value):
+    text = _naturalize_report_value(value)
+    if not text:
+        return ""
+    match = re.search(r"kelas\s*([a-e])", text, flags=re.IGNORECASE)
+    if match:
+        class_label = f"Kelas {match.group(1).upper()}"
+        suffix = re.sub(r"(?i).*?kelas\s*[a-e]", "", text).strip(" -:()")
+        return f"{class_label} ({suffix})" if suffix else class_label
+    return text
+
+
 def _canonical_key_from_config_key(config_key):
     if config_key in INTERNAL_API_FIELD_SPECS:
         return config_key
@@ -502,6 +531,18 @@ def normalize_financial_dataframe(data_frame, explicit_field_map=None):
     if rename_map:
         working_frame = working_frame.rename(columns=rename_map)
 
+    value_normalizers = {
+        "partner_type": _naturalize_report_value,
+        "service": _naturalize_report_value,
+        "payment_class": _normalize_payment_class_value,
+        "delay_note": _naturalize_report_value,
+        "period": _naturalize_report_value,
+    }
+    for canonical_key, normalizer in value_normalizers.items():
+        label = INTERNAL_API_FIELD_SPECS[canonical_key]["label"]
+        if label in working_frame.columns:
+            working_frame[label] = working_frame[label].apply(normalizer)
+
     return working_frame, build_internal_data_summary(working_frame, explicit_field_map=explicit_field_map)
 
 
@@ -612,6 +653,7 @@ def build_internal_data_summary(data_frame, explicit_field_map=None, extraction_
             missing_required.append(canonical_key)
 
     return {
+        "semanticAdapter": "finance_invoice_v1",
         "availableColumns": available_columns,
         "missingRequiredFields": missing_required,
         "lowConfidenceFields": low_confidence_fields,

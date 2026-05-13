@@ -197,6 +197,10 @@ class ReportGenerator:
             financial_summary=report_context["financial_summary"],
             management_brief=report_context["management_brief"],
             internal_evidence=report_context["evidence"],
+            agent_evidence_brief=report_context.get(
+                "agent_evidence_brief",
+                "Tidak ada brief quality-control tambahan.",
+            ),
             industry_trends=macro_osint,
             user_focus=(notes or "Tidak ada fokus tambahan."),
             cashflow_context=(structured_context or "Tidak ada konteks forecast terstruktur tambahan."),
@@ -389,6 +393,18 @@ class ReportGenerator:
             return section_body
         return f"{section_body.rstrip()}\n\n{marker}".strip()
 
+    @classmethod
+    def _inject_executive_headlines(cls, section_body, report_context):
+        headline_block = str((report_context or {}).get("executive_headlines") or "").strip()
+        if not headline_block:
+            headline_block = str((report_context or {}).get("executive_facts") or "").strip()
+        return cls._inject_subheading_block(
+            section_body,
+            "Headline Utama untuk Manajemen",
+            headline_block,
+            before_subheading="Dampak Bisnis" if "### Dampak Bisnis" in section_body else "Tingkat Keyakinan dan Caveat",
+        )
+
     @staticmethod
     def _format_structured_context_block(raw_text):
         lines = []
@@ -430,7 +446,9 @@ class ReportGenerator:
             section_title = section["title"]
             section_body = section["body"]
 
-            if section_title == "Analisis Deskriptif Cashflow":
+            if section_title == "Ringkasan Eksekutif":
+                section_body = self._inject_executive_headlines(section_body, report_context)
+            elif section_title == "Analisis Deskriptif Cashflow":
                 section_body = self._append_marker_block(section_body, chart_marker)
             elif section_title == "Analisis Diagnostik Cashflow":
                 section_body = self._inject_subheading_block(
@@ -469,12 +487,12 @@ class ReportGenerator:
 
         lines = [
             "# Ringkasan Eksekutif",
+            "### Headline Utama untuk Manajemen",
+            report_context.get("executive_headlines") or report_context["executive_facts"],
+            "",
             "### Dampak Bisnis",
             "- Laporan ini digunakan untuk membantu manajemen membaca risiko cashflow, memahami prioritas penagihan, mengendalikan tekanan cash out, dan menentukan tindakan yang paling cepat berdampak pada ending cash.",
             "- Fokus pengguna tetap dijaga dalam interpretasi, namun narasi dan prioritas diturunkan dari bukti internal, pola historis, serta konteks pelaksanaan yang tersedia saat ini.",
-            "",
-            "## Fakta Eksekutif",
-            report_context["executive_facts"],
             "",
             "### Tingkat Keyakinan dan Caveat",
             report_context["confidence_summary"],
@@ -655,12 +673,12 @@ class ReportGenerator:
         document = Document()
         DocumentBuilder.create_cover(document, DEFAULT_COLOR)
         DocumentBuilder.add_table_of_contents(document)
-        self._embed_dashboard_screenshots(document, analysis_payload, DEFAULT_COLOR)
         DocumentBuilder.process_content(
             document,
             generated_content,
             DEFAULT_COLOR,
         )
+        self._embed_dashboard_screenshots(document, analysis_payload, DEFAULT_COLOR)
 
         dashboard_screenshots_included = self._has_dashboard_screenshots(analysis_payload)
         run_metadata = {

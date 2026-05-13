@@ -207,7 +207,12 @@ class InternalAPIClient:
         if auth:
             request_kwargs["auth"] = auth
         if self.method != "GET" and self.body is not None:
-            if self.body_format == "form":
+            if self.body_format in {"multipart", "form-data", "multipart/form-data"}:
+                request_kwargs["files"] = {
+                    key: (None, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value))
+                    for key, value in dict(self.body or {}).items()
+                }
+            elif self.body_format == "form":
                 request_kwargs["data"] = self.body
                 headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
             else:

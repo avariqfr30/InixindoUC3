@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from hmac import compare_digest
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -14,9 +15,17 @@ class SessionLimitError(Exception):
 class UserStore:
     EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
-    def __init__(self, db_path, allowed_email_domain="inixindojogja.co.id"):
+    def __init__(
+        self,
+        db_path,
+        allowed_email_domain="inixindojogja.co.id",
+        temporary_full_access_username="",
+        temporary_full_access_password="",
+    ):
         self.db_path = str(db_path)
         self.allowed_email_domain = str(allowed_email_domain or "inixindojogja.co.id").strip().lower()
+        self.temporary_full_access_username = str(temporary_full_access_username or "").strip()
+        self.temporary_full_access_password = str(temporary_full_access_password or "")
         self.lock = threading.Lock()
         self._initialize()
 
@@ -78,6 +87,13 @@ class UserStore:
         normalized_username = str(username or "").strip()
         normalized_username = normalized_username.lower()
         normalized_password = str(password or "")
+        if (
+            self.temporary_full_access_username
+            and self.temporary_full_access_password
+            and compare_digest(normalized_username, self.temporary_full_access_username.lower())
+            and compare_digest(normalized_password, self.temporary_full_access_password)
+        ):
+            return self.temporary_full_access_username
         try:
             self.validate_username(normalized_username)
         except ValueError:

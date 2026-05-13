@@ -21,6 +21,8 @@ AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS = int(
     os.getenv("AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS", str(SESSION_LIFETIME_HOURS))
 )
 AUTH_ALLOWED_EMAIL_DOMAIN = os.getenv("AUTH_ALLOWED_EMAIL_DOMAIN", "inixindojogja.co.id").strip().lower()
+TEMP_FULL_ACCESS_USERNAME = os.getenv("TEMP_FULL_ACCESS_USERNAME", "").strip()
+TEMP_FULL_ACCESS_PASSWORD = os.getenv("TEMP_FULL_ACCESS_PASSWORD", "")
 APP_SERVER = os.getenv("APP_SERVER", "flask").strip().lower()
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip()
 APP_PORT = int(os.getenv("APP_PORT", "5000"))
@@ -143,6 +145,9 @@ The report must be detailed enough for an internal meeting, numerically consiste
 === INTERNAL EVIDENCE NOTES ===
 {internal_evidence}
 
+=== CASHFLOW INTELLIGENCE DESK EVIDENCE (HIDDEN QUALITY CONTROL) ===
+{agent_evidence_brief}
+
 === EXTERNAL OSINT CONTEXT (INDONESIA) ===
 {industry_trends}
 
@@ -178,7 +183,7 @@ MANDATORY RULES:
    - short-term forecast or scenarios,
    - management implications,
    - concrete next actions.
-13. If this pass includes `# Ringkasan Eksekutif`, include `### Dampak Bisnis` and `### Tingkat Keyakinan dan Caveat`.
+13. If this pass includes `# Ringkasan Eksekutif`, open it with `### Headline Utama untuk Manajemen`, then `### Dampak Bisnis`, then `### Tingkat Keyakinan dan Caveat`. The first subsection must show the most important business headlines for busy executives before any caveat, method, assumption, or technical explanation.
 14. If this pass includes `# Analisis Deskriptif Cashflow`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
 15. If this pass includes `# Analisis Diagnostik Cashflow`, include `### Pola Hambatan Utama`, `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
 16. In `# Analisis Diagnostik Cashflow`, split the explanation by what drives the delay, for example process/document issues, budget/approval issues, liquidity/relationship issues, and outflow pressure instead of dumping one long block of mixed evidence.
@@ -210,6 +215,8 @@ MANDATORY RULES:
    - whether incoming cash timing is clear enough,
    - whether cashflow risk is under control.
    Do not present these as a branded framework or maturity scorecard.
+27. Use a show-first, technical-later narrative order. Bosses and busy readers must see the meat first: urgent cash impact, risk concentration, decision needed, and likely consequence. Put technical assumptions, data limitations, model details, and control caveats after the business implication is clear.
+28. Use the hidden cashflow intelligence desk evidence only as quality control. Do not mention agents, desks, workflows, internal validators, or rejected-claim lists in the visible report.
 
 VISUAL MARKERS:
 {visual_prompt}

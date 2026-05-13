@@ -556,26 +556,125 @@ class DocumentBuilder:
         return f"{index}."
 
     @classmethod
-    def _add_list_paragraph(cls, doc, marker, inline_nodes, level):
+    def _create_list_abstract_numbering(cls, doc, ordered=True):
+        numbering = doc.part.numbering_part.element
+        existing_abstract_ids = [
+            int(abstract.get(qn("w:abstractNumId")))
+            for abstract in numbering.findall(qn("w:abstractNum"))
+            if str(abstract.get(qn("w:abstractNumId")) or "").isdigit()
+        ]
+        abstract_id = max(existing_abstract_ids or [0]) + 1
+
+        abstract = OxmlElement("w:abstractNum")
+        abstract.set(qn("w:abstractNumId"), str(abstract_id))
+        multi_level = OxmlElement("w:multiLevelType")
+        multi_level.set(qn("w:val"), "hybridMultilevel")
+        abstract.append(multi_level)
+
+        ordered_formats = (("decimal", "%1."), ("lowerLetter", "%2."), ("lowerRoman", "%3."))
+        for level in range(3):
+            lvl = OxmlElement("w:lvl")
+            lvl.set(qn("w:ilvl"), str(level))
+
+            start = OxmlElement("w:start")
+            start.set(qn("w:val"), "1")
+            lvl.append(start)
+
+            num_format = OxmlElement("w:numFmt")
+            level_text = OxmlElement("w:lvlText")
+            if ordered:
+                fmt, text = ordered_formats[level]
+                num_format.set(qn("w:val"), fmt)
+                level_text.set(qn("w:val"), text)
+            else:
+                num_format.set(qn("w:val"), "bullet")
+                level_text.set(qn("w:val"), "•")
+            lvl.append(num_format)
+            lvl.append(level_text)
+
+            p_pr = OxmlElement("w:pPr")
+            indent = OxmlElement("w:ind")
+            indent.set(qn("w:left"), str(720 + (level * 360)))
+            indent.set(qn("w:hanging"), "360")
+            p_pr.append(indent)
+            lvl.append(p_pr)
+
+            if not ordered:
+                r_pr = OxmlElement("w:rPr")
+                fonts = OxmlElement("w:rFonts")
+                fonts.set(qn("w:ascii"), "Symbol")
+                fonts.set(qn("w:hAnsi"), "Symbol")
+                r_pr.append(fonts)
+                lvl.append(r_pr)
+
+            abstract.append(lvl)
+
+        numbering.append(abstract)
+        return abstract_id
+
+    @classmethod
+    def _create_numbering_instance(cls, doc, ordered=True, start_at=1):
+        numbering = doc.part.numbering_part.element
+        existing_ids = [
+            int(num.get(qn("w:numId")))
+            for num in numbering.findall(qn("w:num"))
+            if str(num.get(qn("w:numId")) or "").isdigit()
+        ]
+        next_id = max(existing_ids or [0]) + 1
+        abstract_num_id = cls._create_list_abstract_numbering(doc, ordered=ordered)
+
+        num = OxmlElement("w:num")
+        num.set(qn("w:numId"), str(next_id))
+        abstract = OxmlElement("w:abstractNumId")
+        abstract.set(qn("w:val"), str(abstract_num_id))
+        num.append(abstract)
+
+        if ordered:
+            override = OxmlElement("w:lvlOverride")
+            override.set(qn("w:ilvl"), "0")
+            start = OxmlElement("w:startOverride")
+            start.set(qn("w:val"), str(max(int(start_at or 1), 1)))
+            override.append(start)
+            num.append(override)
+
+        numbering.append(num)
+        return next_id
+
+    @staticmethod
+    def _apply_numbering(paragraph, num_id, level):
+        p_pr = paragraph._p.get_or_add_pPr()
+        existing_num_pr = p_pr.find(qn("w:numPr"))
+        if existing_num_pr is not None:
+            p_pr.remove(existing_num_pr)
+
+        num_pr = OxmlElement("w:numPr")
+        ilvl = OxmlElement("w:ilvl")
+        ilvl.set(qn("w:val"), str(max(int(level or 0), 0)))
+        num_id_element = OxmlElement("w:numId")
+        num_id_element.set(qn("w:val"), str(num_id))
+        num_pr.append(ilvl)
+        num_pr.append(num_id_element)
+        p_pr.append(num_pr)
+
+    @classmethod
+    def _add_list_paragraph(cls, doc, inline_nodes, level, num_id):
         paragraph = doc.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        paragraph.paragraph_format.left_indent = Inches(0.28 + (level * 0.22))
-        paragraph.paragraph_format.first_line_indent = Inches(-0.2)
+        paragraph.paragraph_format.left_indent = Inches(0.34 + (level * 0.28))
+        paragraph.paragraph_format.first_line_indent = Inches(-0.22)
         paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(6)
+        paragraph.paragraph_format.space_after = Pt(5)
         paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
         paragraph.paragraph_format.line_spacing = 1.08
-
-        marker_run = paragraph.add_run(f"{marker} ")
-        marker_run.font.name = "Calibri"
-        marker_run.font.size = Pt(11)
+        cls._apply_numbering(paragraph, num_id, level)
 
         for node in inline_nodes:
             cls._append_inline_text(paragraph, node)
         return paragraph
 
     @classmethod
-    def _add_list(cls, doc, list_tag, level=0, ordered=False):
+    def _add_list(cls, doc, list_tag, level=0, ordered=False, num_id=None):
+        active_num_id = num_id or cls._create_numbering_instance(doc, ordered=ordered)
         for item_index, list_item in enumerate(list_tag.find_all("li", recursive=False), start=1):
             inline_nodes = []
             nested_lists = []
@@ -587,8 +686,7 @@ class DocumentBuilder:
                     inline_nodes.append(child)
 
             if inline_nodes:
-                marker = cls._format_ordered_marker(item_index, level) if ordered else "•"
-                cls._add_list_paragraph(doc, marker, inline_nodes, level)
+                cls._add_list_paragraph(doc, inline_nodes, level, active_num_id)
 
             for nested_list in nested_lists:
                 cls._add_list(
@@ -596,6 +694,7 @@ class DocumentBuilder:
                     nested_list,
                     level=level + 1,
                     ordered=nested_list.name == "ol",
+                    num_id=cls._create_numbering_instance(doc, ordered=nested_list.name == "ol"),
                 )
 
     @staticmethod

@@ -25,6 +25,8 @@ class AuthFlowTestCase(unittest.TestCase):
         os.environ["AUTH_MAX_SESSIONS_PER_USER"] = "1"
         os.environ["AUTH_SESSION_IDLE_TIMEOUT_MINUTES"] = "60"
         os.environ["AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS"] = "12"
+        os.environ.pop("TEMP_FULL_ACCESS_USERNAME", None)
+        os.environ.pop("TEMP_FULL_ACCESS_PASSWORD", None)
 
         sys.path.insert(0, str(WORKSPACE))
         for module_name in ("app", "config"):
@@ -192,6 +194,19 @@ class AuthFlowTestCase(unittest.TestCase):
             "Hanya email @inixindojogja.co.id yang diizinkan.",
             external_signup.get_data(as_text=True),
         )
+
+    def test_configured_temporary_full_access_user_can_login_without_email_username(self):
+        from auth_store import UserStore
+
+        user_store = UserStore(
+            os.path.join(self._tmpdir, "temp-user.db"),
+            temporary_full_access_username="test1234",
+            temporary_full_access_password="test1234",
+        )
+
+        self.assertEqual(user_store.authenticate("test1234", "test1234"), "test1234")
+        self.assertIsNone(user_store.authenticate("test1234", "wrong-password"))
+        self.assertIsNone(user_store.authenticate("other-user", "test1234"))
 
     def test_signup_password_mismatch_stays_on_form_without_bad_request(self):
         response = self.client.post(

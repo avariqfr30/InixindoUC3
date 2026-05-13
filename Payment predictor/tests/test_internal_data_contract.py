@@ -19,6 +19,7 @@ from data_contract import (
     normalize_financial_dataframe,
     parse_internal_api_field_map,
 )
+from internal_api_doctor import run_production_source_doctor
 
 
 class InternalDataContractUnitTest(unittest.TestCase):
@@ -106,6 +107,39 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertIn("Nilai Invoice", normalized_df.columns)
         self.assertTrue(summary["isReady"])
         self.assertIn("fieldMapSuggestionJson", summary)
+        self.assertEqual(summary["semanticAdapter"], "finance_invoice_v1")
+
+    def test_normalize_dataframe_naturalizes_internal_api_values_for_reports(self):
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "report_period": "Q1 2026",
+                    "customer_segment": "INSTANSI PEMERINTAH",
+                    "service_name": "AUDIT SPBE",
+                    "collection_bucket": "KELAS C - TELAT 1-2 BULAN",
+                    "amount_idr": "Rp 180.000.000",
+                    "delay_reason": "DOKUMEN TERMIN MENUNGGU APPROVAL INTERNAL.",
+                }
+            ]
+        )
+        field_map = parse_internal_api_field_map(
+            {
+                "period": "report_period",
+                "partner_type": "customer_segment",
+                "service": "service_name",
+                "payment_class": "collection_bucket",
+                "invoice_value": "amount_idr",
+                "delay_note": "delay_reason",
+            }
+        )
+
+        normalized_df, summary = normalize_financial_dataframe(raw_df, explicit_field_map=field_map)
+
+        self.assertEqual(normalized_df.loc[0, "Tipe Partner"], "Instansi Pemerintah")
+        self.assertEqual(normalized_df.loc[0, "Layanan"], "Audit SPBE")
+        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas C (Telat 1-2 Bulan)")
+        self.assertEqual(normalized_df.loc[0, "Catatan Historis Keterlambatan"], "Dokumen Termin Menunggu Approval Internal")
+        self.assertTrue(summary["isReady"])
 
     def test_post_basic_auth_client_supports_body_json(self):
         old_env = {
@@ -204,7 +238,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
                 "auth": {"bearer_token": "__ENV__"},
                 "request": {
                     "body_format": "form",
-                    "body": {"dataset_code": "ClassReport"},
+                    "body": {"dataset": "FinanceInvoice"},
                 },
             }
 
@@ -215,7 +249,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
             self.assertEqual(records[0]["period"], "Q1 2026")
             _, kwargs = request_mock.call_args
             self.assertEqual(kwargs["headers"]["Authorization"], "Bearer env-token")
-            self.assertEqual(kwargs["data"], {"dataset_code": "ClassReport"})
+            self.assertEqual(kwargs["data"], {"dataset": "FinanceInvoice"})
             self.assertNotIn("json", kwargs)
         finally:
             if old_env["INTERNAL_API_AUTH_TOKEN"] is None:
@@ -225,6 +259,154 @@ class InternalDataContractUnitTest(unittest.TestCase):
             for module_name in ("core", "config", "finance_api_clients"):
                 if module_name in sys.modules:
                     del sys.modules[module_name]
+
+    def test_profile_client_supports_apidog_multipart_body(self):
+        for module_name in ("core", "config", "finance_api_clients"):
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+        import core as core_module
+
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "success": True,
+            "data": [
+                {
+                    "period": "Q1 2026",
+                    "partner_type": "Instansi Pemerintah",
+                    "service": "Audit SPBE",
+                    "payment_class": "Kelas B",
+                    "invoice_value": "Rp 200.000.000",
+                }
+            ],
+        }
+        profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "",
+            },
+            "request": {
+                "body_format": "multipart",
+                "body": {"dataset": "FinanceInvoice", "dataset_cache": "enabled"},
+            },
+        }
+
+        with mock.patch.object(core_module.requests, "request", return_value=fake_response) as request_mock:
+            client = core_module.InternalAPIClient(source_profile=profile)
+            records, _ = client.fetch_records()
+
+        self.assertEqual(records[0]["period"], "Q1 2026")
+        _, kwargs = request_mock.call_args
+        self.assertEqual(kwargs["files"]["dataset"], (None, "FinanceInvoice"))
+        self.assertEqual(kwargs["files"]["dataset_cache"], (None, "enabled"))
+        self.assertNotIn("data", kwargs)
+        self.assertNotIn("json", kwargs)
+
+    def test_production_source_doctor_reports_activation_readiness(self):
+        profile = {
+            "key": "production",
+            "name": "Produksi API Internal",
+            "mode": "production",
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "auth": {"basic_username": "demo-user", "basic_password": "demo-pass"},
+            "request": {"body": {"dataset": "FinanceInvoice"}, "body_format": "form"},
+            "field_map": {
+                "period": "reporting_period",
+                "partner_type": "segmentasi_customer",
+                "service": "produk_utama",
+                "payment_class": "bucket_pembayaran",
+                "invoice_value": "nominal_tagihan",
+                "delay_note": "hambatan_penagihan",
+            },
+        }
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.json.return_value = {
+            "success": True,
+            "data": {
+                "dataset_result": [
+                    {
+                        "reporting_period": "Januari 2026",
+                        "segmentasi_customer": "Instansi Pemerintah",
+                        "produk_utama": "Audit SPBE",
+                        "bucket_pembayaran": "Kelas B",
+                        "nominal_tagihan": 275000000,
+                        "hambatan_penagihan": "Dokumen termin menunggu approval internal.",
+                    }
+                ]
+            },
+        }
+
+        with mock.patch("requests.head", return_value=mock.Mock(status_code=200)), mock.patch(
+            "requests.request", return_value=fake_response
+        ):
+            result = run_production_source_doctor(source_profile=profile, preview_rows=5)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["activation"]["activationReady"])
+        self.assertTrue(result["activation"]["handoverReady"])
+        self.assertEqual(result["authShape"]["mode"], "basic")
+        self.assertEqual(result["records"]["extractionSummary"]["resolvedRecordsPath"], "data.dataset_result")
+        self.assertEqual(
+            {check["name"]: check["status"] for check in result["checks"]}["field_mapping_readiness"],
+            "pass",
+        )
+
+    def test_production_source_doctor_blocks_activation_when_required_fields_missing(self):
+        profile = {
+            "key": "production",
+            "name": "Produksi API Internal",
+            "mode": "production",
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "auth": {"bearer_token": "test-token"},
+            "request": {"body": {"dataset": "FinanceInvoice"}, "body_format": "form"},
+        }
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.json.return_value = {
+            "success": True,
+            "data": {
+                "dataset_result": [
+                    {
+                        "reporting_period": "Januari 2026",
+                        "segmentasi_customer": "Instansi Pemerintah",
+                    }
+                ]
+            },
+        }
+
+        with mock.patch("requests.head", return_value=mock.Mock(status_code=200)), mock.patch(
+            "requests.request", return_value=fake_response
+        ):
+            result = run_production_source_doctor(source_profile=profile, preview_rows=5)
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["activation"]["activationReady"])
+        self.assertIn("payment_class", result["fieldMapping"]["missingRequiredFields"])
+        self.assertEqual(
+            {check["name"]: check["status"] for check in result["checks"]}["field_mapping_readiness"],
+            "fail",
+        )
 
 
 class InternalDataContractRouteTest(unittest.TestCase):
@@ -298,7 +480,121 @@ class InternalDataContractRouteTest(unittest.TestCase):
         self.assertNotIn("api-connect", template)
         settings_template = (WORKSPACE / "templates" / "data_settings.html").read_text(encoding="utf-8")
         self.assertIn("Internal API / APIDog", settings_template)
-        self.assertIn("Simpan & Aktifkan Internal API", settings_template)
+        self.assertIn("Internal API Sudah Aktif", settings_template)
+        self.assertIn("Refresh Dataset Sekarang", settings_template)
+        self.assertIn("btn-refresh-internal-api", settings_template)
+        self.assertIn("/api/internal-api/refresh", settings_template)
+        self.assertIn("setInternalApiConnectionState", settings_template)
+        self.assertNotIn("Project data source", settings_template)
+        self.assertNotIn("active.type", settings_template)
+
+    def test_internal_api_settings_page_is_status_only_for_employees(self):
+        settings_template = (WORKSPACE / "templates" / "data_settings.html").read_text(encoding="utf-8")
+
+        self.assertIn("Konfigurasi API dikelola dari environment VPS", settings_template)
+        self.assertIn("Internal API Sudah Aktif", settings_template)
+        self.assertIn("Refresh Dataset Sekarang", settings_template)
+        self.assertNotIn("endpoint-url", settings_template)
+        self.assertNotIn("auth-mode", settings_template)
+        self.assertNotIn("body-format", settings_template)
+        self.assertNotIn("records-key", settings_template)
+        self.assertNotIn("field-map-json", settings_template)
+        self.assertNotIn("btn-preview", settings_template)
+        self.assertNotIn("/api/internal-data/connect", settings_template)
+
+    def test_internal_api_refresh_endpoint_refreshes_active_api_source(self):
+        with self.flask_app.app_context():
+            original_refresh_coordinator = self.flask_app.config["refresh_coordinator"]
+            original_knowledge_base = self.flask_app.config["knowledge_base"]
+
+            fake_refresh_coordinator = mock.Mock()
+            fake_refresh_coordinator.refresh_all.return_value = {
+                "knowledgeBase": True,
+                "cashOutSource": None,
+            }
+            fake_knowledge_base = mock.Mock()
+            fake_knowledge_base.get_sync_status.return_value = {
+                "dataMode": "production",
+                "activeSource": {"type": "json_api", "name": "Internal API"},
+                "activeSourceKey": "production",
+                "availableSources": [{"type": "json_api", "configured": True}],
+                "contractReady": True,
+                "recordCount": 12,
+                "syncStatus": "ready",
+                "sourceRegistryIssues": [],
+            }
+            fake_knowledge_base.get_internal_data_contract.return_value = {
+                "currentSummary": {"isReady": True}
+            }
+            self.flask_app.config["refresh_coordinator"] = fake_refresh_coordinator
+            self.flask_app.config["knowledge_base"] = fake_knowledge_base
+
+            try:
+                response = self.client.post("/api/internal-api/refresh")
+            finally:
+                self.flask_app.config["refresh_coordinator"] = original_refresh_coordinator
+                self.flask_app.config["knowledge_base"] = original_knowledge_base
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "refreshed")
+        self.assertTrue(payload["apiConnectionActive"])
+        fake_refresh_coordinator.refresh_all.assert_called_once()
+
+    def test_internal_api_refresh_endpoint_activates_configured_api_profile(self):
+        with self.flask_app.app_context():
+            original_refresh_coordinator = self.flask_app.config["refresh_coordinator"]
+            original_knowledge_base = self.flask_app.config["knowledge_base"]
+            original_forecast_cache = self.flask_app.config["forecast_cache"]
+            original_cash_out_store = self.flask_app.config["cash_out_store"]
+
+            demo_snapshot = {
+                "dataMode": "demo",
+                "activeSource": {"type": "csv", "name": "Demo Lokal"},
+                "activeSourceKey": "demo",
+                "availableSources": [{"key": "production", "type": "json_api", "configured": True}],
+                "contractReady": True,
+                "recordCount": 12,
+                "syncStatus": "ready",
+                "sourceRegistryIssues": [],
+            }
+            api_snapshot = {
+                **demo_snapshot,
+                "dataMode": "production",
+                "activeSource": {"type": "json_api", "name": "Internal API"},
+                "activeSourceKey": "production",
+            }
+            fake_refresh_coordinator = mock.Mock()
+            fake_refresh_coordinator.refresh_all.return_value = {
+                "knowledgeBase": True,
+                "cashOutSource": None,
+            }
+            fake_knowledge_base = mock.Mock()
+            fake_knowledge_base.get_sync_status.side_effect = [demo_snapshot, api_snapshot]
+            fake_knowledge_base.activate_source.return_value = {"activated": True}
+            fake_knowledge_base.get_internal_data_contract.return_value = {
+                "currentSummary": {"isReady": True}
+            }
+            fake_forecast_cache = mock.Mock()
+            fake_cash_out_store = mock.Mock()
+            fake_cash_out_store.get_status.return_value = {"syncStatus": "not_configured"}
+            self.flask_app.config["refresh_coordinator"] = fake_refresh_coordinator
+            self.flask_app.config["knowledge_base"] = fake_knowledge_base
+            self.flask_app.config["forecast_cache"] = fake_forecast_cache
+            self.flask_app.config["cash_out_store"] = fake_cash_out_store
+
+            try:
+                response = self.client.post("/api/internal-api/refresh")
+            finally:
+                self.flask_app.config["refresh_coordinator"] = original_refresh_coordinator
+                self.flask_app.config["knowledge_base"] = original_knowledge_base
+                self.flask_app.config["forecast_cache"] = original_forecast_cache
+                self.flask_app.config["cash_out_store"] = original_cash_out_store
+
+        self.assertEqual(response.status_code, 200)
+        fake_knowledge_base.activate_source.assert_called_once_with("production")
+        fake_forecast_cache.clear.assert_called_once()
+        fake_cash_out_store.refresh_data.assert_called_once()
 
     def test_connect_endpoint_saves_and_activates_ready_api_profile(self):
         import core as core_module
@@ -340,7 +636,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
                     "method": "POST",
                     "basicUsername": "demo-user",
                     "basicPassword": "demo-pass",
-                    "bodyJson": {"dataset_code": "ClassReport"},
+                    "bodyJson": {"dataset": "FinanceInvoice"},
                     "recordsKey": "data.dataset_result",
                 },
             )
@@ -387,7 +683,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
                     "endpointUrl": "https://example.com/api/Resource/dataset",
                     "method": "POST",
                     "bodyFormat": "form",
-                    "bodyJson": {"dataset_code": "ClassReport"},
+                    "bodyJson": {"dataset": "FinanceInvoice"},
                     "recordsKey": "data.dataset_result",
                     "activate": False,
                 },

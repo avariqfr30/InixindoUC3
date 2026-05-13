@@ -37,6 +37,8 @@ def create_app():
         REPORT_STATUS_POLL_INTERVAL_MS,
         SESSION_COOKIE_SECURE,
         SMART_SUGGESTIONS,
+        TEMP_FULL_ACCESS_PASSWORD,
+        TEMP_FULL_ACCESS_USERNAME,
     )
     from core import CashOutStore, KnowledgeBase, ReportGenerator, Researcher
     from data_sources import summarize_source_profile
@@ -55,7 +57,12 @@ def create_app():
     cash_out_store = CashOutStore()
     report_generator = ReportGenerator(knowledge_base)
     job_store = ReportJobStore(JOB_STATE_DB_PATH, REPORT_ARTIFACTS_DIR)
-    user_store = UserStore(JOB_STATE_DB_PATH, allowed_email_domain=AUTH_ALLOWED_EMAIL_DOMAIN)
+    user_store = UserStore(
+        JOB_STATE_DB_PATH,
+        allowed_email_domain=AUTH_ALLOWED_EMAIL_DOMAIN,
+        temporary_full_access_username=TEMP_FULL_ACCESS_USERNAME,
+        temporary_full_access_password=TEMP_FULL_ACCESS_PASSWORD,
+    )
     session_store = ActiveSessionStore(JOB_STATE_DB_PATH)
     forecast_cache = ForecastSnapshotCache(FORECAST_CACHE_TTL_SECONDS)
     job_manager = ReportJobManager(
@@ -376,6 +383,19 @@ def create_app():
             "refreshIntervalSeconds": refresh_interval,
         }
 
+    def _is_internal_api_active(sync_snapshot):
+        source = sync_snapshot.get("financialData") or {}
+        active_source = source.get("activeSource") or {}
+        return bool(active_source.get("type") == "json_api" or source.get("dataMode") == "production")
+
+    def _internal_api_source_key(sync_snapshot):
+        source = sync_snapshot.get("financialData") or {}
+        available_sources = source.get("availableSources") or []
+        for profile in available_sources:
+            if profile and profile.get("type") == "json_api" and profile.get("configured"):
+                return profile.get("key") or "production"
+        return ""
+
     def _get_cash_out_records():
         return current_app.config["cash_out_store"].get_records()
 
@@ -589,6 +609,56 @@ def create_app():
                 "refreshResult": refresh_result,
                 "syncStatus": _build_sync_snapshot(),
             }
+        )
+
+    @app.route("/api/internal-api/refresh", methods=["POST"])
+    @app.route("/api/internal-data/refresh", methods=["POST"])
+    def refresh_internal_api_dataset():
+        sync_snapshot = _build_sync_snapshot()
+        api_source_key = _internal_api_source_key(sync_snapshot)
+        if not (_is_internal_api_active(sync_snapshot) or api_source_key):
+            return (
+                jsonify(
+                    {
+                        "status": "not_configured",
+                        "apiConnectionActive": False,
+                        "error": "Internal API belum aktif. Simpan dan aktifkan koneksi Internal API sebelum refresh dataset.",
+                        "syncStatus": sync_snapshot,
+                    }
+                ),
+                400,
+            )
+
+        if not _is_internal_api_active(sync_snapshot):
+            activation = current_app.config["knowledge_base"].activate_source(api_source_key)
+            if not activation.get("activated"):
+                return (
+                    jsonify(
+                        {
+                            "status": "activation_failed",
+                            "apiConnectionActive": False,
+                            "error": activation.get("message") or "Internal API belum bisa diaktifkan.",
+                            "syncStatus": _build_sync_snapshot(),
+                        }
+                    ),
+                    409,
+                )
+            current_app.config["forecast_cache"].clear()
+            current_app.config["cash_out_store"].refresh_data()
+
+        refresh_result = current_app.config["refresh_coordinator"].refresh_all()
+        refreshed_snapshot = _build_sync_snapshot()
+        success = bool(refresh_result["knowledgeBase"])
+        return (
+            jsonify(
+                {
+                    "status": "refreshed" if success else "error",
+                    "refreshResult": refresh_result,
+                    "syncStatus": refreshed_snapshot,
+                    "apiConnectionActive": _is_internal_api_active(refreshed_snapshot),
+                }
+            ),
+            200 if success else 503,
         )
 
     @app.route("/health")

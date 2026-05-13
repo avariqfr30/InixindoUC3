@@ -30,6 +30,7 @@ class DataSourceProfilesTest(unittest.TestCase):
             "INTERNAL_API_ENDPOINT_URL": os.environ.get("INTERNAL_API_ENDPOINT_URL"),
             "INTERNAL_API_METHOD": os.environ.get("INTERNAL_API_METHOD"),
             "INTERNAL_API_BODY_JSON": os.environ.get("INTERNAL_API_BODY_JSON"),
+            "INTERNAL_API_BODY_FORMAT": os.environ.get("INTERNAL_API_BODY_FORMAT"),
             "INTERNAL_API_HEADERS_JSON": os.environ.get("INTERNAL_API_HEADERS_JSON"),
             "INTERNAL_API_QUERY_PARAMS_JSON": os.environ.get("INTERNAL_API_QUERY_PARAMS_JSON"),
             "INTERNAL_API_FIELD_MAP_JSON": os.environ.get("INTERNAL_API_FIELD_MAP_JSON"),
@@ -49,7 +50,7 @@ class DataSourceProfilesTest(unittest.TestCase):
     def test_profile_registry_loads_demo_and_env_production(self):
         os.environ["INTERNAL_API_ENDPOINT_URL"] = "https://example.com/api/Resource/dataset"
         os.environ["INTERNAL_API_METHOD"] = "POST"
-        os.environ["INTERNAL_API_BODY_JSON"] = json.dumps({"dataset_code": "ClassReport"})
+        os.environ["INTERNAL_API_BODY_JSON"] = json.dumps({"dataset": "FinanceInvoice"})
         os.environ["INTERNAL_API_BASIC_USERNAME"] = "demo-user"
         os.environ["INTERNAL_API_BASIC_PASSWORD"] = "demo-pass"
 
@@ -66,12 +67,29 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertIn("demo", profiles)
         self.assertIn("production", profiles)
         self.assertEqual(profiles["production"]["endpoint"]["method"], "POST")
-        self.assertEqual(profiles["production"]["request"]["body"]["dataset_code"], "ClassReport")
+        self.assertEqual(profiles["production"]["request"]["body"]["dataset"], "FinanceInvoice")
+
+    def test_env_production_profile_supports_form_body_format(self):
+        os.environ["INTERNAL_API_ENDPOINT_URL"] = "https://example.com/api/Resource/dataset"
+        os.environ["INTERNAL_API_METHOD"] = "POST"
+        os.environ["INTERNAL_API_BODY_JSON"] = json.dumps({"dataset": "FinanceInvoice"})
+        os.environ["INTERNAL_API_BODY_FORMAT"] = "form"
+
+        profiles, issues, _ = load_available_source_profiles(
+            demo_csv_path=self.demo_csv,
+            legacy_data_mode="internal_api",
+            internal_api_endpoint_url=os.environ["INTERNAL_API_ENDPOINT_URL"],
+            internal_api_base_url="",
+            internal_api_dataset_path="/api/finance/invoices",
+        )
+
+        self.assertEqual(issues, [])
+        self.assertEqual(profiles["production"]["request"]["body_format"], "form")
 
     def test_single_file_internal_api_profile_is_supported(self):
         profile = build_internal_api_profile_template()
         profile["endpoint"]["url"] = "https://example.com/api/Resource/dataset"
-        profile["request"]["body"] = {"dataset_code": "ClassReport"}
+        profile["request"]["body"] = {"dataset": "FinanceInvoice"}
         profile["field_map"] = {}
         profile_path = os.path.join(self.tmpdir, "production-profile.json")
         Path(profile_path).write_text(json.dumps(profile), encoding="utf-8")
@@ -88,7 +106,16 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertEqual(default_key, "production")
         self.assertEqual(issues, [])
         self.assertEqual(profiles["production"]["endpoint"]["url"], "https://example.com/api/Resource/dataset")
-        self.assertEqual(profiles["production"]["request"]["body"]["dataset_code"], "ClassReport")
+        self.assertEqual(profiles["production"]["request"]["body"]["dataset"], "FinanceInvoice")
+
+    def test_internal_api_profile_template_uses_finance_invoice_apidog_dataset(self):
+        profile = build_internal_api_profile_template()
+
+        self.assertEqual(profile["endpoint"]["method"], "POST")
+        self.assertEqual(profile["endpoint"]["records_key"], "data.dataset_result")
+        self.assertEqual(profile["request"]["body_format"], "form")
+        self.assertEqual(profile["request"]["body"], {"dataset": "FinanceInvoice"})
+        self.assertIn("invoice_value", profile["field_map"])
 
     def test_active_source_state_roundtrip(self):
         profiles, _, _ = load_available_source_profiles(
@@ -128,7 +155,7 @@ class DataSourceProfilesTest(unittest.TestCase):
             "request": {
                 "headers": {"X-Test": "1"},
                 "query_params": {"tag": "cashflow"},
-                "body": {"dataset_code": "ClassReport"},
+                "body": {"dataset": "FinanceInvoice"},
             },
         }
 
@@ -145,7 +172,7 @@ class DataSourceProfilesTest(unittest.TestCase):
                 "method": "POST",
                 "basicUsername": "demo-user",
                 "basicPassword": "demo-pass",
-                "bodyJson": {"dataset_code": "ClassReport"},
+                "bodyJson": {"dataset": "FinanceInvoice"},
                 "recordsKey": "data.dataset_result",
                 "fieldMapJson": {"invoice_value": "amount_idr"},
             }
@@ -156,7 +183,7 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertEqual(profile["endpoint"]["method"], "POST")
         self.assertEqual(profile["endpoint"]["records_key"], "data.dataset_result")
         self.assertEqual(profile["auth"]["basic_username"], "demo-user")
-        self.assertEqual(profile["request"]["body"]["dataset_code"], "ClassReport")
+        self.assertEqual(profile["request"]["body"]["dataset"], "FinanceInvoice")
         self.assertEqual(profile["field_map"]["invoice_value"], "amount_idr")
 
     def test_connection_payload_supports_form_body_and_env_bearer_marker(self):
@@ -165,13 +192,13 @@ class DataSourceProfilesTest(unittest.TestCase):
                 "endpointUrl": "https://example.com/api/Resource/dataset",
                 "method": "POST",
                 "bodyFormat": "form",
-                "bodyJson": {"dataset_code": "ClassReport"},
+                "bodyJson": {"dataset": "FinanceInvoice"},
                 "useEnvBearerToken": True,
             }
         )
 
         self.assertEqual(profile["request"]["body_format"], "form")
-        self.assertEqual(profile["request"]["body"]["dataset_code"], "ClassReport")
+        self.assertEqual(profile["request"]["body"]["dataset"], "FinanceInvoice")
         self.assertEqual(profile["auth"]["bearer_token"], "__ENV__")
 
 

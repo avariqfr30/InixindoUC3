@@ -217,6 +217,19 @@ class FinancialAnalyzerReadinessMixin:
         base_profile = context.get("base_profile", {})
         hidden_dimensions, note_profile = cls._build_hidden_dimensions(base_profile, notes)
         visible_outputs = cls._build_readiness_outputs(base_profile, hidden_dimensions, note_profile)
+        rejected_claims = [
+            str(item).strip()
+            for item in context.get("agent_rejected_claims", [])
+            if str(item).strip()
+        ]
+        if rejected_claims:
+            visible_outputs["controls"] = "\n".join(
+                [
+                    visible_outputs["controls"],
+                    "- Guardrail kualitas laporan: " + rejected_claims[0],
+                    "- Guardrail kualitas laporan: " + rejected_claims[1] if len(rejected_claims) > 1 else "",
+                ]
+            ).strip()
         return {
             **visible_outputs,
             "hidden_dimensions": hidden_dimensions,

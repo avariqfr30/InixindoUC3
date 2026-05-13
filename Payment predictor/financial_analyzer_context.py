@@ -2,6 +2,8 @@ import statistics
 
 import pandas as pd
 
+from cashflow_intelligence_desk import CashflowIntelligenceDesk
+
 
 class FinancialAnalyzerContextMixin:
     @classmethod
@@ -38,6 +40,7 @@ class FinancialAnalyzerContextMixin:
                     "top_risk_partners": [],
                 },
                 "visual_prompt": "Do not force visuals.",
+                **CashflowIntelligenceDesk.empty_context(),
             }
 
         working_df = df.copy()
@@ -401,6 +404,12 @@ class FinancialAnalyzerContextMixin:
             recent_risk_change_line,
             f"- Layanan dengan eksposur risiko tinggi paling dominan saat ini: {top_risk_service_names}.",
         ]
+        executive_headline_lines = [
+            f"- {cls._format_currency(delayed_invoice_value)} cash in sedang tertahan pada invoice terlambat dan perlu dibaca sebagai agenda manajemen, bukan sekadar daftar tagihan.",
+            f"- Risiko tinggi Kelas D/E bernilai {cls._format_currency(high_risk_invoice_value)} terkonsentrasi pada {top_risk_partner_names}; ini adalah titik paling cepat mengubah ending cash bila ditangani.",
+            f"- Base case menunjukkan realisasi {cls._format_currency(expected_realization_base)} dengan gap {cls._format_currency(expected_gap_base)}, sehingga prioritas 30 hari harus menutup bottleneck yang paling bisa dipulihkan.",
+            f"- Perhatian eksekutif perlu diarahkan ke {top_risk_service_names} karena layanan ini membawa eksposur risiko paling dominan saat ini.",
+        ]
         scenario_lines = [
             "| Skenario | Estimasi Arus Kas Masuk | Gap terhadap Total Invoice | Narasi Manajemen |",
             "|---|---:|---:|---|",
@@ -440,30 +449,42 @@ class FinancialAnalyzerContextMixin:
             + agenda_lines
         )
 
+        base_profile = {
+            "data_mode": data_mode,
+            "total_invoices": total_invoices,
+            "total_invoice_value": total_invoice_value,
+            "delayed_invoices": delayed_invoices,
+            "delayed_invoice_value": delayed_invoice_value,
+            "high_risk_invoices": high_risk_invoices,
+            "high_risk_invoice_value": high_risk_invoice_value,
+            "expected_realization_base": expected_realization_base,
+            "expected_gap_base": expected_gap_base,
+            "core_fields_available": len(core_field_map) - len(missing_core_fields),
+            "core_fields_expected": len(core_field_map),
+            "missing_core_fields": missing_core_fields,
+            "top_risk_partners": high_risk_partner_df.index.tolist()[:3],
+            "top_risk_services": high_risk_service_df.index.tolist()[:3],
+        }
+        intelligence_desk_context = CashflowIntelligenceDesk.build_context(
+            working_df=working_df,
+            base_profile=base_profile,
+            priority_rows=priority_rows,
+            top_themes=top_themes,
+            format_currency=cls._format_currency,
+            format_percentage=cls._format_percentage,
+        )
+
         return {
             "financial_summary": "\n".join(financial_summary_lines),
             "evidence": "\n".join(evidence_lines),
             "diagnostic_breakdown": "\n".join(diagnostic_breakdown_lines),
             "management_brief": "\n".join(management_brief_lines),
+            "executive_headlines": "\n".join(executive_headline_lines),
             "executive_facts": "\n".join(executive_fact_lines),
             "scenario_table": "\n".join(scenario_lines),
             "priority_table": "\n".join(priority_table_lines),
             "meeting_agenda": "\n".join(agenda_lines),
-            "base_profile": {
-                "data_mode": data_mode,
-                "total_invoices": total_invoices,
-                "total_invoice_value": total_invoice_value,
-                "delayed_invoices": delayed_invoices,
-                "delayed_invoice_value": delayed_invoice_value,
-                "high_risk_invoices": high_risk_invoices,
-                "high_risk_invoice_value": high_risk_invoice_value,
-                "expected_realization_base": expected_realization_base,
-                "expected_gap_base": expected_gap_base,
-                "core_fields_available": len(core_field_map) - len(missing_core_fields),
-                "core_fields_expected": len(core_field_map),
-                "missing_core_fields": missing_core_fields,
-                "top_risk_partners": high_risk_partner_df.index.tolist()[:3],
-                "top_risk_services": high_risk_service_df.index.tolist()[:3],
-            },
+            "base_profile": base_profile,
             "visual_prompt": cls._build_visual_prompt(class_distribution),
+            **intelligence_desk_context,
         }
