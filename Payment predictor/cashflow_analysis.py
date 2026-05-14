@@ -44,6 +44,7 @@ from finance_api_clients import InternalAPIClient
 from financial_analyzer import FinancialAnalyzer
 
 logger = logging.getLogger(__name__)
+EMBEDDING_BATCH_SIZE = max(int(os.getenv("EMBEDDING_BATCH_SIZE", "8")), 1)
 
 class KnowledgeBase:
     def __init__(self, db_uri):
@@ -130,15 +131,17 @@ class KnowledgeBase:
     def _load_demo_data(self, profile=None):
         active_profile = profile or self.source_profile
         csv_path = str((active_profile or {}).get("path") or DEMO_CSV_PATH)
+        data_frame = None
         try:
             data_frame = pd.read_sql(f"SELECT * FROM {self.table_name}", self.engine)
         except Exception:
+            data_frame = None
+
+        if data_frame is None or data_frame.empty:
             if not os.path.exists(csv_path):
                 raise FileNotFoundError(f"Demo CSV source is unavailable: {csv_path}")
-
-            raw_df = pd.read_csv(csv_path)
-            raw_df.columns = [column.strip() for column in raw_df.columns]
-            data_frame = raw_df
+            data_frame = pd.read_csv(csv_path)
+            data_frame.columns = [column.strip() for column in data_frame.columns]
 
         normalized_df, data_summary = normalize_financial_dataframe(data_frame)
         return normalized_df, data_summary
@@ -207,11 +210,13 @@ class KnowledgeBase:
                 "Syncing %s financial records to the embedding store.",
                 len(ids),
             )
-            self.collection.add(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids,
-            )
+            for start in range(0, len(ids), EMBEDDING_BATCH_SIZE):
+                end = start + EMBEDDING_BATCH_SIZE
+                self.collection.add(
+                    documents=documents[start:end],
+                    metadatas=metadatas[start:end],
+                    ids=ids[start:end],
+                )
         except Exception as exc:
             logger.error("Embedding sync failed: %s", exc)
             return False

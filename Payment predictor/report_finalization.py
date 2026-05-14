@@ -2,6 +2,8 @@ import json
 import re
 
 from cashflow_analysis import FinancialAnalyzer
+from executive_summary_builder import ExecutiveSummaryBuilder
+from reader_safe_text import reader_safe_text
 from report_structure import REPORT_STRUCTURE
 
 
@@ -190,6 +192,9 @@ class ReportFinalizer:
             before_subheading="Dampak Bisnis" if "### Dampak Bisnis" in section_body else "Tingkat Keyakinan dan Caveat",
         )
 
+    def build_executive_summary(self, section_body, report_context):
+        return ExecutiveSummaryBuilder.build(report_context, existing_body=section_body)
+
     @classmethod
     def sanitize_generated_report_text(cls, raw_text):
         sanitized = str(raw_text or "")
@@ -200,7 +205,7 @@ class ReportFinalizer:
         return sanitized.strip()
 
     def finalize(self, raw_text, report_context, macro_osint, analysis_payload=None):
-        raw_text = self.sanitize_generated_report_text(raw_text)
+        raw_text = self.sanitize_generated_report_text(reader_safe_text(raw_text))
         sections = self.split_top_level_sections(raw_text)
         if not sections:
             return raw_text
@@ -215,7 +220,7 @@ class ReportFinalizer:
             section_body = section["body"]
 
             if section_title == "Ringkasan Eksekutif":
-                section_body = self.inject_executive_headlines(section_body, report_context)
+                section_body = self.build_executive_summary(section_body, report_context)
             elif section_title == "Analisis Deskriptif Cashflow":
                 section_body = self.append_marker_block(section_body, chart_marker)
             elif section_title == "Analisis Diagnostik Cashflow":
@@ -244,7 +249,7 @@ class ReportFinalizer:
 
             finalized_sections.append({"title": section_title, "body": section_body})
 
-        return self.join_top_level_sections(finalized_sections)
+        return reader_safe_text(self.join_top_level_sections(finalized_sections))
 
     def build_fallback_report(self, report_context, notes, analysis_context, macro_osint, analysis_payload=None, structured_context_block=""):
         chart_marker, flow_marker = self.extract_visual_markers(report_context.get("visual_prompt", ""))

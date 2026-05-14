@@ -16,6 +16,8 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
 
 from config import DEFAULT_COLOR, WRITER_FIRM_NAME
+from reader_safe_text import reader_safe_text
+from report_structure import REPORT_STRUCTURE
 
 matplotlib.use("Agg")
 
@@ -50,7 +52,7 @@ class StyleEngine:
         cls._insert_field(
             paragraph,
             'TOC \\o "1-3" \\h \\z \\u',
-            "Klik kanan lalu pilih Update Field untuk memuat daftar isi.",
+            "",
         )
 
     @classmethod
@@ -454,6 +456,10 @@ class DocumentBuilder:
     }
 
     @staticmethod
+    def reader_safe_text(raw_text):
+        return reader_safe_text(raw_text)
+
+    @staticmethod
     def _append_inline_text(paragraph, node, bold=False, italic=False, underline=False, monospace=False):
         if isinstance(node, NavigableString):
             text = str(node)
@@ -819,6 +825,7 @@ class DocumentBuilder:
 
     @classmethod
     def process_content(cls, doc, raw_text, theme_color=DEFAULT_COLOR):
+        raw_text = cls.reader_safe_text(raw_text)
         markdown_buffer = []
 
         for raw_line in raw_text.splitlines():
@@ -849,7 +856,7 @@ class DocumentBuilder:
 
         properties = doc.core_properties
         properties.title = "Inixindo Cashflow Intelligence Report"
-        properties.subject = "Internal Cashflow Intelligence Report"
+        properties.subject = "Cashflow Intelligence Report"
         properties.author = WRITER_FIRM_NAME
         properties.category = "Finance"
 
@@ -903,14 +910,11 @@ class DocumentBuilder:
     @staticmethod
     def add_table_of_contents(doc):
         doc.add_heading("Daftar Isi", level=1)
+        for section_title in REPORT_STRUCTURE.section_sequence:
+            paragraph = doc.add_paragraph(section_title, style="List Bullet")
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.space_after = Pt(2)
         toc_paragraph = doc.add_paragraph()
         StyleEngine.insert_toc_field(toc_paragraph)
-
-        note = doc.add_paragraph(
-            "Catatan: jika daftar isi belum muncul, klik kanan pada area daftar isi lalu pilih Update Field."
-        )
-        note.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        note.runs[0].italic = True
-        note.runs[0].font.size = Pt(10)
 
         doc.add_page_break()
