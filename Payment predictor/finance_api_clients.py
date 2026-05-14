@@ -46,7 +46,7 @@ from config import (
     INTERNAL_API_TIMEOUT,
     INTERNAL_API_VERIFY_SSL,
 )
-from data_contract import extract_records_from_payload, parse_internal_api_field_map
+from data_contract import extract_records_from_payload, normalize_records, parse_internal_api_field_map
 from forecast_engine import parse_idr_amount
 
 logger = logging.getLogger(__name__)
@@ -495,23 +495,35 @@ class CashOutAPIClient(InternalAPIClient):
     REQUIRED_FIELDS = ("amount", "due_date")
 
     def __init__(self):
-        self.endpoint_url = CASH_OUT_API_ENDPOINT_URL.strip()
-        self.base_url = ""
-        self.dataset_path = ""
-        self.method = (CASH_OUT_API_METHOD or "GET").strip().upper()
-        self.records_key = CASH_OUT_API_RECORDS_KEY.strip()
-        self.auth_token = CASH_OUT_API_AUTH_TOKEN.strip()
-        self.basic_username = CASH_OUT_API_BASIC_USERNAME.strip()
-        self.basic_password = CASH_OUT_API_BASIC_PASSWORD
-        self.timeout = CASH_OUT_API_TIMEOUT
-        self.verify_ssl = CASH_OUT_API_VERIFY_SSL
-        self.headers = self._parse_json_object(CASH_OUT_API_HEADERS_JSON, "headers")
-        self.body = self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body")
+        source_profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": CASH_OUT_API_ENDPOINT_URL.strip(),
+                "method": (CASH_OUT_API_METHOD or "GET").strip().upper(),
+                "timeout": CASH_OUT_API_TIMEOUT,
+                "verify_ssl": CASH_OUT_API_VERIFY_SSL,
+                "records_key": CASH_OUT_API_RECORDS_KEY.strip(),
+            },
+            "auth": {
+                "bearer_token": CASH_OUT_API_AUTH_TOKEN.strip(),
+                "basic_username": CASH_OUT_API_BASIC_USERNAME.strip(),
+                "basic_password": CASH_OUT_API_BASIC_PASSWORD,
+            },
+            "request": {
+                "headers": self._parse_json_object(CASH_OUT_API_HEADERS_JSON, "headers"),
+                "query_params": self._parse_json_object(
+                    CASH_OUT_API_QUERY_PARAMS_JSON,
+                    "query params",
+                ),
+                "body": self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body"),
+                "body_format": "json",
+            },
+            "field_map": {},
+            "pagination": {},
+            "retry": {},
+        }
+        super().__init__(source_profile=source_profile)
         self.field_map = self._parse_field_map(CASH_OUT_FIELD_MAP_JSON)
-        self.query_params = self._parse_json_object(
-            CASH_OUT_API_QUERY_PARAMS_JSON,
-            "query params",
-        )
 
     @classmethod
     def _parse_field_map(cls, raw_value):
@@ -574,19 +586,7 @@ class CashOutAPIClient(InternalAPIClient):
 
     @staticmethod
     def _normalize_records(records):
-        data_frame = pd.json_normalize(records, sep="_")
-        if data_frame.empty:
-            return data_frame
-
-        for column in data_frame.columns:
-            data_frame[column] = data_frame[column].apply(
-                lambda value: json.dumps(value, ensure_ascii=False)
-                if isinstance(value, (dict, list))
-                else value
-            )
-
-        data_frame.columns = [str(column).strip() for column in data_frame.columns]
-        return data_frame
+        return normalize_records(records)
 
     @staticmethod
     def _parse_due_date(raw_value):

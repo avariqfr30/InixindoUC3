@@ -1,5 +1,4 @@
 import copy
-import json
 import logging
 import os
 import re
@@ -13,6 +12,7 @@ from chromadb.utils import embedding_functions
 from sqlalchemy import create_engine
 
 from config import (
+    APP_SERVER,
     DATA_ACQUISITION_MODE,
     DATA_DIR,
     DATA_SOURCE_ACTIVE_STATE_PATH,
@@ -25,10 +25,13 @@ from config import (
     INTERNAL_API_DATASET_PATH,
     INTERNAL_API_ENDPOINT_URL,
     OLLAMA_HOST,
+    REPORT_MAX_CONCURRENT_JOBS,
+    WAITRESS_THREADS,
 )
 from data_contract import (
     build_internal_data_summary,
     get_internal_api_contract,
+    normalize_records,
     normalize_financial_dataframe,
 )
 from data_sources import (
@@ -75,24 +78,17 @@ class KnowledgeBase:
         self.last_sync_duration_seconds = None
         self.last_sync_error = None
         self.data_version = 0
+        self.runtime_profile = {
+            "app_server": APP_SERVER,
+            "report_max_concurrent_jobs": REPORT_MAX_CONCURRENT_JOBS,
+            "waitress_threads": WAITRESS_THREADS,
+        }
         self._reload_source_registry()
         self.refresh_data()
 
     @staticmethod
     def _normalize_records(records):
-        data_frame = pd.json_normalize(records, sep="_")
-        if data_frame.empty:
-            return data_frame
-
-        for column in data_frame.columns:
-            data_frame[column] = data_frame[column].apply(
-                lambda value: json.dumps(value, ensure_ascii=False)
-                if isinstance(value, (dict, list))
-                else value
-            )
-
-        data_frame.columns = [column.strip() for column in data_frame.columns]
-        return data_frame
+        return normalize_records(records)
 
     @staticmethod
     def _build_table_name(source_key):
@@ -363,7 +359,7 @@ class KnowledgeBase:
         if notes:
             focused_evidence = self.query(notes, max_results=10) or context["evidence"]
             context["evidence"] = FinancialAnalyzer.normalize_evidence_text(focused_evidence)
-        context.update(FinancialAnalyzer.apply_silent_assessment(context, notes))
+        context.update(FinancialAnalyzer.apply_silent_assessment(context, notes, runtime_profile=self.runtime_profile))
         return context
 
     def get_review_context(self):

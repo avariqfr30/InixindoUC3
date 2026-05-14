@@ -195,6 +195,17 @@ def _value_to_text(value):
     return str(value).strip()
 
 
+def normalize_records(records):
+    data_frame = pd.json_normalize(records or [], sep="_")
+    if data_frame.empty:
+        return data_frame
+
+    for column in data_frame.columns:
+        data_frame[column] = data_frame[column].apply(_value_to_text)
+    data_frame.columns = [str(column).strip() for column in data_frame.columns]
+    return data_frame
+
+
 def _naturalize_report_value(value):
     text = re.sub(r"\s+", " ", _value_to_text(value)).strip(" .:-")
     if not text:

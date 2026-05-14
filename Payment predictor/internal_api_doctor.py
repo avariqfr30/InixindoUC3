@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-import pandas as pd
+from data_contract import normalize_records
 
 
 def _check(name, status, message, details=None):
@@ -20,18 +20,7 @@ def _status_from_bool(value):
 
 
 def _normalize_records(records):
-    data_frame = pd.json_normalize(records, sep="_")
-    if data_frame.empty:
-        return data_frame
-
-    for column in data_frame.columns:
-        data_frame[column] = data_frame[column].apply(
-            lambda value: json.dumps(value, ensure_ascii=False)
-            if isinstance(value, (dict, list))
-            else value
-        )
-    data_frame.columns = [str(column).strip() for column in data_frame.columns]
-    return data_frame
+    return normalize_records(records)
 
 
 def _load_production_profile():

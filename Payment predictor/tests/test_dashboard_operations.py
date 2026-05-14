@@ -107,6 +107,45 @@ class DashboardOperationRouteTest(unittest.TestCase):
         self.assertIn("syncStatus", health_payload)
         self.assertIn("cashOutSource", health_payload["syncStatus"])
 
+    def test_route_endpoint_contract_keeps_public_names_and_urls(self):
+        expected_routes = {
+            "home": ("/", ("GET",)),
+            "data_settings": ("/settings", ("GET",)),
+            "get_config": ("/get-config", ("GET",)),
+            "generate_doc": ("/generate", ("POST",)),
+            "get_job_status": ("/jobs/<job_id>", ("GET",)),
+            "download_job": ("/jobs/<job_id>/download", ("GET",)),
+            "refresh_knowledge": ("/refresh-knowledge", ("POST",)),
+            "refresh_internal_api_dataset": ("/api/internal-api/refresh", ("POST",)),
+            "health": ("/health", ("GET",)),
+            "get_internal_data_contract": ("/api/internal-data/contract", ("GET",)),
+            "connect_internal_data_source": ("/api/internal-data/connect", ("POST",)),
+            "validate_data_source": ("/api/data-source/validate", ("POST",)),
+            "activate_data_source": ("/api/data-source/activate", ("POST",)),
+            "reload_data_source_profiles": ("/api/data-source/reload-profiles", ("POST",)),
+            "check_data_source_connectivity": ("/api/data-source/check-connectivity", ("POST",)),
+            "get_forecast_periods": ("/api/forecast/periods", ("GET",)),
+            "generate_forecast": ("/api/forecast", ("POST",)),
+            "generate_forecast_by_horizon": ("/api/forecast/by-horizon", ("POST",)),
+            "get_outstanding": ("/api/forecast/outstanding", ("GET",)),
+            "get_top_overdue_drilldown": ("/api/forecast/drilldown/top-overdue", ("POST",)),
+            "get_payment_class_trend_drilldown": ("/api/forecast/drilldown/payment-class-trend", ("GET",)),
+            "get_concentration_drilldown": ("/api/forecast/drilldown/concentration", ("POST",)),
+        }
+        route_map = {}
+        for rule in self.flask_app.url_map.iter_rules():
+            if rule.endpoint in expected_routes:
+                route_map.setdefault(rule.endpoint, set()).add((rule.rule, tuple(sorted(rule.methods & {"GET", "POST"}))))
+
+        for endpoint, expected_route in expected_routes.items():
+            self.assertIn(endpoint, route_map)
+            self.assertIn(expected_route, route_map[endpoint])
+
+        self.assertIn(
+            ("/api/internal-data/refresh", ("POST",)),
+            route_map["refresh_internal_api_dataset"],
+        )
+
     def test_data_source_validate_and_activate_demo(self):
         validate_response = self.client.post(
             "/api/data-source/validate",

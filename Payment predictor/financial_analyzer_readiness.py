@@ -27,8 +27,27 @@ class FinancialAnalyzerReadinessMixin:
         return sum(1 for keyword in keywords if keyword in lowered_text)
 
     @classmethod
-    def _build_hidden_dimensions(cls, base_profile, notes):
+    @staticmethod
+    def _default_runtime_profile():
+        return {
+            "app_server": APP_SERVER,
+            "report_max_concurrent_jobs": REPORT_MAX_CONCURRENT_JOBS,
+            "waitress_threads": WAITRESS_THREADS,
+        }
+
+    @classmethod
+    def _normalize_runtime_profile(cls, runtime_profile=None):
+        profile = {**cls._default_runtime_profile(), **(runtime_profile or {})}
+        return {
+            "app_server": str(profile.get("app_server") or "flask").strip().lower(),
+            "report_max_concurrent_jobs": int(profile.get("report_max_concurrent_jobs") or 0),
+            "waitress_threads": int(profile.get("waitress_threads") or 0),
+        }
+
+    @classmethod
+    def _build_hidden_dimensions(cls, base_profile, notes, runtime_profile=None):
         notes = (notes or "").strip()
+        runtime_profile = cls._normalize_runtime_profile(runtime_profile)
         missing_core_fields = len(base_profile.get("missing_core_fields", []))
         total_invoices = base_profile.get("total_invoices", 0)
         data_mode = base_profile.get("data_mode", "demo")
@@ -43,10 +62,10 @@ class FinancialAnalyzerReadinessMixin:
         if data_mode == "demo":
             data_model_score -= 1
 
-        infrastructure_score = 4 if APP_SERVER == "waitress" else 2
-        if REPORT_MAX_CONCURRENT_JOBS >= 4:
+        infrastructure_score = 4 if runtime_profile["app_server"] == "waitress" else 2
+        if runtime_profile["report_max_concurrent_jobs"] >= 4:
             infrastructure_score += 1
-        if APP_SERVER == "waitress" and WAITRESS_THREADS < 8:
+        if runtime_profile["app_server"] == "waitress" and runtime_profile["waitress_threads"] < 8:
             infrastructure_score -= 1
 
         people_score = 2
@@ -83,7 +102,8 @@ class FinancialAnalyzerReadinessMixin:
         return dimensions, note_profile
 
     @classmethod
-    def _build_readiness_outputs(cls, base_profile, hidden_dimensions, note_profile):
+    def _build_readiness_outputs(cls, base_profile, hidden_dimensions, note_profile, runtime_profile=None):
+        runtime_profile = cls._normalize_runtime_profile(runtime_profile)
         data_mode = base_profile.get("data_mode", "demo")
         total_invoices = base_profile.get("total_invoices", 0)
         data_source_label = "dataset demo lokal" if data_mode == "demo" else "API internal perusahaan"
@@ -114,7 +134,7 @@ class FinancialAnalyzerReadinessMixin:
         readiness_signals = [
             f"- Business value clarity: {hidden_dimensions['business_value_clarity']}/5. Use case cashflow jelas dan langsung terkait percepatan realisasi invoice, pengendalian cash out, pengurangan risiko keterlambatan, dan prioritas follow-up.",
             f"- Data/model readiness: {hidden_dimensions['data_model_readiness']}/5. Sumber data saat ini adalah {data_source_label} dengan {total_invoices} invoice dan {core_field_summary}.",
-            f"- Infrastructure/deployment readiness: {hidden_dimensions['infrastructure_readiness']}/5. Runtime aktif adalah {APP_SERVER} dengan queue {REPORT_MAX_CONCURRENT_JOBS} job dan thread Waitress {WAITRESS_THREADS}.",
+            f"- Infrastructure/deployment readiness: {hidden_dimensions['infrastructure_readiness']}/5. Runtime aktif adalah {runtime_profile['app_server']} dengan queue {runtime_profile['report_max_concurrent_jobs']} job dan thread Waitress {runtime_profile['waitress_threads']}.",
             f"- People/ownership readiness: {hidden_dimensions['people_ownership_readiness']}/5. Sinyal owner atau sponsor eksplisit dari catatan pengguna = {note_profile['owner_hits']}.",
             f"- Governance/risk control: {hidden_dimensions['governance_control_readiness']}/5. Internal data tetap menjadi sumber fakta utama, OSINT hanya pendukung, dan fallback menjaga konsistensi struktur laporan.",
             f"- Organizational adoption readiness: {hidden_dimensions['organizational_adoption_readiness']}/5. Sinyal kesiapan adopsi atau pilot dari catatan pengguna = {note_profile['adoption_hits']}.",
@@ -123,7 +143,7 @@ class FinancialAnalyzerReadinessMixin:
 
         confidence_lines = [
             f"- Tingkat keyakinan data saat ini {data_confidence} karena laporan memakai {data_source_label} dengan {core_field_summary}.",
-            f"- Kesiapan operasional aplikasi berada pada tingkat {deployment_confidence}; jalur deployment saat ini {APP_SERVER} dengan dukungan antrean {REPORT_MAX_CONCURRENT_JOBS} pekerjaan paralel.",
+            f"- Kesiapan operasional aplikasi berada pada tingkat {deployment_confidence}; jalur deployment saat ini {runtime_profile['app_server']} dengan dukungan antrean {runtime_profile['report_max_concurrent_jobs']} pekerjaan paralel.",
             f"- Kepastian penanggung jawab lintas fungsi berada pada tingkat {ownership_confidence}; sinyal owner eksplisit yang tertangkap dari catatan pengguna = {note_profile['owner_hits']}.",
             data_mode_line,
         ]
@@ -150,7 +170,7 @@ class FinancialAnalyzerReadinessMixin:
             control_lines.append("- Risiko salah tafsir naik bila data tambahan dan kontrol review manual tidak disiapkan sebelum sesi tindak lanjut.")
 
         implementation_lines = [
-            f"- Untuk penggunaan operasional yang lebih kuat, pertahankan minimal {REPORT_MAX_CONCURRENT_JOBS} slot antrean dan gunakan runtime {APP_SERVER if APP_SERVER == 'waitress' else 'Waitress pada uji bersama'} untuk akses internal bersama.",
+            f"- Untuk penggunaan operasional yang lebih kuat, pertahankan minimal {runtime_profile['report_max_concurrent_jobs']} slot antrean dan gunakan runtime {runtime_profile['app_server'] if runtime_profile['app_server'] == 'waitress' else 'Waitress pada uji bersama'} untuk akses internal bersama.",
             "- Pastikan ritme refresh data, sumber invoice prioritas, dan jalur eskalasi ke account owner diputuskan sebelum laporan dipakai sebagai dasar action plan mingguan.",
         ]
         if data_mode == "demo":
@@ -213,10 +233,11 @@ class FinancialAnalyzerReadinessMixin:
         return f"{chart_marker}\n{flow_marker}"
 
     @classmethod
-    def apply_silent_assessment(cls, context, notes=""):
+    def apply_silent_assessment(cls, context, notes="", runtime_profile=None):
         base_profile = context.get("base_profile", {})
-        hidden_dimensions, note_profile = cls._build_hidden_dimensions(base_profile, notes)
-        visible_outputs = cls._build_readiness_outputs(base_profile, hidden_dimensions, note_profile)
+        runtime_profile = cls._normalize_runtime_profile(runtime_profile)
+        hidden_dimensions, note_profile = cls._build_hidden_dimensions(base_profile, notes, runtime_profile)
+        visible_outputs = cls._build_readiness_outputs(base_profile, hidden_dimensions, note_profile, runtime_profile)
         rejected_claims = [
             str(item).strip()
             for item in context.get("agent_rejected_claims", [])

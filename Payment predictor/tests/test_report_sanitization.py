@@ -10,6 +10,39 @@ sys.path.insert(0, str(WORKSPACE))
 
 
 class ReportSanitizationTest(unittest.TestCase):
+    def test_report_structure_contract_is_shared_with_config_sequence(self):
+        from config import REPORT_SECTION_SEQUENCE
+        from report_structure import REPORT_STRUCTURE
+
+        self.assertEqual(REPORT_STRUCTURE.section_sequence, tuple(REPORT_SECTION_SEQUENCE))
+        self.assertEqual(
+            REPORT_STRUCTURE.section_passes[0]["sections"],
+            ("Ringkasan Eksekutif",),
+        )
+        self.assertIn("### Dampak Bisnis", REPORT_STRUCTURE.required_subheadings)
+        self.assertIn("priority_30_day", REPORT_STRUCTURE.required_tables)
+
+    def test_report_generator_private_wrappers_delegate_to_focused_helpers(self):
+        from core import ReportGenerator
+        from report_finalization import ReportFinalizer
+        from report_prompting import ReportPromptBuilder
+        from report_quality import ReportQualityScorer
+
+        generator = ReportGenerator(None)
+
+        self.assertIsInstance(generator.prompt_builder, ReportPromptBuilder)
+        self.assertIsInstance(generator.quality_scorer, ReportQualityScorer)
+        self.assertIsInstance(generator.finalizer, ReportFinalizer)
+
+        section_scope, section_headings = generator._build_section_scope(["Ringkasan Eksekutif"])
+
+        self.assertIn("- Ringkasan Eksekutif", section_scope)
+        self.assertIn("# Ringkasan Eksekutif", section_headings)
+        self.assertIs(
+            generator.prompt_builder.structure,
+            generator.quality_scorer.structure,
+        )
+
     def test_cashflow_intelligence_desk_adds_guarded_evidence_to_context(self):
         from core import FinancialAnalyzer
 
@@ -76,6 +109,37 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertIn("CASHFLOW INTELLIGENCE DESK EVIDENCE", prompt)
         self.assertIn("Invoice Evidence Analyst", prompt)
         self.assertIn("Jangan klaim penyebab eksternal", prompt)
+
+    def test_readiness_assessment_accepts_runtime_profile_without_config_import_coupling(self):
+        from core import FinancialAnalyzer
+
+        context = {
+            "base_profile": {
+                "data_mode": "production",
+                "total_invoices": 35,
+                "high_risk_invoices": 4,
+                "expected_gap_base": 125_000_000,
+                "core_fields_available": 6,
+                "core_fields_expected": 6,
+                "missing_core_fields": [],
+                "top_risk_partners": ["BUMN A"],
+            },
+            "agent_rejected_claims": ["Jangan klaim penyebab eksternal tanpa OSINT pembanding."],
+        }
+
+        result = FinancialAnalyzer.apply_silent_assessment(
+            context,
+            runtime_profile={
+                "app_server": "waitress",
+                "report_max_concurrent_jobs": 6,
+                "waitress_threads": 10,
+            },
+        )
+
+        self.assertIn("Infrastructure/deployment readiness: 5/5", result["readiness_signals"])
+        self.assertIn("queue 6 job", result["readiness_signals"])
+        self.assertIn("thread Waitress 10", result["readiness_signals"])
+        self.assertIn("Guardrail kualitas laporan", result["controls"])
 
     def test_internal_note_trimming_removes_ellipsis_artifacts(self):
         from core import FinancialAnalyzer

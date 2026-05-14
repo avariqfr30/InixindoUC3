@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -16,13 +17,94 @@ sys.path.insert(0, str(WORKSPACE))
 from data_contract import (
     extract_records_from_payload,
     get_internal_api_contract,
+    normalize_records,
     normalize_financial_dataframe,
     parse_internal_api_field_map,
 )
-from internal_api_doctor import run_production_source_doctor
+from internal_api_doctor import main as internal_api_doctor_main, run_production_source_doctor
 
 
 class InternalDataContractUnitTest(unittest.TestCase):
+    def test_internal_api_doctor_json_cli_serializes_result(self):
+        doctor_result = {
+            "ok": True,
+            "checks": [],
+            "activation": {"activationReady": True, "handoverReady": True},
+            "records": {"recordCount": 1},
+            "nextSteps": [],
+        }
+
+        with mock.patch(
+            "internal_api_doctor.run_production_source_doctor",
+            return_value=doctor_result,
+        ), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = internal_api_doctor_main(["--json", "--preview-rows", "1"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), doctor_result)
+
+    def test_normalize_records_flattens_nested_values_consistently(self):
+        records = [
+            {
+                " period ": "Q1 2026",
+                "partner": {"type": "BUMN", "region": "DIY"},
+                "tags": ["BAST", "approval"],
+            }
+        ]
+
+        data_frame = normalize_records(records)
+
+        self.assertEqual(set(data_frame.columns), {"period", "partner_type", "partner_region", "tags"})
+        self.assertEqual(data_frame.loc[0, "tags"], '["BAST", "approval"]')
+
+    def test_preview_source_profile_returns_normalized_contract_summary(self):
+        from source_preview_service import preview_source_profile
+
+        profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "request": {"body": {"dataset": "FinanceInvoice"}, "body_format": "form"},
+            "field_map": {
+                "period": "reporting_period",
+                "partner_type": "segmentasi_customer",
+                "service": "produk_utama",
+                "payment_class": "bucket_pembayaran",
+                "invoice_value": "nominal_tagihan",
+                "delay_note": "hambatan_penagihan",
+            },
+        }
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.json.return_value = {
+            "success": True,
+            "data": {
+                "dataset_result": [
+                    {
+                        "reporting_period": "Januari 2026",
+                        "segmentasi_customer": "Instansi Pemerintah",
+                        "produk_utama": "Audit SPBE",
+                        "bucket_pembayaran": "Kelas B",
+                        "nominal_tagihan": 275000000,
+                        "hambatan_penagihan": "Dokumen termin menunggu approval internal.",
+                    }
+                ]
+            },
+        }
+
+        with mock.patch("requests.request", return_value=fake_response):
+            preview = preview_source_profile(profile, preview_rows=5)
+
+        self.assertTrue(preview["contractSummary"]["isReady"])
+        self.assertEqual(preview["recordCount"], 1)
+        self.assertEqual(preview["sampleRecords"][0]["reporting_period"], "Januari 2026")
+        self.assertEqual(preview["extractionSummary"]["resolvedRecordsPath"], "data.dataset_result")
+
     def test_normalize_dataframe_with_explicit_field_map(self):
         raw_df = pd.DataFrame(
             [
@@ -307,6 +389,41 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(kwargs["files"]["dataset_cache"], (None, "enabled"))
         self.assertNotIn("data", kwargs)
         self.assertNotIn("json", kwargs)
+
+    def test_cash_out_client_fetch_records_uses_parent_transport_contract(self):
+        for module_name in ("core", "config", "finance_api_clients"):
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+        import finance_api_clients
+
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "success": True,
+            "data": [
+                {
+                    "amount": "Rp 45.000.000",
+                    "due_date": "2026-04-20",
+                    "category": "Vendor",
+                    "status": "open",
+                }
+            ],
+        }
+
+        with mock.patch.object(finance_api_clients, "CASH_OUT_API_ENDPOINT_URL", "https://example.com/cash-out"), mock.patch.object(
+            finance_api_clients, "CASH_OUT_API_METHOD", "POST"
+        ), mock.patch.object(finance_api_clients, "CASH_OUT_API_BODY_JSON", json.dumps({"dataset": "CashOut"})), mock.patch(
+            "requests.request", return_value=fake_response
+        ) as request_mock:
+            client = finance_api_clients.CashOutAPIClient()
+            records, summary = client.fetch_records()
+
+        self.assertEqual(records[0]["amount"], "Rp 45.000.000")
+        self.assertEqual(summary["requestMethod"], "POST")
+        _, kwargs = request_mock.call_args
+        self.assertEqual(kwargs["json"], {"dataset": "CashOut"})
 
     def test_production_source_doctor_reports_activation_readiness(self):
         profile = {

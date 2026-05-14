@@ -1,6 +1,8 @@
 import os
 from datetime import timedelta
 
+from report_structure import REPORT_STRUCTURE
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
@@ -222,14 +224,7 @@ VISUAL MARKERS:
 {visual_prompt}
 """
 
-REPORT_SECTION_SEQUENCE = [
-    "Ringkasan Eksekutif",
-    "Analisis Deskriptif Cashflow",
-    "Analisis Diagnostik Cashflow",
-    "Analisis Prediktif Cashflow",
-    "Rekomendasi Preskriptif",
-    "Prioritas Tindakan 30 Hari",
-]
+REPORT_SECTION_SEQUENCE = list(REPORT_STRUCTURE.section_sequence)
 
 PERSONAS = {
     "default": (
