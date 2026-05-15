@@ -208,7 +208,7 @@ class ReportSanitizationTest(unittest.TestCase):
             "horizon_snapshot": {
                 "forecasts": {
                     "short_term": {
-                        "time_horizon": {"label": "Short Term (0-30 hari)", "focus": "Likuiditas"},
+                        "time_horizon": {"label": "Jangka Pendek (0-30 hari)", "focus": "Likuiditas"},
                         "forecast": {
                             "cash_in": {"total_predicted_cash_in": 1_200_000_000},
                             "cash_out": {"total_cash_out": 300_000_000},
@@ -246,7 +246,7 @@ class ReportSanitizationTest(unittest.TestCase):
                     "short_term": {
                         "dashboard_snapshot": {
                             "horizon_key": "short_term",
-                            "horizon_label": "Short Term (0-30 hari)",
+                            "horizon_label": "Jangka Pendek (0-30 hari)",
                             "horizon_focus": "Likuiditas",
                             "status": "AMAN",
                             "current_cash": 500000000,

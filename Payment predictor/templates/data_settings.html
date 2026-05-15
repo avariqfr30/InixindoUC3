@@ -185,7 +185,7 @@
         <section id="settings-status" class="status-panel">Memuat status konfigurasi...</section>
 
         <div class="action-row">
-            <button type="button" id="btn-refresh-internal-api" class="secondary">Refresh Dataset Sekarang</button>
+            <button type="button" id="btn-refresh-internal-api" class="secondary">Muat Ulang Data Sekarang</button>
             <button type="button" id="btn-save" disabled>Internal API Sudah Aktif</button>
         </div>
         <div id="settings-message" class="message" role="status" aria-live="polite"></div>
@@ -242,7 +242,7 @@
             ui.btnSave.disabled = true;
             ui.btnSave.textContent = apiConnected || apiActive ? 'Internal API Sudah Aktif' : 'Internal API Belum Aktif';
             ui.btnRefreshInternalApi.disabled = !(apiConnected || apiActive) || refreshing;
-            ui.btnRefreshInternalApi.textContent = refreshing ? 'Refresh Berjalan...' : 'Refresh Dataset Sekarang';
+            ui.btnRefreshInternalApi.textContent = refreshing ? 'Pemuatan Ulang Berjalan...' : 'Muat Ulang Data Sekarang';
         }
 
         function renderStatus(config) {

@@ -47,7 +47,7 @@ class ReportDocumentAssembler:
         if not valid_screenshots:
             return
 
-        heading = document.add_heading("Dashboard Cashflow Snapshot", level=1)
+        heading = document.add_heading("Cuplikan Dasbor Arus Kas", level=1)
         for run in heading.runs:
             run.font.color.rgb = RGBColor(*theme_color)
 
@@ -74,12 +74,12 @@ class ReportDocumentAssembler:
 
                 try:
                     caption = document.add_paragraph(
-                        f"Dashboard snapshot - {horizon_label}",
+                        f"Cuplikan dasbor - {horizon_label}",
                         style="Caption",
                     )
                 except KeyError:
                     caption = document.add_paragraph(
-                        f"Dashboard snapshot - {horizon_label}"
+                        f"Cuplikan dasbor - {horizon_label}"
                     )
                 caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in caption.runs:

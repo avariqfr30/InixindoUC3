@@ -598,7 +598,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
         settings_template = (WORKSPACE / "templates" / "data_settings.html").read_text(encoding="utf-8")
         self.assertIn("Internal API / APIDog", settings_template)
         self.assertIn("Internal API Sudah Aktif", settings_template)
-        self.assertIn("Refresh Dataset Sekarang", settings_template)
+        self.assertIn("Muat Ulang Data Sekarang", settings_template)
         self.assertIn("btn-refresh-internal-api", settings_template)
         self.assertIn("/api/internal-api/refresh", settings_template)
         self.assertIn("setInternalApiConnectionState", settings_template)
@@ -610,7 +610,7 @@ class InternalDataContractRouteTest(unittest.TestCase):
 
         self.assertIn("Konfigurasi API dikelola dari environment VPS", settings_template)
         self.assertIn("Internal API Sudah Aktif", settings_template)
-        self.assertIn("Refresh Dataset Sekarang", settings_template)
+        self.assertIn("Muat Ulang Data Sekarang", settings_template)
         self.assertNotIn("endpoint-url", settings_template)
         self.assertNotIn("auth-mode", settings_template)
         self.assertNotIn("body-format", settings_template)

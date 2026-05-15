@@ -186,12 +186,12 @@
         <div id="toast-notification" class="toast-notification hidden" role="status" aria-live="polite"></div>
         <div id="loader" style="text-align:center; padding: 40px;">
             <div style="border:4px solid #e2e8f0; border-top:4px solid #CC0000; border-radius:50%; width:40px; height:40px; animation: spin 1s linear infinite; margin: 0 auto 20px auto;"></div>
-            <p id="loader-text">Memuat data finansial dan konteks analisis cashflow...</p>
+            <p id="loader-text">Memuat data finansial dan konteks analisis arus kas...</p>
         </div>
 
         <div id="step-config" class="hidden">
-            <h2><span style="color: #CC0000;">Inixindo</span> Cashflow Intelligence</h2>
-            <p class="sub">Sistem AI akan membaca <strong>histori arus kas masuk, tekanan arus kas keluar, dan karakter penagihan</strong> untuk membuat analisis yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, caveat, dan prioritas tindak lanjut.</p>
+            <h2><span style="color: #CC0000;">Inixindo</span> Intelijen Arus Kas</h2>
+            <p class="sub">Sistem AI akan membaca <strong>histori arus kas masuk, tekanan arus kas keluar, dan karakter penagihan</strong> untuk membuat analisis yang siap dipakai dalam diskusi manajemen, lengkap dengan pembacaan risiko, catatan batasan, dan prioritas tindak lanjut.</p>
             <div id="config-operational-status"></div>
 
             <div class="control-grid">
@@ -216,37 +216,37 @@
             <div class="rich-editor-shell">
                 <div id="notes-toolbar">
                     <span class="ql-formats">
-                        <select class="ql-header" title="Heading">
+                        <select class="ql-header" title="Judul">
                             <option selected></option>
-                            <option value="3">Section</option>
+                            <option value="3">Bagian</option>
                         </select>
                     </span>
                     <span class="ql-formats">
-                        <button class="ql-bold" title="Bold"></button>
-                        <button class="ql-italic" title="Italic"></button>
-                        <button class="ql-underline" title="Underline"></button>
+                        <button class="ql-bold" title="Tebal"></button>
+                        <button class="ql-italic" title="Miring"></button>
+                        <button class="ql-underline" title="Garis Bawah"></button>
                     </span>
                     <span class="ql-formats">
-                        <button class="ql-list" value="ordered" title="Numbered List"></button>
-                        <button class="ql-list" value="bullet" title="Bullet List"></button>
+                        <button class="ql-list" value="ordered" title="Daftar Bernomor"></button>
+                        <button class="ql-list" value="bullet" title="Daftar Butir"></button>
                     </span>
                     <span class="ql-formats">
-                        <button class="ql-clean" title="Clear Formatting"></button>
+                        <button class="ql-clean" title="Bersihkan Format"></button>
                     </span>
                 </div>
                 <div id="input-notes-editor"></div>
             </div>
-            <p class="editor-hint">Gunakan toolbar editor untuk menyusun catatan tambahan dengan bullet point, numbering, heading sederhana, dan penekanan teks.</p>
+            <p class="editor-hint">Gunakan bilah alat editor untuk menyusun catatan tambahan dengan daftar butir, penomoran, judul sederhana, dan penekanan teks.</p>
             <textarea id="input-notes" class="hidden-input" aria-hidden="true" tabindex="-1"></textarea>
             
             <div id="suggestion-container" class="chip-container"></div>
             
             <button type="button" id="btn-review">Tinjau Parameter Finansial</button>
-            <button type="button" id="btn-refresh" class="secondary" style="font-size:0.9rem; padding:10px;">Refresh Data</button>
+            <button type="button" id="btn-refresh" class="secondary" style="font-size:0.9rem; padding:10px;">Muat Ulang Data</button>
         </div>
 
         <div id="step-review" class="hidden">
-            <h2>Konfirmasi Laporan Cashflow</h2>
+            <h2>Konfirmasi Laporan Arus Kas</h2>
             <div id="review-operational-status"></div>
             <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
@@ -256,7 +256,7 @@
                 </aside>
                 <div class="review-action-buttons">
                     <button type="button" id="btn-back">Kembali</button>
-                    <button type="button" id="btn-generate">Generate Report <span id="spinner" class="spinner"></span></button>
+                    <button type="button" id="btn-generate">Buat Laporan <span id="spinner" class="spinner"></span></button>
                 </div>
             </div>
         </div>

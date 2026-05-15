@@ -81,7 +81,7 @@ class StyleEngine:
             )
             footer_paragraph.text = ""
             footer_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            footer_paragraph.add_run("STRICTLY CONFIDENTIAL | Page ")
+            footer_paragraph.add_run("SANGAT RAHASIA | Halaman ")
             cls._insert_field(footer_paragraph, "PAGE")
             footer_paragraph.add_run(" of ")
             cls._insert_field(footer_paragraph, "NUMPAGES")
@@ -310,7 +310,7 @@ class ChartEngine:
             header_axis.text(
                 0.0,
                 0.98,
-                "Cashflow Health Dashboard",
+                "Dasbor Kesehatan Arus Kas",
                 fontsize=16,
                 fontweight="bold",
                 color="#203152",
@@ -804,7 +804,7 @@ class DocumentBuilder:
             except Exception:
                 caption_suffix = "Horizon aktif"
             width = Inches(6.6)
-            caption = f"Dashboard cashflow snapshot - {caption_suffix}"
+            caption = f"Cuplikan dasbor arus kas - {caption_suffix}"
         else:
             image = ChartEngine.create_flowchart(marker_payload, theme_color)
             width = Inches(6.3)
@@ -855,15 +855,15 @@ class DocumentBuilder:
         StyleEngine.apply_document_styles(doc, theme_color)
 
         properties = doc.core_properties
-        properties.title = "Inixindo Cashflow Intelligence Report"
-        properties.subject = "Cashflow Intelligence Report"
+        properties.title = "Laporan Intelijen Arus Kas Inixindo"
+        properties.subject = "Laporan Intelijen Arus Kas"
         properties.author = WRITER_FIRM_NAME
         properties.category = "Finance"
 
         for _ in range(4):
             doc.add_paragraph()
 
-        confidentiality = doc.add_paragraph("STRICTLY CONFIDENTIAL")
+        confidentiality = doc.add_paragraph("SANGAT RAHASIA")
         confidentiality.alignment = WD_ALIGN_PARAGRAPH.CENTER
         confidentiality.runs[0].font.name = "Calibri"
         confidentiality.runs[0].font.size = Pt(10)
@@ -872,7 +872,7 @@ class DocumentBuilder:
 
         doc.add_paragraph()
 
-        title = doc.add_paragraph("CASHFLOW INTELLIGENCE REPORT")
+        title = doc.add_paragraph("LAPORAN INTELIJEN ARUS KAS")
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title.runs[0].font.name = "Calibri"
         title.runs[0].font.size = Pt(22)

@@ -186,9 +186,9 @@ class CashflowForecaster:
     
     # Time horizons per Slide 6
     TIME_HORIZONS = {
-        'short_term': {'days': 30, 'label': 'Short Term (0-30 hari)', 'focus': 'Likuiditas - Apakah ada cash deficit?'},
-        'mid_term': {'days': 90, 'label': 'Mid Term (1-3 bulan)', 'focus': 'Stabilitas operasional'},
-        'long_term': {'days': 365, 'label': 'Long Term (3-12 bulan)', 'focus': 'Growth planning'},
+        'short_term': {'days': 30, 'label': 'Jangka Pendek (0-30 hari)', 'focus': 'Likuiditas - Apakah ada defisit kas?'},
+        'mid_term': {'days': 90, 'label': 'Jangka Menengah (1-3 bulan)', 'focus': 'Stabilitas operasional'},
+        'long_term': {'days': 365, 'label': 'Jangka Panjang (3-12 bulan)', 'focus': 'Rencana pertumbuhan'},
     }
     
     def __init__(self, monthly_operating_cost_idr: int = 200_000_000):

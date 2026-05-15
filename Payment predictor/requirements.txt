@@ -2,6 +2,7 @@ Flask
 flask-cors
 pandas
 chromadb
+diskcache
 ollama
 matplotlib
 python-docx
