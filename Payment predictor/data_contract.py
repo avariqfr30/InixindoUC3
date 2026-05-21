@@ -206,6 +206,122 @@ def normalize_records(records):
     return data_frame
 
 
+def _normalize_match_key(value):
+    text = _value_to_text(value).lower()
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _reference_account_payment_class(record):
+    category_name = _value_to_text(record.get("company_category_name"))
+    category_description = _value_to_text(record.get("company_category_desc"))
+    combined = f"{category_name} {category_description}".strip()
+    match = re.search(r"\b(?:tipe|kelas)\s*([a-e])\b", combined, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return f"Kelas {match.group(1).upper()}"
+
+
+def _reference_account_delay_note(record):
+    return _naturalize_report_value(record.get("company_category_desc"))
+
+
+def _build_reference_account_index(account_records):
+    by_company_id = {}
+    by_company_name = {}
+    usable_records = 0
+    for account_record in account_records or []:
+        if not isinstance(account_record, dict):
+            continue
+        payment_class = _reference_account_payment_class(account_record)
+        if not payment_class:
+            continue
+        enriched_account = {
+            "payment_class": payment_class,
+            "delay_note": _reference_account_delay_note(account_record),
+            "company_category_name": _value_to_text(account_record.get("company_category_name")),
+            "company_category_desc": _value_to_text(account_record.get("company_category_desc")),
+        }
+        company_id_key = _normalize_match_key(account_record.get("company_id"))
+        company_name_key = _normalize_match_key(account_record.get("company_name"))
+        if company_id_key:
+            by_company_id[company_id_key] = enriched_account
+        if company_name_key:
+            by_company_name[company_name_key] = enriched_account
+        usable_records += 1
+    return {
+        "by_company_id": by_company_id,
+        "by_company_name": by_company_name,
+        "usable_records": usable_records,
+    }
+
+
+def _lookup_reference_account(invoice_record, reference_index):
+    company_id_candidates = (
+        "company_id",
+        "account_id",
+        "customer_id",
+        "client_id",
+    )
+    company_name_candidates = (
+        "company_name",
+        "account_name",
+        "customer_name",
+        "client_name",
+        "nama_customer",
+        "nama_pelanggan",
+        "partner_name",
+    )
+    for candidate_key in company_id_candidates:
+        match_key = _normalize_match_key(invoice_record.get(candidate_key))
+        if match_key and match_key in reference_index["by_company_id"]:
+            return reference_index["by_company_id"][match_key]
+    for candidate_key in company_name_candidates:
+        match_key = _normalize_match_key(invoice_record.get(candidate_key))
+        if match_key and match_key in reference_index["by_company_name"]:
+            return reference_index["by_company_name"][match_key]
+    return None
+
+
+def enrich_records_with_account_reference(invoice_records, account_records):
+    reference_index = _build_reference_account_index(account_records)
+    enriched_records = []
+    matched_records = 0
+    payment_class_filled = 0
+    delay_note_filled = 0
+    for invoice_record in invoice_records or []:
+        if not isinstance(invoice_record, dict):
+            continue
+        enriched_record = dict(invoice_record)
+        reference_account = _lookup_reference_account(enriched_record, reference_index)
+        if reference_account:
+            matched_records += 1
+            if not _value_to_text(enriched_record.get("payment_class")):
+                enriched_record["payment_class"] = reference_account["payment_class"]
+                payment_class_filled += 1
+            if reference_account["delay_note"] and not _value_to_text(enriched_record.get("delay_note")):
+                enriched_record["delay_note"] = reference_account["delay_note"]
+                delay_note_filled += 1
+            enriched_record.setdefault(
+                "reference_account_payment_class",
+                reference_account["payment_class"],
+            )
+            if reference_account["company_category_name"]:
+                enriched_record.setdefault(
+                    "reference_account_category",
+                    reference_account["company_category_name"],
+                )
+        enriched_records.append(enriched_record)
+
+    return enriched_records, {
+        "referenceDataset": "ReferenceAccount",
+        "referenceRecordCount": len(account_records or []),
+        "usableReferenceRecords": reference_index["usable_records"],
+        "matchedRecords": matched_records,
+        "paymentClassFilled": payment_class_filled,
+        "delayNoteFilled": delay_note_filled,
+    }
+
+
 def _naturalize_report_value(value):
     text = re.sub(r"\s+", " ", _value_to_text(value)).strip(" .:-")
     if not text:

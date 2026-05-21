@@ -1,4 +1,4 @@
-from flask import current_app, jsonify, render_template, send_file, session
+from flask import current_app, jsonify, render_template, request, send_file, session
 
 from app_services import build_sync_snapshot, get_auth_security_snapshot
 from report_jobs import QueueCapacityError
@@ -46,8 +46,6 @@ def register_report_routes(app):
 
     @app.route("/generate", methods=["POST"])
     def generate_doc():
-        from flask import request
-
         payload = request.get_json(silent=True) or {}
         notes = payload.get("notes", "")
         analysis_context = (payload.get("analysis_context") or "").strip()
@@ -67,6 +65,13 @@ def register_report_routes(app):
                 429,
             )
         return jsonify({"jobId": job_id}), 202
+
+    @app.route("/api/report-prefetch", methods=["POST"])
+    def prefetch_report_context():
+        payload = request.get_json(silent=True) or {}
+        notes = payload.get("notes", "")
+        active_knowledge_base = current_app.config["knowledge_base"]
+        return jsonify(active_knowledge_base.prefetch_report_context(notes)), 202
 
     @app.route("/jobs/<job_id>")
     def get_job_status(job_id):

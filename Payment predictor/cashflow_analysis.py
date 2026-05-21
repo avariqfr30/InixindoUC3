@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ from config import (
 )
 from data_contract import (
     build_internal_data_summary,
+    enrich_records_with_account_reference,
     get_internal_api_contract,
     normalize_records,
     normalize_financial_dataframe,
@@ -69,6 +71,7 @@ class KnowledgeBase:
         )
         self.df = None
         self.report_context_cache = None
+        self.focused_report_context_cache = {}
         self.data_contract_summary = build_internal_data_summary(None)
         self.cache_lock = threading.Lock()
         self.refresh_lock = threading.Lock()
@@ -152,6 +155,15 @@ class KnowledgeBase:
             raise RuntimeError("Internal data source is not configured.")
 
         records, extraction_summary = client.fetch_records()
+        reference_enrichment_summary = None
+        try:
+            account_records, _ = client.fetch_reference_account_records()
+            records, reference_enrichment_summary = enrich_records_with_account_reference(
+                records,
+                account_records,
+            )
+        except Exception as exc:
+            logger.info("ReferenceAccount enrichment skipped: %s", exc)
 
         raw_data_frame = self._normalize_records(records)
         if raw_data_frame.empty:
@@ -166,6 +178,8 @@ class KnowledgeBase:
             explicit_field_map=client.field_map,
             extraction_summary=extraction_summary,
         )
+        if reference_enrichment_summary:
+            data_summary["referenceAccountEnrichment"] = reference_enrichment_summary
 
         if data_summary["missingRequiredFields"]:
             logger.warning(
@@ -247,6 +261,7 @@ class KnowledgeBase:
             self.df.to_sql(self.table_name, self.engine, index=False, if_exists="replace")
             with self.cache_lock:
                 self.report_context_cache = None
+                self.focused_report_context_cache = {}
             self.sync_status = "ready" if rebuilt else "degraded"
             self.last_sync_at = completed_at
             self.last_success_at = completed_at
@@ -362,10 +377,33 @@ class KnowledgeBase:
         context = copy.deepcopy(self.report_context_cache)
         notes = (notes or "").strip()
         if notes:
+            focused_cache_key = self._focused_report_context_cache_key(notes)
+            with self.cache_lock:
+                cached_context = self.focused_report_context_cache.get(focused_cache_key)
+            if cached_context is not None:
+                return copy.deepcopy(cached_context)
             focused_evidence = self.query(notes, max_results=10) or context["evidence"]
             context["evidence"] = FinancialAnalyzer.normalize_evidence_text(focused_evidence)
         context.update(FinancialAnalyzer.apply_silent_assessment(context, notes, runtime_profile=self.runtime_profile))
+        if notes:
+            with self.cache_lock:
+                self.focused_report_context_cache[focused_cache_key] = copy.deepcopy(context)
         return context
+
+    def _focused_report_context_cache_key(self, notes):
+        digest = hashlib.sha256(str(notes or "").strip().encode("utf-8")).hexdigest()
+        return (self.data_version, self.active_source_key, digest)
+
+    def prefetch_report_context(self, notes=""):
+        context = self.get_report_context(notes)
+        return {
+            "status": "ready",
+            "dataVersion": self.data_version,
+            "activeSourceKey": self.active_source_key,
+            "focusedNotes": bool(str(notes or "").strip()),
+            "evidenceLength": len(str(context.get("evidence") or "")),
+            "reviewContextReady": bool(context.get("review_context")),
+        }
 
     def get_review_context(self):
         report_context = self.get_report_context("")

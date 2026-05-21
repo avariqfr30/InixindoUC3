@@ -432,6 +432,22 @@ class InternalAPIClient:
         extraction_summary["authMode"] = "basic" if auth else ("bearer" if self.auth_token else "none")
         return all_records, extraction_summary
 
+    def fetch_reference_account_records(self, preview_limit=0):
+        reference_profile = copy.deepcopy(self.source_profile)
+        request_config = reference_profile.setdefault("request", {})
+        body = request_config.get("body")
+        if isinstance(body, dict):
+            reference_body = dict(body)
+            reference_body["dataset"] = "ReferenceAccount"
+        else:
+            reference_body = {"dataset": "ReferenceAccount"}
+        request_config["body"] = reference_body
+
+        reference_client = self.__class__(source_profile=reference_profile)
+        records, extraction_summary = reference_client.fetch_records(preview_limit=preview_limit)
+        extraction_summary["referenceDataset"] = "ReferenceAccount"
+        return records, extraction_summary
+
 class CashOutAPIClient(InternalAPIClient):
     FIELD_ALIASES = {
         "amount": (

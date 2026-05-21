@@ -15,6 +15,7 @@ WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 sys.path.insert(0, str(WORKSPACE))
 
 from data_contract import (
+    enrich_records_with_account_reference,
     extract_records_from_payload,
     get_internal_api_contract,
     normalize_records,
@@ -56,6 +57,46 @@ class InternalDataContractUnitTest(unittest.TestCase):
 
         self.assertEqual(set(data_frame.columns), {"period", "partner_type", "partner_region", "tags"})
         self.assertEqual(data_frame.loc[0, "tags"], '["BAST", "approval"]')
+
+    def test_reference_account_enrichment_fills_payment_class_for_matching_company(self):
+        invoice_records = [
+            {
+                "reporting_period": "Mei 2026",
+                "company_id": "8592",
+                "company_name": "Astra Credit Companies",
+                "produk_utama": "Pelatihan AI",
+                "nominal_tagihan": "Rp 150.000.000",
+            }
+        ]
+        account_records = [
+            {
+                "company_id": "8592",
+                "company_name": "Astra Credit Companies",
+                "company_category_name": "Tipe B",
+                "company_category_desc": "Pelanggan tipe B cenderung melakukan pembayaran dalam jangka waktu sedang, yaitu 15-30 hari.",
+            }
+        ]
+
+        enriched_records, enrichment_summary = enrich_records_with_account_reference(
+            invoice_records,
+            account_records,
+        )
+        raw_df = normalize_records(enriched_records)
+        field_map = {
+            "period": "reporting_period",
+            "partner_type": "company_name",
+            "service": "produk_utama",
+            "invoice_value": "nominal_tagihan",
+            "payment_class": "payment_class",
+            "delay_note": "delay_note",
+        }
+        normalized_df, contract_summary = normalize_financial_dataframe(raw_df, explicit_field_map=field_map)
+
+        self.assertEqual(enrichment_summary["matchedRecords"], 1)
+        self.assertEqual(enrichment_summary["referenceDataset"], "ReferenceAccount")
+        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas B")
+        self.assertIn("15-30 hari", normalized_df.loc[0, "Catatan Historis Keterlambatan"])
+        self.assertTrue(contract_summary["isReady"])
 
     def test_preview_source_profile_returns_normalized_contract_summary(self):
         from source_preview_service import preview_source_profile
@@ -424,6 +465,104 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(summary["requestMethod"], "POST")
         _, kwargs = request_mock.call_args
         self.assertEqual(kwargs["json"], {"dataset": "CashOut"})
+
+    def test_internal_client_fetches_reference_account_with_same_transport_shape(self):
+        for module_name in ("core", "config", "finance_api_clients"):
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+        import finance_api_clients
+
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "success": True,
+            "data": {
+                "dataset_result": [
+                    {
+                        "company_id": "8592",
+                        "company_name": "Astra Credit Companies",
+                        "company_category_name": "Tipe B",
+                    }
+                ]
+            },
+        }
+        profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "request": {
+                "body_format": "form",
+                "body": {"dataset": "FinanceInvoice"},
+            },
+        }
+
+        with mock.patch("requests.request", return_value=fake_response) as request_mock:
+            client = finance_api_clients.InternalAPIClient(source_profile=profile)
+            records, summary = client.fetch_reference_account_records(preview_limit=2)
+
+        self.assertEqual(records[0]["company_category_name"], "Tipe B")
+        self.assertEqual(summary["referenceDataset"], "ReferenceAccount")
+        _, kwargs = request_mock.call_args
+        self.assertEqual(kwargs["data"], {"dataset": "ReferenceAccount"})
+        self.assertEqual(client.body, {"dataset": "FinanceInvoice"})
+
+    def test_internal_loader_uses_reference_account_to_fill_missing_payment_class(self):
+        from cashflow_analysis import KnowledgeBase
+
+        class FakeInternalAPIClient:
+            field_map = {
+                "period": "reporting_period",
+                "partner_type": "company_name",
+                "service": "produk_utama",
+                "payment_class": "payment_class",
+                "invoice_value": "nominal_tagihan",
+                "delay_note": "delay_note",
+            }
+
+            def __init__(self, source_profile=None):
+                self.source_profile = source_profile
+
+            def is_configured(self):
+                return True
+
+            def fetch_records(self):
+                return [
+                    {
+                        "reporting_period": "Mei 2026",
+                        "company_id": "8592",
+                        "company_name": "Astra Credit Companies",
+                        "produk_utama": "Pelatihan AI",
+                        "nominal_tagihan": "Rp 150.000.000",
+                    }
+                ], {"resolvedRecordsPath": "data.dataset_result", "recordCount": 1}
+
+            def fetch_reference_account_records(self):
+                return [
+                    {
+                        "company_id": "8592",
+                        "company_name": "Astra Credit Companies",
+                        "company_category_name": "Tipe B",
+                        "company_category_desc": "Pelanggan tipe B cenderung melakukan pembayaran dalam jangka waktu sedang, yaitu 15-30 hari.",
+                    }
+                ], {"referenceDataset": "ReferenceAccount", "recordCount": 1}
+
+        knowledge_base = KnowledgeBase.__new__(KnowledgeBase)
+
+        with mock.patch("cashflow_analysis.InternalAPIClient", FakeInternalAPIClient):
+            normalized_df, summary = knowledge_base._load_internal_api_data(
+                profile={"type": "json_api"}
+            )
+
+        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas B")
+        self.assertTrue(summary["isReady"])
+        self.assertEqual(summary["referenceAccountEnrichment"]["matchedRecords"], 1)
 
     def test_production_source_doctor_reports_activation_readiness(self):
         profile = {

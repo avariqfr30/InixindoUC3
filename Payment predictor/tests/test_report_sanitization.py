@@ -1,4 +1,5 @@
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -42,6 +43,59 @@ class ReportSanitizationTest(unittest.TestCase):
             generator.prompt_builder.structure,
             generator.quality_scorer.structure,
         )
+
+    def test_final_qa_rejects_raw_source_labels_before_docx(self):
+        from report_quality import ReportQualityScorer
+
+        result = ReportQualityScorer().final_qa(
+            "# Ringkasan Eksekutif\nEndpoint Internal API.\n\n# Analisis Deskriptif Cashflow\n"
+        )
+
+        self.assertFalse(result["passes"])
+        self.assertIn("raw_source_label", result["categories"])
+        self.assertIn("empty_section", result["categories"])
+
+    def test_report_context_prefetch_reuses_focused_notes_cache(self):
+        import cashflow_analysis
+        from cashflow_analysis import KnowledgeBase
+
+        class FakeFinancialAnalyzer:
+            @staticmethod
+            def normalize_evidence_text(value):
+                return str(value or "").strip()
+
+            @staticmethod
+            def apply_silent_assessment(context, notes, runtime_profile=None):
+                return {"controls": f"assessment for {notes}"}
+
+        kb = KnowledgeBase.__new__(KnowledgeBase)
+        kb.cache_lock = threading.Lock()
+        kb.report_context_cache = {"evidence": "bukti dasar", "review_context": {"ready": True}}
+        kb.focused_report_context_cache = {}
+        kb.data_version = 3
+        kb.active_source_key = "production"
+        kb.runtime_profile = {}
+        kb.query_calls = 0
+
+        def fake_query(notes, max_results=10):
+            kb.query_calls += 1
+            return f"bukti fokus untuk {notes}"
+
+        kb.query = fake_query
+        original_analyzer = cashflow_analysis.FinancialAnalyzer
+        try:
+            cashflow_analysis.FinancialAnalyzer = FakeFinancialAnalyzer
+            first = kb.prefetch_report_context("akun prioritas")
+            second = kb.prefetch_report_context("akun prioritas")
+            kb.data_version += 1
+            third = kb.prefetch_report_context("akun prioritas")
+        finally:
+            cashflow_analysis.FinancialAnalyzer = original_analyzer
+
+        self.assertEqual(first["status"], "ready")
+        self.assertTrue(second["focusedNotes"])
+        self.assertTrue(third["reviewContextReady"])
+        self.assertEqual(kb.query_calls, 2)
 
     def test_cashflow_intelligence_desk_adds_guarded_evidence_to_context(self):
         from core import FinancialAnalyzer
@@ -267,7 +321,7 @@ class ReportSanitizationTest(unittest.TestCase):
             analysis_payload=analysis_payload,
         )
 
-        self.assertIn("### Visual Dashboard Snapshot", finalized)
+        self.assertIn("### Cuplikan Dasbor Operasional", finalized)
         self.assertIn("[[DASHBOARD:", finalized)
 
     def test_finalized_report_injects_executive_headlines_before_caveats(self):
@@ -293,13 +347,13 @@ class ReportSanitizationTest(unittest.TestCase):
             macro_osint="-",
         )
 
-        self.assertIn("### Headline Utama untuk Manajemen", finalized)
+        self.assertIn("### Sorotan Utama untuk Manajemen", finalized)
         self.assertLess(
-            finalized.index("### Headline Utama untuk Manajemen"),
-            finalized.index("### Tingkat Keyakinan dan Caveat"),
+            finalized.index("### Sorotan Utama untuk Manajemen"),
+            finalized.index("### Asumsi Proyeksi dan Catatan Batasan"),
         )
         self.assertLess(
-            finalized.index("### Headline Utama untuk Manajemen"),
+            finalized.index("### Sorotan Utama untuk Manajemen"),
             finalized.index("# Analisis Deskriptif Cashflow"),
         )
 

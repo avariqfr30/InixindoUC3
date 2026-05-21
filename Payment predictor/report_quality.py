@@ -112,5 +112,25 @@ class ReportQualityScorer:
             "missing": missing,
         }
 
+    def final_qa(self, raw_text):
+        report_text = str(raw_text or "")
+        categories = set()
+        findings = []
+        if re.search(r"\b(Internal API|APIDog|endpoint|source\s*=|Invoice Evidence Analyst|Control Reviewer|agent workflow)\b", report_text, flags=re.IGNORECASE):
+            categories.add("raw_source_label")
+            findings.append("Laporan masih memuat label sumber atau peran internal.")
+        for section in self.structure.section_sequence:
+            match = re.search(rf"(?ms)^# {re.escape(section)}\s*(.*?)(?=^# |\Z)", report_text)
+            body = match.group(1).strip() if match else ""
+            plain_body = re.sub(r"\[\[(?:CHART|FLOW|DASHBOARD):.*?\]\]", " ", body)
+            plain_body = re.sub(r"[#*`>|_]", " ", plain_body)
+            if len(re.sub(r"\s+", " ", plain_body).strip()) < 40:
+                categories.add("empty_section")
+                findings.append(f"{section} kosong atau terlalu tipis.")
+        if "### Ringkasan Isi Laporan" not in report_text:
+            categories.add("missing_section_synthesis")
+            findings.append("Ringkasan eksekutif belum merangkum isi laporan akhir.")
+        return {"passes": not categories, "categories": sorted(categories), "findings": findings}
+
     def is_acceptable(self, raw_text):
         return self.score(raw_text)["passed"]

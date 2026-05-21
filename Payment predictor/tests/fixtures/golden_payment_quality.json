@@ -1,0 +1,8 @@
+{
+  "notes": "Prioritaskan tagihan terlambat akun besar.",
+  "expected": {
+    "required_evidence_heading": "### Bukti yang Dipakai",
+    "forbidden_reader_terms": ["Invoice Evidence Analyst", "Control Reviewer", "agent", "workflow", "endpoint", "Internal API"],
+    "required_summary_heading": "### Ringkasan Isi Laporan"
+  }
+}

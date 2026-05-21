@@ -44,7 +44,7 @@ REPORT_STRUCTURE = ReportStructure(
     ),
     required_subheadings=(
         "### Dampak Bisnis",
-        "### Tingkat Keyakinan dan Caveat",
+        "### Tingkat Keyakinan dan Catatan Batasan",
         "### Batasan Data dan Asumsi",
         "### Konteks OSINT Pendukung",
         "### Risiko dan Kontrol",

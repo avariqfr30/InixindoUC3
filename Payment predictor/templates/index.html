@@ -1214,6 +1214,16 @@
         }
         
         loadConfig();
+
+        function warmReportContext(notes) {
+            fetch('/api/report-prefetch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({notes: notes || ''})
+            }).catch(error => {
+                console.warn('Prefetch laporan tidak berhasil:', error);
+            });
+        }
         
         ui.btnReview.onclick = async () => { 
             syncNotesValue();
@@ -1278,6 +1288,7 @@
                         appState.syncStatus,
                     );
                     renderOperationalStatus();
+                    warmReportContext(ui.inputNotes.value);
 
                 ui.reviewText.innerHTML = buildReviewHtml(
                     selectedPeriod,

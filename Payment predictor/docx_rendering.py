@@ -55,6 +55,15 @@ class StyleEngine:
             "",
         )
 
+    @staticmethod
+    def enable_field_update_on_open(doc):
+        settings = doc.settings.element
+        update_fields = settings.find(qn("w:updateFields"))
+        if update_fields is None:
+            update_fields = OxmlElement("w:updateFields")
+            settings.append(update_fields)
+        update_fields.set(qn("w:val"), "true")
+
     @classmethod
     def apply_document_styles(cls, doc, theme_color):
         for section in doc.sections:
@@ -910,11 +919,8 @@ class DocumentBuilder:
     @staticmethod
     def add_table_of_contents(doc):
         doc.add_heading("Daftar Isi", level=1)
-        for section_title in REPORT_STRUCTURE.section_sequence:
-            paragraph = doc.add_paragraph(section_title, style="List Bullet")
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            paragraph.paragraph_format.space_after = Pt(2)
         toc_paragraph = doc.add_paragraph()
         StyleEngine.insert_toc_field(toc_paragraph)
+        StyleEngine.enable_field_update_on_open(doc)
 
         doc.add_page_break()

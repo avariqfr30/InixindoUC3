@@ -212,6 +212,29 @@ class ReportGenerator:
                 completeness_result["score"],
             )
 
+        final_qa = self.quality_scorer.final_qa(generated_content)
+        if not final_qa["passes"]:
+            logger.warning("Final report QA failed before DOCX render: %s", final_qa["findings"])
+            if not fallback_used:
+                fallback_used = True
+                generated_content = self._build_fallback_report(
+                    report_context,
+                    notes,
+                    analysis_context,
+                    macro_osint,
+                    analysis_payload=analysis_payload,
+                )
+                generated_content = self._finalize_report_content(
+                    generated_content,
+                    report_context,
+                    macro_osint,
+                    analysis_payload=analysis_payload,
+                )
+                completeness_result = self.quality_scorer.score(generated_content)
+                final_qa = self.quality_scorer.final_qa(generated_content)
+            if not final_qa["passes"]:
+                raise ValueError("Final report QA failed: " + "; ".join(final_qa["findings"]))
+
         document = self.document_assembler.assemble(
             generated_content,
             analysis_payload,
@@ -224,6 +247,7 @@ class ReportGenerator:
             "quality_gate_passed": completeness_result["passed"],
             "completeness_score": completeness_result["score"],
             "completeness_missing": completeness_result["missing"],
+            "final_qa": final_qa,
             "osint_available": bool(
                 macro_osint
                 and "tidak tersedia" not in macro_osint.lower()

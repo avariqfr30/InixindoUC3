@@ -4,6 +4,7 @@ import re
 from cashflow_analysis import FinancialAnalyzer
 from executive_summary_builder import ExecutiveSummaryBuilder
 from reader_safe_text import reader_safe_text
+from report_evidence import PaymentEvidenceBuilder
 from report_structure import REPORT_STRUCTURE
 
 
@@ -187,13 +188,13 @@ class ReportFinalizer:
             headline_block = str((report_context or {}).get("executive_facts") or "").strip()
         return self.inject_subheading_block(
             section_body,
-            "Headline Utama untuk Manajemen",
+            "Sorotan Utama untuk Manajemen",
             headline_block,
-            before_subheading="Dampak Bisnis" if "### Dampak Bisnis" in section_body else "Tingkat Keyakinan dan Caveat",
+            before_subheading="Dampak Bisnis" if "### Dampak Bisnis" in section_body else "Tingkat Keyakinan dan Catatan Batasan",
         )
 
-    def build_executive_summary(self, section_body, report_context):
-        return ExecutiveSummaryBuilder.build(report_context, existing_body=section_body)
+    def build_executive_summary(self, section_body, report_context, peer_sections=None):
+        return ExecutiveSummaryBuilder.build(report_context, existing_body=section_body, peer_sections=peer_sections)
 
     @classmethod
     def sanitize_generated_report_text(cls, raw_text):
@@ -213,6 +214,8 @@ class ReportFinalizer:
         chart_marker, flow_marker = self.extract_visual_markers(report_context.get("visual_prompt", ""))
         dashboard_markers = self.build_dashboard_visual_markers(analysis_payload)
         operational_snapshot = self.build_operational_snapshot_block(analysis_payload)
+        evidence_block = PaymentEvidenceBuilder.to_markdown(report_context.get("agent_evidence_ledger") or [])
+        peer_sections = [section for section in sections if section["title"] != "Ringkasan Eksekutif"]
         finalized_sections = []
 
         for section in sections:
@@ -220,7 +223,9 @@ class ReportFinalizer:
             section_body = section["body"]
 
             if section_title == "Ringkasan Eksekutif":
-                section_body = self.build_executive_summary(section_body, report_context)
+                section_body = self.build_executive_summary(section_body, report_context, peer_sections=peer_sections)
+                if evidence_block:
+                    section_body = f"{section_body.rstrip()}\n\n{evidence_block}".strip()
             elif section_title == "Analisis Deskriptif Cashflow":
                 section_body = self.append_marker_block(section_body, chart_marker)
             elif section_title == "Analisis Diagnostik Cashflow":
@@ -256,18 +261,11 @@ class ReportFinalizer:
         dashboard_markers = self.build_dashboard_visual_markers(analysis_payload)
         operational_snapshot = self.build_operational_snapshot_block(analysis_payload)
         focus_block = notes.strip() if notes and notes.strip() else "Tidak ada fokus tambahan dari pengguna."
+        executive_summary = self.build_executive_summary("", report_context)
 
         lines = [
             "# Ringkasan Eksekutif",
-            "### Headline Utama untuk Manajemen",
-            report_context.get("executive_headlines") or report_context["executive_facts"],
-            "",
-            "### Dampak Bisnis",
-            "- Laporan ini digunakan untuk membantu manajemen membaca risiko cashflow, memahami prioritas penagihan, mengendalikan tekanan cash out, dan menentukan tindakan yang paling cepat berdampak pada ending cash.",
-            "- Fokus pengguna tetap dijaga dalam interpretasi, namun narasi dan prioritas diturunkan dari bukti internal, pola historis, serta konteks pelaksanaan yang tersedia saat ini.",
-            "",
-            "### Tingkat Keyakinan dan Caveat",
-            report_context["confidence_summary"],
+            executive_summary,
             "",
             "# Analisis Deskriptif Cashflow",
             "### Snapshot Portofolio dan Konsentrasi Risiko",
@@ -297,7 +295,7 @@ class ReportFinalizer:
             lines.extend(
                 [
                     "",
-                    "### Parameter Forecast dan Ruang Lingkup",
+                    "### Parameter Proyeksi dan Ruang Lingkup",
                     structured_context_block,
                 ]
             )
@@ -324,8 +322,8 @@ class ReportFinalizer:
                 "",
                 "# Rekomendasi Preskriptif",
                 "### Prinsip Tindakan",
-                "1. Dahulukan invoice bernilai besar dengan skor risiko tinggi dan penyebab yang masih bisa dipulihkan dalam 30 hari.",
-                "2. Pisahkan treatment untuk isu anggaran, approval, administrasi, likuiditas, sengketa, dan kewajiban jatuh tempo agar tindakan inflow dan outflow tidak tercampur.",
+                "1. Dahulukan tagihan bernilai besar dengan skor risiko tinggi dan penyebab yang masih bisa dipulihkan dalam 30 hari.",
+                "2. Pisahkan perlakuan untuk isu anggaran, persetujuan, administrasi, likuiditas, sengketa, dan kewajiban jatuh tempo agar tindakan arus masuk dan arus keluar tidak tercampur.",
                 "3. Gunakan bukti internal dan jadwal tindak lanjut yang terdokumentasi agar eskalasi ke manajemen klien lebih kuat.",
                 "",
                 "### Prasyarat Implementasi",
@@ -353,4 +351,4 @@ class ReportFinalizer:
         if flow_marker:
             lines.extend(["", flow_marker])
 
-        return "\n".join(lines)
+        return reader_safe_text("\n".join(lines))

@@ -185,7 +185,7 @@ MANDATORY RULES:
    - short-term forecast or scenarios,
    - management implications,
    - concrete next actions.
-13. If this pass includes `# Ringkasan Eksekutif`, open it with `### Headline Utama untuk Manajemen`, then `### Dampak Bisnis`, then `### Tingkat Keyakinan dan Caveat`. The first subsection must show the most important business headlines for busy executives before any caveat, method, assumption, or technical explanation.
+13. If this pass includes `# Ringkasan Eksekutif`, open it with `### Sorotan Utama untuk Manajemen`, then `### Dampak Bisnis`, then `### Tingkat Keyakinan dan Catatan Batasan`. The first subsection must show the most important business signals for busy executives before any limitation, method, assumption, or technical explanation.
 14. If this pass includes `# Analisis Deskriptif Cashflow`, include `### Snapshot Portofolio dan Konsentrasi Risiko` and `### Batasan Data dan Asumsi`.
 15. If this pass includes `# Analisis Diagnostik Cashflow`, include `### Pola Hambatan Utama`, `### Bukti Internal yang Mewakili`, `### Konteks OSINT Pendukung`, and `### Risiko dan Kontrol`.
 16. In `# Analisis Diagnostik Cashflow`, split the explanation by what drives the delay, for example process/document issues, budget/approval issues, liquidity/relationship issues, and outflow pressure instead of dumping one long block of mixed evidence.
