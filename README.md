@@ -19,6 +19,7 @@ Berbeda dengan sistem analitik tradisional, AI ini tidak hanya menghitung angka,
 * **Python 3.9+** (Untuk *deployment* lokal).
 * **Ollama**: Berjalan di *background* pada port `11434`.
 * **Kredensial Serper**: `SERPER_API_KEY` aktif (bisa diisi lewat environment variable atau `config.py`).
+* **Backup OSINT Ollama Web Search**: opsional, isi `OLLAMA_API_KEY` agar OSINT tetap mencoba pencarian web ketika Serper tidak tersedia; `OLLAMA_WEB_SEARCH_URL` default ke `https://ollama.com/api/web_search`.
 * **Demo mode**: File CSV berisi data penagihan pada `data/db.csv`.
 * **Internal API mode**: Endpoint API internal yang mengembalikan dataset finansial dalam format JSON.
 

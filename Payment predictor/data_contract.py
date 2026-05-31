@@ -15,12 +15,14 @@ INTERNAL_API_FIELD_SPECS = {
             "period",
             "report period",
             "invoice period",
+            "invoice date",
             "periode",
             "periode laporan",
             "billing period",
             "periode tagihan",
             "reporting_period",
             "invoice_period",
+            "invoice_date",
         ),
         "example": "Q2 2025",
     },
@@ -32,6 +34,8 @@ INTERNAL_API_FIELD_SPECS = {
             "partner type",
             "partner",
             "customer type",
+            "company name",
+            "invoice company name",
             "segment",
             "customer segment",
             "tipe partner",
@@ -39,6 +43,8 @@ INTERNAL_API_FIELD_SPECS = {
             "customer_segment",
             "partner_segment",
             "client_type",
+            "company_name",
+            "invoice_company_name",
         ),
         "example": "Instansi Pemerintah",
     },
@@ -55,6 +61,8 @@ INTERNAL_API_FIELD_SPECS = {
             "service_name",
             "product_name",
             "program_name",
+            "invoice_product",
+            "source_dataset_label",
         ),
         "example": "Audit SPBE",
     },
@@ -88,6 +96,7 @@ INTERNAL_API_FIELD_SPECS = {
             "nominal invoice",
             "nominal",
             "invoice_total",
+            "invoice_amount",
             "tagihan",
             "balance",
         ),
@@ -319,6 +328,60 @@ def enrich_records_with_account_reference(invoice_records, account_records):
         "matchedRecords": matched_records,
         "paymentClassFilled": payment_class_filled,
         "delayNoteFilled": delay_note_filled,
+    }
+
+
+def _parse_invoice_date(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed
+
+
+def _invoice_behavior_from_dates(record):
+    due_date = _parse_invoice_date(record.get("invoice_due_date") or record.get("due_date"))
+    paid_date = _parse_invoice_date(record.get("invoice_paid_date") or record.get("paid_date"))
+    settled_text = _value_to_text(record.get("invoice_is_settled") or record.get("is_settled")).lower()
+    is_settled = settled_text in {"yes", "y", "true", "1", "settled", "paid", "lunas"}
+    if due_date is None:
+        return "", ""
+
+    if paid_date is None:
+        if is_settled:
+            return "Kelas C (tanggal bayar tidak tercatat)", "Invoice tercatat selesai, tetapi tanggal bayar belum tersedia."
+        return "Kelas E (belum lunas)", "Invoice belum tercatat lunas pada data internal."
+
+    delay_days = int((paid_date.normalize() - due_date.normalize()).days)
+    if delay_days <= 0:
+        return "Kelas A (tepat waktu)", "Invoice dibayar tepat waktu atau sebelum tanggal jatuh tempo."
+    if delay_days <= 14:
+        return "Kelas B (Telat 1-14 hari)", f"Invoice dibayar {delay_days} hari setelah jatuh tempo."
+    if delay_days <= 60:
+        return "Kelas C (Telat 15-60 hari)", f"Invoice dibayar {delay_days} hari setelah jatuh tempo."
+    return "Kelas D (Telat lebih dari 60 hari)", f"Invoice dibayar {delay_days} hari setelah jatuh tempo."
+
+
+def enrich_invoice_records_with_payment_behavior(invoice_records):
+    enriched_records = []
+    filled = 0
+    for raw_record in invoice_records or []:
+        if not isinstance(raw_record, dict):
+            continue
+        record = dict(raw_record)
+        dataset_label = _value_to_text(record.get("_source_dataset_code")) or "InvoiceTraining"
+        record.setdefault("source_dataset_label", dataset_label)
+        if not _value_to_text(record.get("payment_class")) or not _value_to_text(record.get("delay_note")):
+            payment_class, delay_note = _invoice_behavior_from_dates(record)
+            if payment_class and not _value_to_text(record.get("payment_class")):
+                record["payment_class"] = payment_class
+            if delay_note and not _value_to_text(record.get("delay_note")):
+                record["delay_note"] = delay_note
+            if payment_class or delay_note:
+                filled += 1
+        enriched_records.append(record)
+    return enriched_records, {
+        "invoiceBehaviorFilled": filled,
+        "recordCount": len(enriched_records),
     }
 
 

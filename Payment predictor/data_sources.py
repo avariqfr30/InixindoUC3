@@ -55,16 +55,16 @@ def build_internal_api_profile_template():
         "request": {
             "headers": {},
             "query_params": {},
-            "body": {"dataset": "FinanceInvoice"},
+            "body": {"dataset": "InvoiceTraining"},
             "body_format": "form",
         },
         "field_map": {
-            "period": "your_period_field",
-            "partner_type": "your_partner_type_field",
-            "service": "your_service_field",
-            "payment_class": "your_payment_class_field",
-            "invoice_value": "your_invoice_value_field",
-            "delay_note": "your_delay_note_field",
+            "period": "invoice_date",
+            "partner_type": "invoice_company_name",
+            "service": "source_dataset_label",
+            "payment_class": "payment_class",
+            "invoice_value": "invoice_amount",
+            "delay_note": "delay_note",
         },
         "pagination": {
             "mode": "",

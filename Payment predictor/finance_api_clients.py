@@ -51,6 +51,14 @@ from forecast_engine import parse_idr_amount
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_INVOICE_DATASET_CODES = ("InvoiceTraining", "InvoiceConsultant")
+DATE_SENSITIVE_APIDOG_DATASETS = {
+    "bankdisbursement",
+    "invoiceconsultant",
+    "invoicetraining",
+    "referenceaccount",
+}
+
 class InternalAPIClient:
     def __init__(self, source_profile=None):
         profile = copy.deepcopy(source_profile) if source_profile else {
@@ -432,6 +440,78 @@ class InternalAPIClient:
         extraction_summary["authMode"] = "basic" if auth else ("bearer" if self.auth_token else "none")
         return all_records, extraction_summary
 
+    def _body_dataset_code(self):
+        if isinstance(self.body, dict):
+            return str(self.body.get("dataset") or self.body.get("dataset_code") or "").strip()
+        return ""
+
+    def _clone_for_dataset(self, dataset_code):
+        dataset_profile = copy.deepcopy(self.source_profile)
+        request_config = dataset_profile.setdefault("request", {})
+        body = request_config.get("body")
+        if isinstance(body, dict):
+            dataset_body = dict(body)
+            dataset_body["dataset"] = dataset_code
+            if "dataset_code" in dataset_body:
+                dataset_body["dataset_code"] = dataset_code
+        else:
+            dataset_body = {"dataset": dataset_code}
+        if str(dataset_code or "").strip().lower() in DATE_SENSITIVE_APIDOG_DATASETS:
+            dataset_body["dataset_cache"] = "disabled"
+        request_config["body"] = dataset_body
+        return self.__class__(source_profile=dataset_profile)
+
+    def _invoice_dataset_codes(self):
+        configured_dataset = self._body_dataset_code()
+        if configured_dataset in {"", "FinanceInvoice", "InvoiceTraining", "InvoiceConsultant", "InvoiceKonsultan"}:
+            return list(DEFAULT_INVOICE_DATASET_CODES)
+        return [configured_dataset]
+
+    def fetch_invoice_records(self, preview_limit=0):
+        combined_records = []
+        loaded_datasets = []
+        unavailable_datasets = []
+        summaries = {}
+        for dataset_code in self._invoice_dataset_codes():
+            dataset_client = self._clone_for_dataset(dataset_code)
+            try:
+                records, summary = dataset_client.fetch_records(preview_limit=preview_limit)
+            except Exception as exc:
+                unavailable_datasets.append({"dataset": dataset_code, "reason": str(exc)})
+                continue
+            tagged_records = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                tagged = dict(record)
+                tagged["_source_dataset_code"] = dataset_code
+                tagged_records.append(tagged)
+            if tagged_records:
+                combined_records.extend(tagged_records)
+                loaded_datasets.append(dataset_code)
+            else:
+                unavailable_datasets.append({"dataset": dataset_code, "reason": "Dataset returned no usable records."})
+            summaries[dataset_code] = summary
+
+        if not combined_records and unavailable_datasets:
+            reasons = "; ".join(f"{item['dataset']}: {item['reason']}" for item in unavailable_datasets)
+            raise RuntimeError(f"Internal invoice datasets returned no usable records ({reasons}).")
+
+        summary = {
+            "strategy": "invoice_dataset_union",
+            "loadedDatasets": loaded_datasets,
+            "unavailableDatasets": unavailable_datasets,
+            "datasetSummaries": summaries,
+            "recordCount": len(combined_records),
+        }
+        if summaries:
+            first_summary = next(iter(summaries.values()))
+            summary.setdefault("resolvedRecordsPath", first_summary.get("resolvedRecordsPath"))
+            summary.setdefault("datasetUrl", first_summary.get("datasetUrl"))
+            summary.setdefault("requestMethod", first_summary.get("requestMethod"))
+            summary.setdefault("authMode", first_summary.get("authMode"))
+        return combined_records, summary
+
     def fetch_reference_account_records(self, preview_limit=0):
         reference_profile = copy.deepcopy(self.source_profile)
         request_config = reference_profile.setdefault("request", {})
@@ -439,8 +519,11 @@ class InternalAPIClient:
         if isinstance(body, dict):
             reference_body = dict(body)
             reference_body["dataset"] = "ReferenceAccount"
+            if "dataset_code" in reference_body:
+                reference_body["dataset_code"] = "ReferenceAccount"
         else:
             reference_body = {"dataset": "ReferenceAccount"}
+        reference_body["dataset_cache"] = "disabled"
         request_config["body"] = reference_body
 
         reference_client = self.__class__(source_profile=reference_profile)
@@ -461,6 +544,7 @@ class CashOutAPIClient(InternalAPIClient):
             "planned_amount",
             "total_amount",
             "value",
+            "bd_realization",
         ),
         "due_date": (
             "due_date",
@@ -472,6 +556,7 @@ class CashOutAPIClient(InternalAPIClient):
             "due",
             "date",
             "tanggal",
+            "bd_date",
         ),
         "category": (
             "category",
@@ -480,6 +565,7 @@ class CashOutAPIClient(InternalAPIClient):
             "jenis_biaya",
             "kategori",
             "cost_center",
+            "bd_account_name",
         ),
         "reference": (
             "reference",
@@ -491,6 +577,8 @@ class CashOutAPIClient(InternalAPIClient):
             "invoice_no",
             "nama",
             "name",
+            "bd_id",
+            "bd_account_name",
         ),
         "status": (
             "status",
@@ -510,34 +598,59 @@ class CashOutAPIClient(InternalAPIClient):
 
     REQUIRED_FIELDS = ("amount", "due_date")
 
-    def __init__(self):
-        source_profile = {
-            "type": "json_api",
-            "endpoint": {
-                "url": CASH_OUT_API_ENDPOINT_URL.strip(),
-                "method": (CASH_OUT_API_METHOD or "GET").strip().upper(),
-                "timeout": CASH_OUT_API_TIMEOUT,
-                "verify_ssl": CASH_OUT_API_VERIFY_SSL,
-                "records_key": CASH_OUT_API_RECORDS_KEY.strip(),
-            },
-            "auth": {
-                "bearer_token": CASH_OUT_API_AUTH_TOKEN.strip(),
-                "basic_username": CASH_OUT_API_BASIC_USERNAME.strip(),
-                "basic_password": CASH_OUT_API_BASIC_PASSWORD,
-            },
-            "request": {
-                "headers": self._parse_json_object(CASH_OUT_API_HEADERS_JSON, "headers"),
-                "query_params": self._parse_json_object(
-                    CASH_OUT_API_QUERY_PARAMS_JSON,
-                    "query params",
-                ),
-                "body": self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body"),
-                "body_format": "json",
-            },
-            "field_map": {},
-            "pagination": {},
-            "retry": {},
-        }
+    def __init__(self, source_profile=None):
+        if source_profile is not None:
+            source_profile = copy.deepcopy(source_profile)
+            request_config = source_profile.setdefault("request", {})
+            body = request_config.get("body")
+            if isinstance(body, dict):
+                cash_out_body = dict(body)
+                cash_out_body["dataset"] = "BankDisbursement"
+                if "dataset_code" in cash_out_body:
+                    cash_out_body["dataset_code"] = "BankDisbursement"
+            else:
+                cash_out_body = {"dataset": "BankDisbursement"}
+            cash_out_body["dataset_cache"] = "disabled"
+            request_config["body"] = cash_out_body
+            request_config.setdefault("body_format", "form")
+            source_profile.setdefault("field_map", {})
+        else:
+            use_internal_api_default = (
+                not CASH_OUT_API_ENDPOINT_URL.strip()
+                and bool(INTERNAL_API_ENDPOINT_URL.strip() or INTERNAL_API_BASE_URL.strip())
+            )
+            source_profile = {
+                "type": "json_api",
+                "endpoint": {
+                    "url": INTERNAL_API_ENDPOINT_URL.strip() if use_internal_api_default else CASH_OUT_API_ENDPOINT_URL.strip(),
+                    "base_url": INTERNAL_API_BASE_URL.rstrip("/") if use_internal_api_default else "",
+                    "path": INTERNAL_API_DATASET_PATH.strip() if use_internal_api_default else "",
+                    "method": (INTERNAL_API_METHOD if use_internal_api_default else CASH_OUT_API_METHOD or "GET").strip().upper(),
+                    "timeout": INTERNAL_API_TIMEOUT if use_internal_api_default else CASH_OUT_API_TIMEOUT,
+                    "verify_ssl": INTERNAL_API_VERIFY_SSL if use_internal_api_default else CASH_OUT_API_VERIFY_SSL,
+                    "records_key": INTERNAL_API_RECORDS_KEY.strip() if use_internal_api_default else CASH_OUT_API_RECORDS_KEY.strip(),
+                },
+                "auth": {
+                    "bearer_token": INTERNAL_API_AUTH_TOKEN.strip() if use_internal_api_default else CASH_OUT_API_AUTH_TOKEN.strip(),
+                    "basic_username": INTERNAL_API_BASIC_USERNAME.strip() if use_internal_api_default else CASH_OUT_API_BASIC_USERNAME.strip(),
+                    "basic_password": INTERNAL_API_BASIC_PASSWORD if use_internal_api_default else CASH_OUT_API_BASIC_PASSWORD,
+                },
+                "request": {
+                    "headers": self._parse_json_object(
+                        INTERNAL_API_HEADERS_JSON if use_internal_api_default else CASH_OUT_API_HEADERS_JSON,
+                        "headers",
+                    ),
+                    "query_params": self._parse_json_object(
+                        INTERNAL_API_QUERY_PARAMS_JSON if use_internal_api_default else CASH_OUT_API_QUERY_PARAMS_JSON,
+                        "query params",
+                    ),
+                    "body": {"dataset": "BankDisbursement"} if use_internal_api_default else self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body"),
+                    "body_format": "form" if use_internal_api_default else "json",
+                },
+                "field_map": {},
+                "pagination": {},
+                "retry": {},
+            }
         super().__init__(source_profile=source_profile)
         self.field_map = self._parse_field_map(CASH_OUT_FIELD_MAP_JSON)
 

@@ -112,13 +112,21 @@ class ReportQualityScorer:
             "missing": missing,
         }
 
-    def final_qa(self, raw_text):
+    def final_qa(self, raw_text, rejected_claims=None):
         report_text = str(raw_text or "")
         categories = set()
         findings = []
-        if re.search(r"\b(Internal API|APIDog|endpoint|source\s*=|Invoice Evidence Analyst|Control Reviewer|agent workflow)\b", report_text, flags=re.IGNORECASE):
+        if re.search(
+            r"\b(Internal API|APIDog|endpoint|source\s*=|Invoice Evidence Analyst|Context Analyst|Collection Risk Analyst|Forecast Analyst|Control Reviewer|Executive Editor|agent workflow)\b",
+            report_text,
+            flags=re.IGNORECASE,
+        ):
             categories.add("raw_source_label")
             findings.append("Laporan masih memuat label sumber atau peran internal.")
+        rejected_findings = self._find_rejected_claim_violations(report_text, rejected_claims)
+        if rejected_findings:
+            categories.add("rejected_claim")
+            findings.extend(rejected_findings)
         for section in self.structure.section_sequence:
             match = re.search(rf"(?ms)^# {re.escape(section)}\s*(.*?)(?=^# |\Z)", report_text)
             body = match.group(1).strip() if match else ""
@@ -131,6 +139,36 @@ class ReportQualityScorer:
             categories.add("missing_section_synthesis")
             findings.append("Ringkasan eksekutif belum merangkum isi laporan akhir.")
         return {"passes": not categories, "categories": sorted(categories), "findings": findings}
+
+    @staticmethod
+    def _find_rejected_claim_violations(report_text, rejected_claims):
+        text = str(report_text or "")
+        lowered = text.lower()
+        findings = []
+        for claim in rejected_claims or []:
+            claim_text = str(claim or "").strip()
+            if not claim_text:
+                continue
+            unsupported_priority = re.search(
+                r"Jangan\s+menyatakan\s+(.+?)\s+sebagai\s+prioritas",
+                claim_text,
+                flags=re.IGNORECASE,
+            )
+            if unsupported_priority:
+                term = unsupported_priority.group(1).strip(" .,:;")
+                if term and re.search(rf"\b{re.escape(term)}\b", text, flags=re.IGNORECASE):
+                    findings.append(f"Laporan melanggar rejected-claim gate untuk {term}.")
+                continue
+
+            blocked_terms = []
+            if re.search(r"Jangan\s+menampilkan\s+istilah", claim_text, flags=re.IGNORECASE):
+                blocked_terms.extend(re.findall(r"\b(agent|desk|workflow)\b", claim_text, flags=re.IGNORECASE))
+            if "penyebab eksternal" in claim_text.lower() and "penyebab eksternal" in lowered and "sebagai fakta" in lowered:
+                findings.append("Laporan menjadikan penyebab eksternal sebagai fakta internal.")
+            for term in blocked_terms:
+                if re.search(rf"\b{re.escape(term)}\b", text, flags=re.IGNORECASE):
+                    findings.append(f"Laporan masih memuat istilah internal {term}.")
+        return findings
 
     def is_acceptable(self, raw_text):
         return self.score(raw_text)["passed"]

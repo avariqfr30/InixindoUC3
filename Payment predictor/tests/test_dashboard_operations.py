@@ -47,6 +47,53 @@ class CashOutProjectorTest(unittest.TestCase):
         self.assertEqual(result["category_breakdown"][0]["category"], "Payroll")
 
 
+class CashflowDashboardInterpretationTest(unittest.TestCase):
+    def test_forecast_dashboard_reacts_with_management_interpretation(self):
+        import pandas as pd
+        from forecast_engine import CashflowForecaster
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "Periode Laporan": "Q2 2026",
+                    "Tipe Partner": "BUMN A",
+                    "Layanan": "Pelatihan SPBE",
+                    "Kelas Pembayaran": "Kelas E (Telat > 6 Bulan)",
+                    "Nilai Invoice": "Rp 900.000.000",
+                    "Catatan Historis Keterlambatan": "BAST belum lengkap dan approval belum turun.",
+                }
+            ]
+        )
+
+        forecast = CashflowForecaster(monthly_operating_cost_idr=200_000_000).forecast(
+            frame,
+            cash_on_hand=50_000_000,
+            start_date=datetime(2026, 5, 1),
+            end_date=datetime(2026, 5, 30),
+            horizon_key="short_term",
+            cash_out_records=[
+                {
+                    "amount": 250_000_000,
+                    "due_date": datetime(2026, 5, 10),
+                    "category": "Operasional",
+                    "is_open": True,
+                }
+            ],
+        )
+
+        dashboard = forecast["dashboard_snapshot"]
+
+        self.assertIn("management_interpretation", dashboard)
+        interpretation = dashboard["management_interpretation"]
+        self.assertEqual(interpretation["status"], "KRITIS")
+        self.assertIn("Kas akhir berisiko", interpretation["headline"])
+        self.assertIn("senior", " ".join(interpretation["actions"]).lower())
+        self.assertIn("decision_queue", dashboard)
+        self.assertEqual(dashboard["decision_queue"][0]["name"], "BUMN A - Pelatihan SPBE")
+        self.assertIn("cash_bridge", dashboard)
+        self.assertEqual(dashboard["cash_bridge"]["cash_on_hand"], 50_000_000)
+
+
 class DashboardOperationRouteTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -9,6 +9,7 @@ import pandas as pd
 import statistics
 
 from data_contract import resolve_financial_columns
+from management_interpretation import CashflowManagementInterpreter
 
 
 FOREIGN_CURRENCY_MARKERS = (
@@ -1095,10 +1096,19 @@ class CashflowForecaster:
             total_cash_out=total_cash_out,
             outstanding=outstanding,
         )
+        management_interpretation = CashflowManagementInterpreter.build_dashboard_reaction(
+            raw_status=cashflow_health['internal_status'],
+            ending_cash=ending_cash,
+            total_cash_in=sum(payment['amount'] for payment in predicted_payments),
+            total_cash_out=total_cash_out,
+            top_overdue_accounts=top_overdue_accounts,
+            weakest_dimensions=cashflow_health.get('weakest_dimensions') or [],
+        )
 
         return {
-            'status': cashflow_health['internal_status'].upper(),
+            'status': management_interpretation['status'],
             'status_label': cashflow_health['operating_signal'],
+            'management_interpretation': management_interpretation,
             'current_cash': cash_on_hand,
             'runway_months': projected_runway,
             'coverage_ratio': ratio_forecast,
@@ -1124,6 +1134,13 @@ class CashflowForecaster:
             'balance_projection_30d': balance_points,
             'delay_distribution': delay_distribution,
             'top_overdue_accounts': top_overdue_accounts,
+            'decision_queue': CashflowManagementInterpreter.build_decision_queue(top_overdue_accounts),
+            'cash_bridge': {
+                'cash_on_hand': cash_on_hand,
+                'expected_cash_in': sum(payment['amount'] for payment in predicted_payments),
+                'expected_cash_out': total_cash_out,
+                'ending_cash': ending_cash,
+            },
             'alert_recommendation_lines': alert_recommendation_lines,
             'risk_summary': {
                 'top_partner_share_pct': risk['top_partner_share_pct'],

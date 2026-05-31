@@ -121,6 +121,31 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         for token in ["API internal", "endpoint", "source-of-truth", "Waitress", "queue", "thread", "sync status"]:
             self.assertNotIn(token, result)
 
+    def test_executive_summary_uses_management_interpretation_model(self):
+        finalizer = ReportFinalizer()
+        raw = "# Ringkasan Eksekutif\nDraft."
+        context = {
+            "executive_headlines": "- Keputusan kas: eskalasi penagihan akun utama minggu ini.",
+            "executive_facts": "- Cash in tertahan pada invoice prioritas.\n- Cash out tetap berjalan.",
+            "management_interpretation": {
+                "signal": "Cash in tertahan sementara cash out tetap berjalan.",
+                "meaning": "Risiko utama adalah timing-control, bukan sekadar nominal invoice.",
+                "decision": "Manajemen perlu memilih akun yang dieskalasi minggu ini.",
+                "action": "Eskalasi senior dan konfirmasi komitmen pembayaran tertulis.",
+                "confidence": "Sedang - data operasional cukup, status komitmen perlu validasi.",
+            },
+            "visual_prompt": "",
+        }
+
+        result = finalizer.finalize(raw, context, "", analysis_payload={})
+        summary_body = result.split("# Analisis Deskriptif Cashflow", 1)[0]
+
+        self.assertIn("### Interpretasi Manajemen", summary_body)
+        self.assertIn("| Sinyal | Makna | Keputusan | Aksi | Keyakinan |", summary_body)
+        self.assertIn("kontrol waktu", summary_body)
+        self.assertIn("Eskalasi senior", summary_body)
+        self.assertLess(summary_body.index("### Interpretasi Manajemen"), summary_body.index("### Jadwal Aksi Manajemen"))
+
     def test_finalization_strips_hidden_workflow_roles_and_source_mechanics(self):
         finalizer = ReportFinalizer()
         raw = "\n\n".join(
@@ -163,6 +188,28 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         self.assertLess(summary_body.index("### Jadwal Aksi Manajemen"), summary_body.index("### Asumsi Proyeksi dan Catatan Batasan"))
         self.assertNotIn("Endpoint", summary_body)
         self.assertNotIn("Internal API", summary_body)
+
+    def test_executive_summary_actions_are_context_specific_not_static(self):
+        finalizer = ReportFinalizer()
+        raw = "# Ringkasan Eksekutif\nDraft."
+        context = {
+            "executive_headlines": "- Rp 2,4 miliar tagihan BUMN A perlu dieskalasi minggu ini.",
+            "executive_facts": "- Eksposur terbesar ada pada BUMN A.\n- Layanan paling berisiko adalah Pelatihan SPBE.",
+            "base_profile": {
+                "top_risk_partners": ["BUMN A"],
+                "top_risk_services": ["Pelatihan SPBE"],
+                "expected_gap_base": 2400000000,
+            },
+            "confidence_summary": "Keyakinan sedang berdasarkan data operasional.",
+            "visual_prompt": "",
+        }
+
+        result = finalizer.finalize(raw, context, "", analysis_payload={})
+        summary_body = result.split("# Analisis Deskriptif Cashflow", 1)[0]
+
+        self.assertIn("BUMN A", summary_body)
+        self.assertIn("Pelatihan SPBE", summary_body)
+        self.assertNotIn("Akun mana yang harus diprioritaskan untuk penagihan senior.", summary_body)
 
     def test_executive_summary_does_not_repeat_factors_as_management_highlights(self):
         finalizer = ReportFinalizer()
@@ -239,6 +286,42 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         self.assertIn("Rp 900 juta", result)
         for token in ["Invoice Evidence Analyst", "agent", "workflow", "endpoint", "Internal API"]:
             self.assertNotIn(token, result)
+
+    def test_finalization_omits_placeholder_osint_marker(self):
+        finalizer = ReportFinalizer()
+        raw = "\n\n".join(
+            [
+                "# Ringkasan Eksekutif\nDraft.",
+                "# Analisis Diagnostik Cashflow\n### Risiko dan Kontrol\nKontrol dasar.",
+            ]
+        )
+
+        result = finalizer.finalize(
+            raw,
+            {"executive_headlines": "- Keputusan kas dibutuhkan.", "visual_prompt": ""},
+            "-",
+            analysis_payload={},
+        )
+
+        self.assertIn("Konteks OSINT Pendukung", result)
+        self.assertIn("belum cukup sebanding", result)
+        self.assertNotIn("### Konteks OSINT Pendukung\n-", result)
+
+    def test_payment_evidence_uses_implicit_confidence_without_exposing_confidence_label(self):
+        text = PaymentEvidenceBuilder.to_markdown(
+            [
+                {
+                    "claim": "Invoice terlambat bernilai Rp 900 juta perlu diprioritaskan.",
+                    "allowed_use": "Dipakai untuk agenda penagihan 30 hari.",
+                    "confidence": "Tinggi",
+                    "source": "Invoice Evidence Analyst",
+                }
+            ]
+        )
+
+        self.assertIn("Dasar bukti kuat", text)
+        self.assertNotIn("Keyakinan:", text)
+        self.assertNotIn("confidence", text.lower())
 
     def test_payment_evidence_builder_keeps_internal_roles_hidden(self):
         text = PaymentEvidenceBuilder.to_markdown(

@@ -31,6 +31,7 @@ from config import (
 )
 from data_contract import (
     build_internal_data_summary,
+    enrich_invoice_records_with_payment_behavior,
     enrich_records_with_account_reference,
     get_internal_api_contract,
     normalize_records,
@@ -42,11 +43,18 @@ from data_sources import (
     summarize_source_profile,
     write_active_source_key,
 )
+from cashflow_intelligence_desk import CashflowIntelligenceDesk
 from finance_api_clients import InternalAPIClient
 from financial_analyzer import FinancialAnalyzer
 
 logger = logging.getLogger(__name__)
 EMBEDDING_BATCH_SIZE = max(int(os.getenv("EMBEDDING_BATCH_SIZE", "8")), 1)
+EMBEDDING_SYNC_ENABLED = os.getenv("EMBEDDING_SYNC_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 class KnowledgeBase:
     def __init__(self, db_uri):
@@ -154,7 +162,11 @@ class KnowledgeBase:
         if not client.is_configured():
             raise RuntimeError("Internal data source is not configured.")
 
-        records, extraction_summary = client.fetch_records()
+        if hasattr(client, "fetch_invoice_records"):
+            records, extraction_summary = client.fetch_invoice_records()
+        else:
+            records, extraction_summary = client.fetch_records()
+        records, invoice_behavior_summary = enrich_invoice_records_with_payment_behavior(records)
         reference_enrichment_summary = None
         try:
             account_records, _ = client.fetch_reference_account_records()
@@ -180,6 +192,9 @@ class KnowledgeBase:
         )
         if reference_enrichment_summary:
             data_summary["referenceAccountEnrichment"] = reference_enrichment_summary
+        data_summary["invoiceBehaviorEnrichment"] = invoice_behavior_summary
+        data_summary["loadedInvoiceDatasets"] = extraction_summary.get("loadedDatasets", [])
+        data_summary["unavailableInvoiceDatasets"] = extraction_summary.get("unavailableDatasets", [])
 
         if data_summary["missingRequiredFields"]:
             logger.warning(
@@ -199,6 +214,9 @@ class KnowledgeBase:
     def _rebuild_embeddings(self, data_frame):
         if data_frame is None or data_frame.empty:
             return False
+        if not EMBEDDING_SYNC_ENABLED:
+            logger.info("Embedding sync skipped; financial tables remain the source of truth for startup.")
+            return True
 
         existing_ids = self.collection.get().get("ids", [])
         if existing_ids:
@@ -385,6 +403,8 @@ class KnowledgeBase:
             focused_evidence = self.query(notes, max_results=10) or context["evidence"]
             context["evidence"] = FinancialAnalyzer.normalize_evidence_text(focused_evidence)
         context.update(FinancialAnalyzer.apply_silent_assessment(context, notes, runtime_profile=self.runtime_profile))
+        if notes:
+            context = CashflowIntelligenceDesk.apply_notes_context(context, notes)
         if notes:
             with self.cache_lock:
                 self.focused_report_context_cache[focused_cache_key] = copy.deepcopy(context)

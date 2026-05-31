@@ -103,6 +103,10 @@
         .cash-status-bar .status-value { color: #059669; }
         .cash-status-bar.status-waspada .status-value { color: #b45309; }
         .cash-status-bar.status-bahaya .status-value { color: #dc2626; }
+        .management-reaction { margin-top: 14px; border: 1px solid #dbeafe; border-radius: 16px; padding: 16px; background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%); }
+        .management-reaction h4 { margin: 0 0 8px 0; color: #1e3a8a; font-size: 1.1rem; }
+        .management-reaction p { margin: 0 0 8px 0; color: #334155; }
+        .management-reaction ul { margin: 8px 0 0 18px; color: #334155; }
         .cash-dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
         .dashboard-panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; min-height: 208px; }
         .dashboard-panel h4 { margin: 0 0 12px 0; color: #334155; font-size: 1rem; }
@@ -732,7 +736,7 @@
 
         function buildDashboardStatusClass(status) {
             const normalized = String(status || '').toLowerCase();
-            if (normalized === 'bahaya') {
+            if (normalized === 'bahaya' || normalized === 'kritis') {
                 return 'status-bahaya';
             }
             if (normalized === 'waspada') {
@@ -830,6 +834,16 @@
                     <span>${escapeHtml(line)}</span>
                 </div>
             `).join('');
+            const management = dashboard.management_interpretation || {};
+            const actionMarkup = (management.actions || []).map(action => `<li>${escapeHtml(action)}</li>`).join('');
+            const decisionRows = (dashboard.decision_queue || []).slice(0, 3).map(row => `
+                <tr>
+                    <td>${row.priority}</td>
+                    <td>${escapeHtml(row.name)}</td>
+                    <td class="numeric">${formatShortCurrency(row.amount)}</td>
+                    <td>${escapeHtml(row.action)}</td>
+                </tr>
+            `).join('');
 
             return `
                 ${buildHorizonModeStrip(horizonSnapshot, dashboard.horizon_key || modeKey || 'short_term')}
@@ -867,6 +881,12 @@
                         <span>STATUS:</span>
                         <span class="status-value">${escapeHtml(dashboard.status || '-')}</span>
                         <span>✅</span>
+                    </div>
+                    <div class="management-reaction">
+                        <h4>${escapeHtml(management.headline || 'Interpretasi manajemen belum tersedia.')}</h4>
+                        <p><strong>Makna:</strong> ${escapeHtml(management.meaning || '-')}</p>
+                        <p><strong>Keputusan:</strong> ${escapeHtml(management.decision || '-')}</p>
+                        ${actionMarkup ? `<ul>${actionMarkup}</ul>` : ''}
                     </div>
 
                     <div class="cash-dashboard-grid">
@@ -926,9 +946,23 @@
 
                         <section class="dashboard-panel">
                             <div class="alerts-panel">
-                                <h4>🚨 ALERTS &amp; RECOMMENDATIONS</h4>
+                                <h4>ALERTS &amp; RECOMMENDATIONS</h4>
                                 ${alertsMarkup || '<div class="alert-line"><span class="icon">✅</span><span>Belum ada alert tambahan.</span></div>'}
                             </div>
+                        </section>
+                        <section class="dashboard-panel">
+                            <h4>Decision Queue</h4>
+                            <table class="overdue-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Akun</th>
+                                        <th class="numeric">Nilai</th>
+                                        <th>Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${decisionRows || '<tr><td colspan="4">Belum ada antrian keputusan.</td></tr>'}</tbody>
+                            </table>
                         </section>
                     </div>
                 </div>

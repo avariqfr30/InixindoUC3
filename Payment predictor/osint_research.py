@@ -10,7 +10,7 @@ import requests
 from ollama import Client
 from pydantic import BaseModel, Field
 
-from config import DATA_DIR, LLM_MODEL, OLLAMA_HOST, SERPER_API_KEY
+from config import DATA_DIR, LLM_MODEL, OLLAMA_API_KEY, OLLAMA_HOST, OLLAMA_WEB_SEARCH_URL, SERPER_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,10 @@ class Researcher:
         )
 
     @staticmethod
+    def _is_ollama_web_search_available():
+        return bool(OLLAMA_API_KEY and OLLAMA_API_KEY.strip())
+
+    @staticmethod
     def _normalize_osint_fragment(text, max_length=240):
         normalized = re.sub(r"\s+", " ", str(text or "")).strip()
         normalized = normalized.replace("…", " ")
@@ -215,24 +219,23 @@ class Researcher:
 
     @classmethod
     def _build_entry_summary(cls, entry):
-        raw_title = str(entry.get("title") or "")
         raw_snippet = str(entry.get("snippet") or "")
         source = entry.get("domain") or "-"
         date = f" ({entry['date']})" if entry.get("date") else ""
 
-        use_title = raw_title and "..." not in raw_title and "…" not in raw_title
-        headline = cls._normalize_osint_fragment(raw_title if use_title else raw_snippet, max_length=120)
-        summary = cls._normalize_osint_fragment(raw_snippet or raw_title, max_length=220)
+        raw_title = str(entry.get("title") or "")
+        summary_source = raw_snippet or raw_title
+        summary = cls._normalize_osint_fragment(summary_source, max_length=220)
+        summary = re.sub(r"https?://\S+|www\.\S+", "", summary)
+        summary = re.sub(r"\s+", " ", summary).strip(" -;,.")
 
         lines = []
-        if headline:
-            lines.append(headline)
-        if summary and summary != headline:
-            lines.append(f"  Ringkasan: {summary}")
+        if summary:
+            lines.append(f"Ringkasan sinyal: {summary}")
         if entry.get("relevance_score"):
             display_score = min(int(entry["relevance_score"]), 12)
-            lines.append(f"  Relevansi: {display_score}/12 terhadap profil pembayaran perusahaan.")
-        lines.append(f"  Sumber: {source}{date}")
+            lines.append(f"Relevansi: {display_score}/12 terhadap profil pembayaran perusahaan.")
+        lines.append(f"Sumber ringkas: {source}{date}")
         return "\n".join(lines)
 
     @classmethod
@@ -311,8 +314,11 @@ class Researcher:
 
     @classmethod
     def _execute_serper_query(cls, query, mode="search", num_results=6):
+        def fallback_to_ollama():
+            return cls._execute_ollama_web_search(query, num_results=num_results)
+
         if not cls._is_serper_available():
-            return []
+            return fallback_to_ollama()
 
         endpoint = cls._SERPER_ENDPOINTS.get(mode, cls._SERPER_ENDPOINTS["search"])
         headers = {
@@ -332,11 +338,18 @@ class Researcher:
             body = response.json()
         except Exception as exc:
             logger.warning("Serper %s request failed: %s", mode, exc)
-            return []
+            return fallback_to_ollama()
 
         result_key = "organic" if mode == "search" else "news"
         rows = body.get(result_key, [])
 
+        normalized = cls._normalize_serper_results(rows)
+        if not normalized:
+            return fallback_to_ollama()
+        return normalized
+
+    @staticmethod
+    def _normalize_serper_results(rows):
         normalized = []
         for row in rows:
             title = (row.get("title") or "").strip()
@@ -355,6 +368,50 @@ class Researcher:
                     "link": link,
                     "domain": domain,
                     "date": date,
+                }
+            )
+
+        return normalized
+
+    @classmethod
+    def _execute_ollama_web_search(cls, query, num_results=6):
+        if not cls._is_ollama_web_search_available():
+            return []
+
+        headers = {
+            "Authorization": f"Bearer {OLLAMA_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "query": query,
+            "max_results": min(max(int(num_results or 5), 1), 10),
+        }
+
+        try:
+            response = requests.post(OLLAMA_WEB_SEARCH_URL, headers=headers, json=payload, timeout=10)
+            response.raise_for_status()
+            body = response.json()
+        except Exception as exc:
+            logger.warning("Ollama web search request failed: %s", exc)
+            return []
+
+        normalized = []
+        for row in body.get("results", []):
+            title = (row.get("title") or "").strip()
+            snippet = (row.get("content") or row.get("snippet") or "").strip()
+            link = (row.get("url") or row.get("link") or "").strip()
+
+            if not title and not snippet:
+                continue
+
+            domain = urlparse(link).netloc.replace("www.", "") if link else "-"
+            normalized.append(
+                {
+                    "title": title,
+                    "snippet": snippet,
+                    "link": link,
+                    "domain": domain,
+                    "date": "",
                 }
             )
 

@@ -15,6 +15,7 @@ WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
 sys.path.insert(0, str(WORKSPACE))
 
 from data_contract import (
+    enrich_invoice_records_with_payment_behavior,
     enrich_records_with_account_reference,
     extract_records_from_payload,
     get_internal_api_contract,
@@ -23,6 +24,7 @@ from data_contract import (
     parse_internal_api_field_map,
 )
 from internal_api_doctor import main as internal_api_doctor_main, run_production_source_doctor
+from finance_api_clients import CashOutAPIClient, InternalAPIClient
 
 
 class InternalDataContractUnitTest(unittest.TestCase):
@@ -97,6 +99,104 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas B")
         self.assertIn("15-30 hari", normalized_df.loc[0, "Catatan Historis Keterlambatan"])
         self.assertTrue(contract_summary["isReady"])
+
+    def test_invoice_training_rows_are_self_sufficient_financial_records(self):
+        invoice_records = [
+            {
+                "invoice_number": "INV/OTI/IWIN/III/21/04041",
+                "invoice_company_name": "PT Jasa Raharja Cabang Jambi",
+                "invoice_date": "2021-03-30",
+                "invoice_due_date": "2021-04-09",
+                "invoice_amount": "2475000",
+                "invoice_is_settled": "yes",
+                "invoice_paid_date": "2021-04-20",
+            }
+        ]
+
+        enriched_records, behavior_summary = enrich_invoice_records_with_payment_behavior(invoice_records)
+        raw_df = normalize_records(enriched_records)
+        normalized_df, contract_summary = normalize_financial_dataframe(raw_df)
+
+        self.assertEqual(behavior_summary["invoiceBehaviorFilled"], 1)
+        self.assertTrue(contract_summary["isReady"])
+        self.assertEqual(normalized_df.loc[0, "Periode Laporan"], "2021-03-30")
+        self.assertEqual(normalized_df.loc[0, "Tipe Partner"], "PT Jasa Raharja Cabang Jambi")
+        self.assertEqual(normalized_df.loc[0, "Layanan"], "InvoiceTraining")
+        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas B (Telat 1-14 hari)")
+        self.assertIn("dibayar 11 hari setelah jatuh tempo", normalized_df.loc[0, "Catatan Historis Keterlambatan"])
+
+    def test_internal_client_unions_training_invoice_and_reports_missing_consultant(self):
+        profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "request": {"body": {"dataset": "FinanceInvoice"}, "body_format": "form"},
+        }
+        calls = []
+
+        def fake_request(method, url, **kwargs):
+            calls.append(dict(kwargs.get("data") or {}))
+            dataset = (kwargs.get("data") or {}).get("dataset")
+            response = mock.Mock()
+            response.status_code = 200
+            response.headers = {}
+            if dataset == "InvoiceTraining":
+                response.json.return_value = {
+                    "success": True,
+                    "data": {
+                        "dataset_result": [
+                            {
+                                "invoice_number": "INV-1",
+                                "invoice_company_name": "Klien A",
+                                "invoice_date": "2026-01-03",
+                                "invoice_due_date": "2026-01-10",
+                                "invoice_amount": "1000000",
+                                "invoice_is_settled": "yes",
+                                "invoice_paid_date": "2026-01-09",
+                            }
+                        ]
+                    },
+                }
+                return response
+            if dataset == "InvoiceConsultant":
+                response.json.return_value = {"success": False, "code": 500, "message": "Dataset tidak ditemukan"}
+                return response
+            raise AssertionError(f"unexpected dataset {dataset}")
+
+        client = InternalAPIClient(source_profile=profile)
+        with mock.patch("requests.request", side_effect=fake_request):
+            records, summary = client.fetch_invoice_records()
+
+        self.assertEqual([call["dataset"] for call in calls], ["InvoiceTraining", "InvoiceConsultant"])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["_source_dataset_code"], "InvoiceTraining")
+        self.assertIn("InvoiceTraining", summary["loadedDatasets"])
+        self.assertEqual(summary["unavailableDatasets"][0]["dataset"], "InvoiceConsultant")
+
+    def test_cash_out_client_defaults_to_bank_disbursement_when_internal_api_is_configured(self):
+        source_profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "auth": {},
+            "request": {"body": {"dataset": "FinanceInvoice"}, "body_format": "form"},
+        }
+
+        client = CashOutAPIClient(source_profile=source_profile)
+
+        self.assertTrue(client.is_configured())
+        self.assertEqual(client.body, {"dataset": "BankDisbursement", "dataset_cache": "disabled"})
+        self.assertEqual(client.body_format, "form")
 
     def test_preview_source_profile_returns_normalized_contract_summary(self):
         from source_preview_service import preview_source_profile
@@ -510,8 +610,81 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(records[0]["company_category_name"], "Tipe B")
         self.assertEqual(summary["referenceDataset"], "ReferenceAccount")
         _, kwargs = request_mock.call_args
-        self.assertEqual(kwargs["data"], {"dataset": "ReferenceAccount"})
+        self.assertEqual(kwargs["data"], {"dataset": "ReferenceAccount", "dataset_cache": "disabled"})
         self.assertEqual(client.body, {"dataset": "FinanceInvoice"})
+
+    def test_internal_client_disables_apidog_cache_for_date_sensitive_dataset_clones(self):
+        profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "request": {
+                "body_format": "form",
+                "body": {"dataset": "FinanceInvoice", "dataset_cache": "enabled"},
+            },
+        }
+
+        client = InternalAPIClient(source_profile=profile)
+        invoice_client = client._clone_for_dataset("InvoiceTraining")
+
+        self.assertEqual(invoice_client.body["dataset"], "InvoiceTraining")
+        self.assertEqual(invoice_client.body["dataset_cache"], "disabled")
+        self.assertEqual(client.body["dataset_cache"], "enabled")
+
+    def test_internal_client_fetches_reference_account_with_dataset_code_replaced(self):
+        for module_name in ("core", "config", "finance_api_clients"):
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+        import finance_api_clients
+
+        fake_response = mock.Mock()
+        fake_response.status_code = 200
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "success": True,
+            "data": {"dataset_result": [{"company_id": "8592"}]},
+        }
+        profile = {
+            "type": "json_api",
+            "endpoint": {
+                "url": "https://example.com/api/Resource/dataset",
+                "method": "POST",
+                "timeout": 20,
+                "verify_ssl": True,
+                "records_key": "data.dataset_result",
+            },
+            "request": {
+                "body_format": "form",
+                "body": {
+                    "dataset": "FinanceInvoice",
+                    "dataset_code": "ClassReport",
+                },
+            },
+        }
+
+        with mock.patch("requests.request", return_value=fake_response) as request_mock:
+            client = finance_api_clients.InternalAPIClient(source_profile=profile)
+            client.fetch_reference_account_records(preview_limit=2)
+
+        _, kwargs = request_mock.call_args
+        self.assertEqual(
+            kwargs["data"],
+            {
+                "dataset": "ReferenceAccount",
+                "dataset_code": "ReferenceAccount",
+                "dataset_cache": "disabled",
+            },
+        )
+        self.assertEqual(
+            client.body,
+            {"dataset": "FinanceInvoice", "dataset_code": "ClassReport"},
+        )
 
     def test_internal_loader_uses_reference_account_to_fill_missing_payment_class(self):
         from cashflow_analysis import KnowledgeBase

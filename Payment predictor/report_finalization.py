@@ -196,6 +196,37 @@ class ReportFinalizer:
     def build_executive_summary(self, section_body, report_context, peer_sections=None):
         return ExecutiveSummaryBuilder.build(report_context, existing_body=section_body, peer_sections=peer_sections)
 
+    @staticmethod
+    def normalize_osint_block(macro_osint):
+        text = str(macro_osint or "").strip()
+        lowered = text.lower()
+        if not text or text == "-" or "tidak tersedia" in lowered or "tidak ada" in lowered:
+            return "Pembanding eksternal belum cukup sebanding, sehingga laporan mengutamakan bukti keuangan internal dan hanya memakai konteks publik sebagai catatan batas."
+        text = re.sub(r"(?i)\b(?:url|link|source)\s*=\s*[^|,\n]+", "", text)
+        text = re.sub(r"https?://\S+|www\.\S+", "", text)
+        text = re.sub(r"(?im)^\s*\d+\.\s*$", "", text)
+        text = re.sub(r"\s*\|\s*", ". ", text)
+        text = re.sub(r"\s+", " ", text).strip(" -;,.")
+        sentences = [part.strip(" -;,.") for part in re.split(r"(?<=[.!?])\s+|;\s+", text) if part.strip(" -;,.")]
+        prioritized = sorted(
+            sentences,
+            key=lambda sentence: (
+                any(term in sentence.lower() for term in ("pembayaran", "invoice", "likuiditas", "anggaran", "termin", "kas", "risiko")),
+                bool(re.search(r"\b\d+(?:[,.]\d+)?%?\b|Rp\s*\d+", sentence)),
+                len(sentence),
+            ),
+            reverse=True,
+        )
+        selected = prioritized[:3] or [text]
+        bullets = []
+        for sentence in selected:
+            words = sentence.split()
+            brief = sentence if len(words) <= 34 else " ".join(words[:34]).rstrip(" ,;:") + "."
+            if brief and brief[-1] not in ".!?":
+                brief += "."
+            bullets.append(f"- {brief}")
+        return "\n".join(["Pembanding eksternal yang dipakai sudah diringkas sebagai konteks risiko pembayaran:", *bullets])
+
     @classmethod
     def sanitize_generated_report_text(cls, raw_text):
         sanitized = str(raw_text or "")
@@ -232,7 +263,7 @@ class ReportFinalizer:
                 section_body = self.inject_subheading_block(
                     section_body,
                     "Konteks OSINT Pendukung",
-                    macro_osint or "OSINT tidak dipakai karena tidak ada konteks eksternal yang cukup sebanding dengan profil perusahaan.",
+                    self.normalize_osint_block(macro_osint),
                     before_subheading="Risiko dan Kontrol",
                 )
             elif section_title == "Analisis Prediktif Cashflow":
@@ -282,7 +313,7 @@ class ReportFinalizer:
             report_context["evidence"],
             "",
             "### Konteks OSINT Pendukung",
-            macro_osint or "OSINT tidak dipakai karena tidak ada konteks eksternal yang cukup sebanding dengan profil perusahaan.",
+            self.normalize_osint_block(macro_osint),
             "",
             "### Risiko dan Kontrol",
             report_context["controls"],

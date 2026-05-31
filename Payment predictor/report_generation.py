@@ -212,7 +212,10 @@ class ReportGenerator:
                 completeness_result["score"],
             )
 
-        final_qa = self.quality_scorer.final_qa(generated_content)
+        final_qa = self.quality_scorer.final_qa(
+            generated_content,
+            rejected_claims=report_context.get("agent_rejected_claims"),
+        )
         if not final_qa["passes"]:
             logger.warning("Final report QA failed before DOCX render: %s", final_qa["findings"])
             if not fallback_used:
@@ -231,7 +234,10 @@ class ReportGenerator:
                     analysis_payload=analysis_payload,
                 )
                 completeness_result = self.quality_scorer.score(generated_content)
-                final_qa = self.quality_scorer.final_qa(generated_content)
+                final_qa = self.quality_scorer.final_qa(
+                    generated_content,
+                    rejected_claims=report_context.get("agent_rejected_claims"),
+                )
             if not final_qa["passes"]:
                 raise ValueError("Final report QA failed: " + "; ".join(final_qa["findings"]))
 

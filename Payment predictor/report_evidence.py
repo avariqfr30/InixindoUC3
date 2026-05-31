@@ -16,6 +16,15 @@ HIDDEN_TERMS = [
 
 
 class PaymentEvidenceBuilder:
+    CONFIDENCE_PHRASES = {
+        "high": "Dasar bukti kuat",
+        "tinggi": "Dasar bukti kuat",
+        "medium": "Dasar bukti cukup",
+        "sedang": "Dasar bukti cukup",
+        "low": "Dasar bukti terbatas",
+        "rendah": "Dasar bukti terbatas",
+    }
+
     @staticmethod
     def clean(value, max_words=28):
         text = reader_safe_text(str(value or ""))
@@ -34,10 +43,9 @@ class PaymentEvidenceBuilder:
         for item in ledger or []:
             claim = cls.clean(item.get("claim") or item.get("detail") or item.get("finding"))
             allowed_use = cls.clean(item.get("allowed_use") or item.get("allowed_usage") or "Dipakai sebagai bukti pendukung.")
-            confidence = cls.clean(item.get("confidence") or "Sedang", max_words=3)
+            confidence = cls.CONFIDENCE_PHRASES.get(str(item.get("confidence") or "Sedang").strip().lower(), "Dasar bukti cukup")
             if claim:
-                suffix = f" Keyakinan: {confidence}." if confidence else ""
-                rows.append(f"- {claim}. {allowed_use}.{suffix}")
+                rows.append(f"- {claim}. {allowed_use}. {confidence}.")
             if len(rows) >= limit:
                 break
         if not rows:

@@ -425,12 +425,20 @@ class FinancialAnalyzerContextMixin:
             "| Prioritas | Fokus | Kelas | Nilai Invoice | Isu Utama | Aksi Awal | Fungsi Utama |",
             "|---:|---|---|---:|---|---|---|",
         ]
+        issue_seen = {}
         for item in priority_rows[:6]:
+            issue_key = str(item.get("issue") or "").strip().lower()
+            issue_seen[issue_key] = issue_seen.get(issue_key, 0) + 1
+            action_text = item["action"]
+            if issue_seen[issue_key] == 2:
+                action_text = f"Konfirmasi bukti pendukung dan owner keputusan untuk {item['focus']} sebelum eskalasi berikutnya."
+            elif issue_seen[issue_key] >= 3:
+                action_text = f"Kunci komitmen pembayaran tertulis untuk {item['focus']} dan jadwalkannya dalam forum follow-up mingguan."
             management_priority_lines.append(
-                f"| {item['priority']} | {item['focus']} | {item['payment_class']} | {cls._format_currency(item['invoice_value'])} | {item['issue']} | {item['action']} | {item['owner']} |"
+                f"| {item['priority']} | {item['focus']} | {item['payment_class']} | {cls._format_currency(item['invoice_value'])} | {item['issue']} | {action_text} | {item['owner']} |"
             )
             priority_table_lines.append(
-                f"| {item['priority']} | {item['focus']} | {item['owner']} | {item['issue']} | {item['action']} | {item['impact']} |"
+                f"| {item['priority']} | {item['focus']} | {item['owner']} | {item['issue']} | {action_text} | {item['impact']} |"
             )
         meeting_questions = [
             "Segmen partner mana yang paling layak mendapat eskalasi manajemen karena menggabungkan nilai invoice besar dan skor risiko tinggi?",
@@ -473,6 +481,16 @@ class FinancialAnalyzerContextMixin:
             format_currency=cls._format_currency,
             format_percentage=cls._format_percentage,
         )
+        management_interpretation = {
+            "signal": f"Cash in tertahan {cls._format_currency(delayed_invoice_value)} dengan gap base case {cls._format_currency(expected_gap_base)}.",
+            "meaning": f"Risiko utama adalah kontrol waktu pada {top_risk_partner_names}, terutama layanan {top_risk_service_names}.",
+            "decision": "Manajemen perlu memilih akun yang dieskalasi dan batas cash-out yang dijaga selama 30 hari.",
+            "actions": [
+                "Eskalasi akun D/E bernilai terbesar dengan komitmen pembayaran tertulis.",
+                "Review cash-out non-prioritas bila gap base case belum turun.",
+            ],
+            "confidence": "Cukup kuat - berbasis agregasi invoice, kelas pembayaran, dan catatan keterlambatan yang tersedia.",
+        }
 
         return {
             "financial_summary": "\n".join(financial_summary_lines),
@@ -484,6 +502,7 @@ class FinancialAnalyzerContextMixin:
             "scenario_table": "\n".join(scenario_lines),
             "priority_table": "\n".join(priority_table_lines),
             "meeting_agenda": "\n".join(agenda_lines),
+            "management_interpretation": management_interpretation,
             "base_profile": base_profile,
             "visual_prompt": cls._build_visual_prompt(class_distribution),
             **intelligence_desk_context,

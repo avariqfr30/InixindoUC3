@@ -1,26 +1,44 @@
+import re
+
+from reader_safe_text import reader_safe_text
+
+
 class CashflowIntelligenceDesk:
     """Builds a hidden, source-bound analyst brief for report generation."""
 
     ROLE_ORDER = (
         "Invoice Evidence Analyst",
+        "Context Analyst",
         "Collection Risk Analyst",
         "Forecast Analyst",
         "Control Reviewer",
         "Executive Editor",
     )
+    PASS_IDS = {
+        "Invoice Evidence Analyst": "invoice_evidence",
+        "Context Analyst": "context_focus",
+        "Collection Risk Analyst": "collection_risk",
+        "Forecast Analyst": "forecast_pressure",
+        "Control Reviewer": "claim_control",
+        "Executive Editor": "final_editor",
+    }
 
     @classmethod
     def empty_context(cls):
+        rejected_claims = [
+            "Pola historis tidak boleh disimpulkan tanpa record invoice.",
+            "Prioritas akun tidak boleh dibuat dari asumsi kosong.",
+        ]
         return {
             "agent_evidence_ledger": [],
             "agent_evidence_brief": (
                 "## Control Reviewer\n"
                 "- Jangan klaim pola cashflow, penyebab keterlambatan, atau prioritas penagihan karena data invoice internal masih kosong."
             ),
-            "agent_rejected_claims": [
-                "Pola historis tidak boleh disimpulkan tanpa record invoice.",
-                "Prioritas akun tidak boleh dibuat dari asumsi kosong.",
-            ],
+            "agent_rejected_claims": rejected_claims,
+            "agent_desk_strategy": {"model_mode": "single_model_multi_pass", "visible_to_reader": False},
+            "agent_desk_passes": [],
+            "final_editor_context": cls._build_final_editor_context([], rejected_claims),
         }
 
     @classmethod
@@ -142,11 +160,86 @@ class CashflowIntelligenceDesk:
             )
         )
 
+        desk_passes = cls._build_desk_passes(ledger, rejected_claims)
         return {
             "agent_evidence_ledger": ledger,
             "agent_evidence_brief": cls._format_brief(ledger, rejected_claims),
             "agent_rejected_claims": rejected_claims,
+            "agent_desk_strategy": {
+                "model_mode": "single_model_multi_pass",
+                "visible_to_reader": False,
+                "pass_count": len(desk_passes),
+            },
+            "agent_desk_passes": desk_passes,
+            "final_editor_context": cls._build_final_editor_context(ledger, rejected_claims),
         }
+
+    @classmethod
+    def apply_notes_context(cls, context, notes):
+        notes = cls._clean_note(notes)
+        if not notes:
+            return context
+        enriched = dict(context or {})
+        ledger = list(enriched.get("agent_evidence_ledger") or [])
+        rejected_claims = list(enriched.get("agent_rejected_claims") or [])
+        unsupported = cls._unsupported_note_terms(enriched, notes)
+        ledger.append(
+            cls._card(
+                role="Context Analyst",
+                claim=(
+                    "Fokus pembacaan laporan perlu menguji catatan pengguna berikut terhadap data invoice, "
+                    f"bukan menyalinnya sebagai fakta baru: {notes}."
+                ),
+                source_detail="Catatan pengguna yang sudah dibersihkan dari label teknis sumber.",
+                confidence="medium",
+                allowed_use="Penajaman angle ringkasan, prioritas tindakan, dan caveat manajemen.",
+            )
+        )
+        rejected_claims.append(
+            "Jangan menjadikan catatan pengguna sebagai fakta invoice bila tidak konsisten dengan ledger atau agregasi internal."
+        )
+        for term in unsupported:
+            rejected_claims.append(f"Jangan menyatakan {term} sebagai prioritas karena tidak terbaca pada agregasi internal.")
+        enriched["agent_evidence_ledger"] = ledger
+        enriched["agent_rejected_claims"] = rejected_claims
+        enriched["agent_evidence_brief"] = cls._format_brief(ledger, rejected_claims)
+        desk_passes = cls._build_desk_passes(ledger, rejected_claims)
+        enriched["agent_desk_passes"] = desk_passes
+        enriched["agent_desk_strategy"] = {
+            "model_mode": "single_model_multi_pass",
+            "visible_to_reader": False,
+            "pass_count": len(desk_passes),
+        }
+        enriched["final_editor_context"] = cls._build_final_editor_context(ledger, rejected_claims)
+        return enriched
+
+    @staticmethod
+    def _unsupported_note_terms(context, notes):
+        base_profile = (context or {}).get("base_profile") or {}
+        known = " ".join(
+            str(item or "")
+            for item in (base_profile.get("top_risk_partners") or []) + (base_profile.get("top_risk_services") or [])
+        ).lower()
+        candidates = re.findall(r"\b(?:partner|layanan)\s+([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3})", str(notes or ""))
+        unsupported = []
+        for candidate in candidates:
+            candidate = candidate.strip(" .,;:")
+            if candidate and candidate.lower() not in known and candidate not in unsupported:
+                unsupported.append(candidate)
+        return unsupported[:4]
+
+    @staticmethod
+    def _clean_note(value, max_words=44):
+        text = str(value or "")
+        text = re.sub(r"https?://\S+", "", text)
+        text = re.sub(r"/api/\S+", "", text)
+        text = re.sub(r"source\s*=", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b(?:Internal API|APIDog|endpoint|dataset(?:_code| code)?)\b", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip(" -;,.")
+        words = text.split()
+        if len(words) > max_words:
+            text = " ".join(words[:max_words]).rstrip(" ,;:") + "."
+        return text
 
     @staticmethod
     def _card(role, claim, source_detail, confidence, allowed_use, must_caveat=False):
@@ -202,3 +295,88 @@ class CashflowIntelligenceDesk:
         for claim in rejected_claims:
             lines.append(f"- {claim}")
         return "\n".join(lines).strip()
+
+    @classmethod
+    def _build_desk_passes(cls, ledger, rejected_claims):
+        passes = []
+        for role in cls.ROLE_ORDER:
+            role_cards = [item for item in ledger if item.get("agent") == role]
+            if not role_cards:
+                continue
+            passes.append(
+                {
+                    "pass_id": cls.PASS_IDS.get(role, role.lower().replace(" ", "_")),
+                    "role": role,
+                    "claims": [
+                        {
+                            "claim": item.get("claim", ""),
+                            "source_detail": item.get("source_detail", ""),
+                            "confidence": item.get("confidence", "medium"),
+                            "allowed_use": item.get("allowed_use", ""),
+                            "must_caveat": bool(item.get("must_caveat")),
+                        }
+                        for item in role_cards
+                    ],
+                }
+            )
+        if rejected_claims:
+            passes.append(
+                {
+                    "pass_id": "rejected_claim_gate",
+                    "role": "Control Reviewer",
+                    "claims": [{"claim": claim, "source_detail": "Rejected claim gate", "confidence": "high"} for claim in rejected_claims],
+                }
+            )
+        return passes
+
+    @classmethod
+    def _build_final_editor_context(cls, ledger, rejected_claims, max_claims=5, max_rejections=6):
+        allowed_lines = []
+        for item in ledger or []:
+            claim = cls._reader_safe_prompt_line(item.get("claim"))
+            allowed_use = cls._reader_safe_prompt_line(item.get("allowed_use"))
+            if not claim:
+                continue
+            if allowed_use:
+                allowed_lines.append(f"- {claim} Pakai untuk {allowed_use}.")
+            else:
+                allowed_lines.append(f"- {claim}.")
+            if len(allowed_lines) >= max_claims:
+                break
+
+        rejected_lines = []
+        for claim in rejected_claims or []:
+            cleaned = cls._reader_safe_prompt_line(claim)
+            if cleaned:
+                rejected_lines.append(f"- {cleaned}.")
+            if len(rejected_lines) >= max_rejections:
+                break
+
+        if not allowed_lines:
+            allowed_lines.append("- Belum ada klaim angka atau prioritas yang boleh dipakai tanpa caveat.")
+        if not rejected_lines:
+            rejected_lines.append("- Jangan menambah penyebab, angka, atau prioritas yang tidak ada pada bukti internal.")
+
+        lines = [
+            "### Konteks editor akhir",
+            "Klaim yang boleh dipakai:",
+            *allowed_lines,
+            "",
+            "Klaim yang wajib ditolak:",
+            *rejected_lines,
+            "",
+            "Instruksi penyuntingan akhir:",
+            "- Ubah semua konteks internal menjadi Bahasa Indonesia bisnis yang alami.",
+            "- Jangan tampilkan mekanisme penelaahan, daftar penolakan, atau label proses internal pada laporan akhir.",
+        ]
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _reader_safe_prompt_line(value, max_words=34):
+        text = reader_safe_text(str(value or ""))
+        text = re.sub(r"[#*`>|_]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip(" -;,.")
+        words = text.split()
+        if len(words) > max_words:
+            text = " ".join(words[:max_words]).rstrip(" ,;:") + "."
+        return text

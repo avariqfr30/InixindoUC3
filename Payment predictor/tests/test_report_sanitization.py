@@ -11,6 +11,39 @@ sys.path.insert(0, str(WORKSPACE))
 
 
 class ReportSanitizationTest(unittest.TestCase):
+    def test_external_osint_entries_are_synthesized_before_report_use(self):
+        from osint_research import Researcher
+
+        summary = Researcher._build_entry_summary(
+            {
+                "title": "Raw payment article title",
+                "snippet": "Pelaku usaha jasa menghadapi risiko likuiditas ketika pembayaran invoice dan termin proyek mundur dari jadwal.",
+                "domain": "example.com",
+                "date": "2026",
+                "relevance_score": 9,
+            }
+        )
+
+        self.assertIn("Ringkasan sinyal:", summary)
+        self.assertIn("risiko likuiditas", summary)
+        self.assertIn("Sumber ringkas: example.com (2026)", summary)
+        self.assertNotIn("https://", summary)
+        self.assertNotIn("url=", summary)
+        self.assertNotIn("Raw payment article title\n", summary)
+
+    def test_normalize_osint_block_summarizes_raw_evidence(self):
+        from report_finalization import ReportFinalizer
+
+        block = ReportFinalizer.normalize_osint_block(
+            "1.\nRaw title | Pembayaran invoice BUMN mundur karena approval termin dan kelengkapan BAST. | source=example.com | url=https://example.com/payments"
+        )
+
+        self.assertIn("Pembanding eksternal yang dipakai sudah diringkas", block)
+        self.assertIn("Pembayaran invoice", block)
+        self.assertNotIn("url=", block)
+        self.assertNotIn("source=", block)
+        self.assertNotIn("https://", block)
+
     def test_report_structure_contract_is_shared_with_config_sequence(self):
         from config import REPORT_SECTION_SEQUENCE
         from report_structure import REPORT_STRUCTURE
@@ -133,6 +166,100 @@ class ReportSanitizationTest(unittest.TestCase):
         )
         self.assertIn("Jangan klaim", context["agent_evidence_brief"])
 
+    def test_cashflow_intelligence_desk_builds_role_separated_multi_pass_context(self):
+        from core import FinancialAnalyzer
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "periode": "2026-01",
+                    "partner": "BUMN A",
+                    "layanan": "Pelatihan SPBE",
+                    "kelas pembayaran": "E",
+                    "nilai invoice": "Rp 900.000.000",
+                    "catatan keterlambatan": "BAST belum lengkap dan approval direksi klien belum turun.",
+                }
+            ]
+        )
+
+        context = FinancialAnalyzer.build_report_context(frame, data_mode="internal")
+
+        self.assertIn("agent_desk_passes", context)
+        self.assertGreaterEqual(len(context["agent_desk_passes"]), 4)
+        self.assertEqual(context["agent_desk_passes"][0]["pass_id"], "invoice_evidence")
+        self.assertTrue(all(item["claims"] for item in context["agent_desk_passes"]))
+        self.assertIn("final_editor_context", context)
+        self.assertIn("Klaim yang boleh dipakai", context["final_editor_context"])
+        self.assertIn("Klaim yang wajib ditolak", context["final_editor_context"])
+        for forbidden in ["Invoice Evidence Analyst", "Control Reviewer", "Executive Editor", "agent", "workflow"]:
+            self.assertNotIn(forbidden, context["final_editor_context"])
+
+    def test_cashflow_intelligence_desk_synthesizes_notes_without_exposing_raw_helpers(self):
+        from cashflow_intelligence_desk import CashflowIntelligenceDesk
+
+        context = {
+            "agent_evidence_ledger": [],
+            "agent_evidence_brief": "## Control Reviewer\n- Jangan klaim penyebab eksternal tanpa dukungan.",
+            "agent_rejected_claims": [],
+        }
+
+        enriched = CashflowIntelligenceDesk.apply_notes_context(
+            context,
+            "Internal API endpoint source=/api/Resource/dataset meminta fokus pada partner BUMN A dan approval.",
+        )
+
+        self.assertIn("partner BUMN A", enriched["agent_evidence_brief"])
+        self.assertIn("approval", enriched["agent_evidence_brief"].lower())
+        self.assertIn("Catatan pengguna", enriched["agent_evidence_ledger"][0]["source_detail"])
+        for forbidden in ["Internal API", "endpoint", "source=", "/api/Resource/dataset", "Context Intelligence Desk"]:
+            self.assertNotIn(forbidden, enriched["agent_evidence_brief"])
+
+    def test_cashflow_intelligence_desk_rejects_unsupported_note_specific_claims(self):
+        from cashflow_intelligence_desk import CashflowIntelligenceDesk
+
+        context = {
+            "agent_evidence_ledger": [],
+            "agent_evidence_brief": "",
+            "agent_rejected_claims": [],
+            "base_profile": {
+                "top_risk_partners": ["BUMN A"],
+                "top_risk_services": ["Pelatihan"],
+            },
+        }
+
+        enriched = CashflowIntelligenceDesk.apply_notes_context(
+            context,
+            "Fokuskan klaim pada partner Fiktif Z dan layanan Integrasi ERP.",
+        )
+
+        rejected_text = "\n".join(enriched["agent_rejected_claims"])
+        self.assertIn("Fiktif Z", rejected_text)
+        self.assertIn("Integrasi ERP", rejected_text)
+        self.assertIn("tidak terbaca pada agregasi internal", rejected_text)
+
+    def test_final_qa_rejects_report_that_violates_rejected_claim_gate(self):
+        from report_quality import ReportQualityScorer
+
+        report = "\n\n".join(
+            [
+                "# Ringkasan Eksekutif\n### Ringkasan Isi Laporan\nFiktif Z menjadi prioritas utama minggu ini karena dianggap paling kritis.",
+                "# Analisis Deskriptif Cashflow\nIsi cukup panjang tentang portofolio tagihan dan bukti operasional yang tersedia untuk manajemen.",
+                "# Analisis Diagnostik Cashflow\nIsi cukup panjang tentang pola hambatan penagihan serta catatan bukti yang perlu ditindaklanjuti.",
+                "# Analisis Prediktif Cashflow\nIsi cukup panjang tentang proyeksi saldo kas akhir, skenario, dan asumsi yang digunakan.",
+                "# Rekomendasi Preskriptif\nIsi cukup panjang tentang tindakan penagihan, owner bisnis, dan dampak yang diharapkan.",
+                "# Prioritas Tindakan 30 Hari\nIsi cukup panjang tentang prioritas tindakan, jadwal tindak lanjut, dan bukti pelaksanaan.",
+            ]
+        )
+
+        result = ReportQualityScorer().final_qa(
+            report,
+            rejected_claims=["Jangan menyatakan Fiktif Z sebagai prioritas karena tidak terbaca pada agregasi internal."],
+        )
+
+        self.assertFalse(result["passes"])
+        self.assertIn("rejected_claim", result["categories"])
+        self.assertTrue(any("Fiktif Z" in finding for finding in result["findings"]))
+
     def test_report_prompt_includes_hidden_intelligence_desk_brief(self):
         from core import ReportGenerator
 
@@ -149,6 +276,11 @@ class ReportSanitizationTest(unittest.TestCase):
                 "## Control Reviewer\n"
                 "- Jangan klaim penyebab eksternal tanpa OSINT pembanding."
             ),
+            "final_editor_context": (
+                "### Konteks editor akhir\n"
+                "- Klaim yang boleh dipakai: Rp 900.000.000 tertahan pada BUMN A.\n"
+                "- Klaim yang wajib ditolak: penyebab eksternal tanpa OSINT pembanding."
+            ),
         }
 
         prompt = generator._build_report_prompt(
@@ -163,6 +295,8 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertIn("CASHFLOW INTELLIGENCE DESK EVIDENCE", prompt)
         self.assertIn("Invoice Evidence Analyst", prompt)
         self.assertIn("Jangan klaim penyebab eksternal", prompt)
+        self.assertIn("Konteks editor akhir", prompt)
+        self.assertIn("Klaim yang wajib ditolak", prompt)
 
     def test_readiness_assessment_accepts_runtime_profile_without_config_import_coupling(self):
         from core import FinancialAnalyzer
@@ -248,6 +382,83 @@ class ReportSanitizationTest(unittest.TestCase):
 
         self.assertEqual(filtered[0]["domain"], "lkpp.go.id")
         self.assertGreater(filtered[0]["relevance_score"], filtered[1]["relevance_score"])
+
+    def test_osint_uses_ollama_web_search_when_serper_key_missing(self):
+        import osint_research
+        from core import Researcher
+        from unittest import mock
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "results": [
+                        {
+                            "title": "Termin pembayaran penyedia pemerintah",
+                            "url": "https://lkpp.go.id/termin-pembayaran",
+                            "content": "Vendor pelatihan pemerintah menunggu BAST dan approval invoice termin.",
+                        }
+                    ]
+                }
+
+        with mock.patch.object(osint_research, "SERPER_API_KEY", ""), mock.patch.object(
+            osint_research, "OLLAMA_API_KEY", "test-ollama-key", create=True
+        ), mock.patch.object(
+            osint_research,
+            "OLLAMA_WEB_SEARCH_URL",
+            "https://ollama.test/api/web_search",
+            create=True,
+        ), mock.patch.object(osint_research.requests, "post", return_value=FakeResponse()) as post_mock:
+            results = Researcher._execute_serper_query("invoice termin pemerintah", num_results=3)
+
+        self.assertEqual(results[0]["title"], "Termin pembayaran penyedia pemerintah")
+        self.assertEqual(results[0]["snippet"], "Vendor pelatihan pemerintah menunggu BAST dan approval invoice termin.")
+        self.assertEqual(results[0]["link"], "https://lkpp.go.id/termin-pembayaran")
+        self.assertEqual(results[0]["domain"], "lkpp.go.id")
+        post_mock.assert_called_once()
+        self.assertEqual(post_mock.call_args.args[0], "https://ollama.test/api/web_search")
+        self.assertEqual(post_mock.call_args.kwargs["json"], {"query": "invoice termin pemerintah", "max_results": 3})
+
+    def test_osint_falls_back_to_ollama_web_search_when_serper_request_fails(self):
+        import osint_research
+        from core import Researcher
+        from unittest import mock
+
+        class FakeOllamaResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "results": [
+                        {
+                            "title": "Approval invoice BUMN",
+                            "url": "https://kontan.co.id/approval-invoice-bumn",
+                            "content": "Pembayaran invoice vendor BUMN tertunda karena approval dokumen berlapis.",
+                        }
+                    ]
+                }
+
+        def fake_post(url, **kwargs):
+            if "google.serper.dev" in url:
+                raise osint_research.requests.RequestException("serper down")
+            return FakeOllamaResponse()
+
+        with mock.patch.object(osint_research, "SERPER_API_KEY", "test-serper-key"), mock.patch.object(
+            osint_research, "OLLAMA_API_KEY", "test-ollama-key", create=True
+        ), mock.patch.object(
+            osint_research,
+            "OLLAMA_WEB_SEARCH_URL",
+            "https://ollama.test/api/web_search",
+            create=True,
+        ), mock.patch.object(osint_research.requests, "post", side_effect=fake_post) as post_mock:
+            results = Researcher._execute_serper_query("approval invoice BUMN", num_results=2)
+
+        self.assertEqual(results[0]["title"], "Approval invoice BUMN")
+        self.assertEqual(results[0]["domain"], "kontan.co.id")
+        self.assertEqual(post_mock.call_count, 2)
 
     def test_operational_snapshot_includes_cash_in_and_cash_out(self):
         from core import ReportGenerator
@@ -375,6 +586,49 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertEqual(table.alignment, 1)
         self.assertTrue(table.rows[0].cells[0].paragraphs[0].runs[0].bold)
         self.assertLessEqual(table.rows[1].cells[0].paragraphs[0].paragraph_format.space_after.pt, 2)
+
+    def test_priority_table_varies_repeated_issue_actions(self):
+        from core import FinancialAnalyzer
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "periode": "2026-01",
+                    "partner": "BUMN A",
+                    "layanan": "Pelatihan",
+                    "kelas pembayaran": "E",
+                    "nilai invoice": "Rp 900.000.000",
+                    "catatan keterlambatan": "BAST belum lengkap dan approval belum turun.",
+                },
+                {
+                    "periode": "2026-01",
+                    "partner": "BUMN B",
+                    "layanan": "Pelatihan",
+                    "kelas pembayaran": "E",
+                    "nilai invoice": "Rp 800.000.000",
+                    "catatan keterlambatan": "BAST belum lengkap dan approval belum turun.",
+                },
+                {
+                    "periode": "2026-01",
+                    "partner": "BUMN C",
+                    "layanan": "Pelatihan",
+                    "kelas pembayaran": "E",
+                    "nilai invoice": "Rp 700.000.000",
+                    "catatan keterlambatan": "BAST belum lengkap dan approval belum turun.",
+                },
+            ]
+        )
+
+        context = FinancialAnalyzer.build_report_context(frame, data_mode="internal")
+        rows = [
+            line.split("|")
+            for line in context["priority_table"].splitlines()
+            if line.startswith("| ") and not line.startswith("|---") and "Prioritas" not in line
+        ]
+        actions = [row[5].strip() for row in rows]
+
+        self.assertGreaterEqual(len(actions), 3)
+        self.assertGreater(len(set(actions)), 1)
 
     def test_docx_body_text_is_left_aligned_and_ordered_lists_restart(self):
         from docx import Document

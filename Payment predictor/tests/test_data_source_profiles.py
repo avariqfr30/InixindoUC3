@@ -108,13 +108,13 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertEqual(profiles["production"]["endpoint"]["url"], "https://example.com/api/Resource/dataset")
         self.assertEqual(profiles["production"]["request"]["body"]["dataset"], "FinanceInvoice")
 
-    def test_internal_api_profile_template_uses_finance_invoice_apidog_dataset(self):
+    def test_internal_api_profile_template_uses_invoice_training_apidog_dataset(self):
         profile = build_internal_api_profile_template()
 
         self.assertEqual(profile["endpoint"]["method"], "POST")
         self.assertEqual(profile["endpoint"]["records_key"], "data.dataset_result")
         self.assertEqual(profile["request"]["body_format"], "form")
-        self.assertEqual(profile["request"]["body"], {"dataset": "FinanceInvoice"})
+        self.assertEqual(profile["request"]["body"], {"dataset": "InvoiceTraining"})
         self.assertIn("invoice_value", profile["field_map"])
 
     def test_active_source_state_roundtrip(self):

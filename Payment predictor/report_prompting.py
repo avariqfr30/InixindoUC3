@@ -52,15 +52,19 @@ class ReportPromptBuilder:
         persona = PERSONAS.get("default", "Chief Financial Officer")
         section_scope, section_headings = self.build_section_scope(active_sections)
         structured_context = self.format_structured_context_block(analysis_context)
+        agent_evidence_brief = report_context.get(
+            "agent_evidence_brief",
+            "Tidak ada brief quality-control tambahan.",
+        )
+        final_editor_context = str(report_context.get("final_editor_context") or "").strip()
+        if final_editor_context:
+            agent_evidence_brief = f"{agent_evidence_brief}\n\n{final_editor_context}"
         return FINANCE_SYSTEM_PROMPT.format(
             persona=persona,
             financial_summary=report_context["financial_summary"],
             management_brief=report_context["management_brief"],
             internal_evidence=report_context["evidence"],
-            agent_evidence_brief=report_context.get(
-                "agent_evidence_brief",
-                "Tidak ada brief quality-control tambahan.",
-            ),
+            agent_evidence_brief=agent_evidence_brief,
             industry_trends=macro_osint,
             user_focus=(notes or "Tidak ada fokus tambahan."),
             cashflow_context=(structured_context or "Tidak ada konteks forecast terstruktur tambahan."),
