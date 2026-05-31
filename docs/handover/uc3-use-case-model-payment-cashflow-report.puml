@@ -1,0 +1,55 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+actor "User Finance" as Finance
+actor "Manajemen" as Mgmt
+actor "Admin / Operator Data" as Admin
+actor "Internal API / APIDog" as APIDog
+actor "ReferenceAccount Dataset" as RefAccount
+actor "Ollama / LLM" as LLM
+actor "Monitoring / Infra" as Infra
+rectangle "UC3 - Payment/Cashflow Report" {
+  usecase "Login dan buka
+dashboard cashflow" as UC_Login
+  usecase "Validasi sumber
+data internal" as UC_Validate
+  usecase "Aktifkan dataset
+FinanceInvoice" as UC_Activate
+  usecase "Refresh data
+invoice" as UC_Refresh
+  usecase "Enrichment kelas
+pembayaran akun" as UC_Enrich
+  usecase "Lihat forecast
+cashflow" as UC_Forecast
+  usecase "Buka drilldown
+overdue dan risiko" as UC_Drilldown
+  usecase "Generate laporan
+manajemen DOCX" as UC_Report
+  usecase "Pantau job dan
+unduh laporan" as UC_Download
+  usecase "Cek health dan
+readiness" as UC_Health
+}
+Finance --> UC_Login
+Finance --> UC_Forecast
+Finance --> UC_Drilldown
+Finance --> UC_Report
+Finance --> UC_Download
+Mgmt --> UC_Forecast
+Mgmt --> UC_Report
+Admin --> UC_Validate
+Admin --> UC_Activate
+Admin --> UC_Refresh
+APIDog --> UC_Validate
+APIDog --> UC_Activate
+APIDog --> UC_Refresh
+RefAccount --> UC_Enrich
+LLM --> UC_Report
+Infra --> UC_Health
+UC_Refresh .> UC_Activate : <<include>>
+UC_Refresh .> UC_Enrich : <<include>>
+UC_Forecast .> UC_Refresh : <<include>>
+UC_Report .> UC_Forecast : <<include>>
+UC_Report .> UC_Drilldown : <<include>>
+UC_Download .> UC_Report : <<extend>>
+@enduml

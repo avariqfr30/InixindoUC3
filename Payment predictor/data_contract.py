@@ -343,13 +343,26 @@ def _invoice_behavior_from_dates(record):
     paid_date = _parse_invoice_date(record.get("invoice_paid_date") or record.get("paid_date"))
     settled_text = _value_to_text(record.get("invoice_is_settled") or record.get("is_settled")).lower()
     is_settled = settled_text in {"yes", "y", "true", "1", "settled", "paid", "lunas"}
+    is_unsettled = settled_text in {
+        "no",
+        "n",
+        "false",
+        "0",
+        "unsettled",
+        "unpaid",
+        "not paid",
+        "belum lunas",
+        "belumlunas",
+    }
     if due_date is None:
         return "", ""
 
     if paid_date is None:
         if is_settled:
             return "Kelas C (tanggal bayar tidak tercatat)", "Invoice tercatat selesai, tetapi tanggal bayar belum tersedia."
-        return "Kelas E (belum lunas)", "Invoice belum tercatat lunas pada data internal."
+        if is_unsettled:
+            return "Kelas E (belum lunas)", "Invoice belum tercatat lunas pada data internal."
+        return "", ""
 
     delay_days = int((paid_date.normalize() - due_date.normalize()).days)
     if delay_days <= 0:

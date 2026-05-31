@@ -65,7 +65,7 @@ Layer ini menjelaskan komponen teknologi yang mendukung interface, model, data, 
 
 | Sumber Data | Peran |
 |---|---|
-| Demo CSV `data/db.csv` | Dataset fallback dan smoke test lokal/server. |
+| Cache SQLite / data internal lokal | Penyimpanan operasional untuk data finansial yang sudah dinormalisasi dan siap dipakai aplikasi. |
 | SQLite finance DB | Menyimpan dataset aktif yang sudah dinormalisasi. |
 | Internal API / APIDog | Sumber produksi untuk dataset finansial ketika tersedia. |
 | `ReferenceAccount` | Sumber referensi akun untuk enrichment kelas pembayaran berdasarkan `company_id` atau nama akun. |
@@ -147,7 +147,7 @@ flowchart TB
         end
 
         subgraph DATA["Data"]
-            D1["Demo CSV / SQLite"]
+            D1["Cache SQLite / Data Internal"]
             D2["Internal API Dataset"]
             D3["ReferenceAccount"]
             D4["ChromaDB Evidence"]

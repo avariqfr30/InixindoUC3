@@ -25,6 +25,7 @@ from data_contract import (
 )
 from internal_api_doctor import main as internal_api_doctor_main, run_production_source_doctor
 from finance_api_clients import CashOutAPIClient, InternalAPIClient
+from financial_analyzer import FinancialAnalyzer
 
 
 class InternalDataContractUnitTest(unittest.TestCase):
@@ -124,6 +125,51 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(normalized_df.loc[0, "Layanan"], "InvoiceTraining")
         self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas B (Telat 1-14 hari)")
         self.assertIn("dibayar 11 hari setelah jatuh tempo", normalized_df.loc[0, "Catatan Historis Keterlambatan"])
+
+    def test_missing_paid_date_without_settlement_status_does_not_become_high_risk(self):
+        invoice_records = [
+            {
+                "invoice_number": "INV-DRAFT-001",
+                "invoice_company_name": "PT Contoh",
+                "invoice_date": "2026-05-01",
+                "invoice_due_date": "2026-05-30",
+                "invoice_amount": "Rp 200.000.000",
+            }
+        ]
+
+        enriched_records, behavior_summary = enrich_invoice_records_with_payment_behavior(invoice_records)
+        raw_df = normalize_records(enriched_records)
+        normalized_df, contract_summary = normalize_financial_dataframe(raw_df)
+        context = FinancialAnalyzer.build_report_context(normalized_df)
+
+        self.assertEqual(behavior_summary["invoiceBehaviorFilled"], 0)
+        self.assertFalse(contract_summary["isReady"])
+        self.assertIn("payment_class", contract_summary["missingRequiredFields"])
+        self.assertNotIn("Kelas Pembayaran", normalized_df.columns)
+        self.assertEqual(context["base_profile"]["delayed_invoices"], 0)
+        self.assertEqual(context["base_profile"]["high_risk_invoices"], 0)
+
+    def test_explicit_unsettled_invoice_still_becomes_high_risk(self):
+        invoice_records = [
+            {
+                "invoice_number": "INV-OPEN-001",
+                "invoice_company_name": "PT Contoh",
+                "invoice_date": "2026-05-01",
+                "invoice_due_date": "2026-05-30",
+                "invoice_is_settled": "no",
+                "invoice_amount": "Rp 200.000.000",
+            }
+        ]
+
+        enriched_records, behavior_summary = enrich_invoice_records_with_payment_behavior(invoice_records)
+        raw_df = normalize_records(enriched_records)
+        normalized_df, _ = normalize_financial_dataframe(raw_df)
+        context = FinancialAnalyzer.build_report_context(normalized_df)
+
+        self.assertEqual(behavior_summary["invoiceBehaviorFilled"], 1)
+        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas E (belum lunas)")
+        self.assertEqual(context["base_profile"]["delayed_invoices"], 1)
+        self.assertEqual(context["base_profile"]["high_risk_invoices"], 1)
 
     def test_internal_client_unions_training_invoice_and_reports_missing_consultant(self):
         profile = {

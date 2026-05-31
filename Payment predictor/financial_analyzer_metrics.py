@@ -178,7 +178,7 @@ class FinancialAnalyzerMetricsMixin:
         for class_name, score in cls.CLASS_SCORE_MAP.items():
             if class_name in text:
                 return class_name.upper().replace("KELAS", "Kelas"), score
-        return "Tidak Diketahui", 3
+        return "Tidak Diketahui", 0
 
     @staticmethod
     def _format_currency(amount):
