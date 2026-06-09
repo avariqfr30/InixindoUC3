@@ -111,6 +111,7 @@
         .dashboard-panel { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; min-height: 208px; }
         .dashboard-panel h4 { margin: 0 0 12px 0; color: #334155; font-size: 1rem; }
         .dashboard-chart-body { height: 150px; position: relative; }
+        .dashboard-chart-body.balance-projection-body { height: auto; min-height: 198px; }
         .dashboard-horizon-block { margin-bottom: 14px; }
         .dashboard-horizon-title { margin: 0 0 10px 0; color: #0f172a; font-size: 0.95rem; font-weight: 800; letter-spacing: 0.02em; }
         .dashboard-horizon-strip { position: relative; overflow: hidden; border: 2px solid #94a3b8; background: linear-gradient(90deg, #d9f99d 0%, #dcfce7 100%); clip-path: polygon(0 12%, 88% 12%, 88% 0, 100% 50%, 88% 100%, 88% 88%, 0 88%); padding: 12px 44px 12px 12px; }
@@ -120,12 +121,6 @@
         .dashboard-horizon-mode ul { margin: 0; padding-left: 18px; color: #1f2937; font-size: 0.88rem; line-height: 1.35; }
         .dashboard-horizon-mode.active { background: rgba(255,255,255,0.62); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.45); }
         .dashboard-active-mode { margin-top: 10px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.84rem; font-weight: 700; }
-        .runway-zone-chart { position: relative; height: 100%; border-radius: 14px; background: linear-gradient(180deg, #86efac 0%, #bbf7d0 30%, #fef08a 66%, #fdba74 100%); overflow: hidden; }
-        .runway-zone-chart::before { content: ''; position: absolute; left: 0; right: 0; top: 20%; border-top: 2px dashed rgba(255,255,255,0.7); }
-        .runway-zone-chart::after { content: ''; position: absolute; left: 0; right: 0; top: 60%; border-top: 2px dashed rgba(255,255,255,0.7); }
-        .runway-marker { position: absolute; left: 8%; right: 8%; height: 22px; background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%); border-radius: 999px; display: flex; justify-content: flex-end; align-items: center; padding-right: 12px; color: white; font-weight: 700; font-size: 0.88rem; box-shadow: 0 8px 18px rgba(34,197,94,0.25); }
-        .runway-threshold { position: absolute; bottom: 18%; right: 12%; border-right: 2px dashed #ef4444; height: 45%; }
-        .runway-axis { display: flex; justify-content: space-between; color: #64748b; font-size: 0.8rem; margin-top: 10px; }
         .coverage-bars { display: flex; align-items: end; gap: 12px; height: 145px; padding-top: 8px; }
         .coverage-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; }
         .coverage-bar { width: 56px; border-radius: 12px 12px 6px 6px; position: relative; min-height: 24px; display: flex; align-items: flex-start; justify-content: center; padding-top: 8px; font-weight: 700; color: #334155; background: linear-gradient(180deg, #4ade80 0%, #16a34a 100%); }
@@ -140,7 +135,13 @@
         .sparkline-area { fill: rgba(96, 165, 250, 0.18); }
         .sparkline-line { fill: none; stroke: #2563eb; stroke-width: 3; }
         .sparkline-point { fill: white; stroke: #2563eb; stroke-width: 3; }
+        .sparkline-point { cursor: pointer; }
+        .sparkline-point.active { fill: #2563eb; stroke: #1d4ed8; }
         .sparkline-axis-labels { display: flex; justify-content: space-between; color: #64748b; font-size: 0.78rem; margin-top: 6px; }
+        .balance-detail-row { margin-top: 10px; display: grid; grid-template-columns: 48px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; border-top: 1px dashed #dbe4ef; padding-top: 10px; color: #334155; font-size: 0.84rem; }
+        .balance-detail-row strong { color: #0f172a; }
+        .balance-detail-row .positive { color: #047857; }
+        .balance-detail-row .negative { color: #b91c1c; }
         .delay-list { display: grid; gap: 12px; }
         .delay-row { display: grid; grid-template-columns: 80px minmax(0, 1fr) 52px; gap: 10px; align-items: center; font-size: 0.9rem; }
         .delay-bar-track { height: 18px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
@@ -178,11 +179,12 @@
         <div class="app-header">
             <div class="user-chip">
                 <span>Masuk sebagai</span>
-                <strong>{{ current_username }}</strong>
+                <strong>{{ current_user_fullname or current_username }}</strong>
             </div>
             <div class="header-actions">
                 <a class="header-link" href="{{ url_for('data_settings') }}">Pengaturan Data</a>
                 <form class="logout-form" method="post" action="{{ url_for('logout') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="logout-button">Keluar</button>
                 </form>
             </div>
@@ -211,8 +213,8 @@
                 </div>
                 <div>
                     <label for="cash-on-hand">Kas Tersedia Saat Ini (Rupiah / IDR)</label>
-                    <input id="cash-on-hand" type="number" min="0" step="1000000" value="500000000" />
-                    <p class="field-hint">Masukkan angka Rupiah saja. Aplikasi ini tidak menerima USD, EUR, atau mata uang lain.</p>
+                    <input id="cash-on-hand" type="text" inputmode="numeric" autocomplete="off" value="500.000.000" />
+                    <p class="field-hint">Masukkan angka Rupiah saja. Format titik diperbolehkan, contoh 2.500.000.</p>
                 </div>
             </div>
 
@@ -252,12 +254,12 @@
         <div id="step-review" class="hidden">
             <h2>Konfirmasi Laporan Arus Kas</h2>
             <div id="review-operational-status"></div>
-            <div class="review-box compact-summary" id="review-text"></div>
             <p id="job-status" class="sub hidden" style="margin-bottom: 15px;"></p>
             <div class="review-dashboard-stack">
                 <aside class="dashboard-shell">
                     <div id="cash-health-dashboard"></div>
                 </aside>
+                <div class="review-box compact-summary" id="review-text"></div>
                 <div class="review-action-buttons">
                     <button type="button" id="btn-back">Kembali</button>
                     <button type="button" id="btn-generate">Buat Laporan <span id="spinner" class="spinner"></span></button>
@@ -269,8 +271,29 @@
 
     <script src="{{ url_for('static', filename='vendor/flatpickr/flatpickr.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/quill/quill.min.js') }}"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJyiZEqHHDWv8B0+R5RkKEyVz2ZR32Mu4pZ8EU61559C3EwO24JpP56bKVPuC35uH3n52j2Hh/xP0zQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
+        // Global Fetch Interceptor for CSRF Protection
+        (function() {
+            const originalFetch = window.fetch;
+            window.fetch = function(url, options = {}) {
+                if (options.method && options.method.toUpperCase() === 'POST') {
+                    options.headers = options.headers || {};
+                    const token = document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                    if (token) {
+                        if (options.headers instanceof Headers) {
+                            options.headers.set('X-CSRFToken', token);
+                        } else if (Array.isArray(options.headers)) {
+                            options.headers.push(['X-CSRFToken', token]);
+                        } else {
+                            options.headers['X-CSRFToken'] = token;
+                        }
+                    }
+                }
+                return originalFetch(url, options);
+            };
+        })();
+
         const ui = {
             loader: document.getElementById('loader'),
             loaderText: document.getElementById('loader-text'),
@@ -310,6 +333,7 @@
             startPicker: null,
             endPicker: null,
             dashboardMode: 'short_term',
+            selectedBalancePointIndex: 0,
             toastTimer: null,
         };
 
@@ -327,6 +351,16 @@
 
         function formatCurrency(value) {
             return currencyFormatter.format(Number(value || 0));
+        }
+
+        function parseCashAmountInput(value) {
+            const digits = String(value || '').replace(/[^\d]/g, '');
+            return digits ? Number(digits) : 0;
+        }
+
+        function formatCashAmountInput(value) {
+            const amount = parseCashAmountInput(value);
+            return amount ? new Intl.NumberFormat('id-ID').format(amount) : '';
         }
 
         function formatRelativeMinutes(minutes) {
@@ -535,6 +569,14 @@
         });
         syncNotesValue();
 
+        ui.cashOnHandInput.addEventListener('input', () => {
+            const cursorWasAtEnd = ui.cashOnHandInput.selectionStart === ui.cashOnHandInput.value.length;
+            ui.cashOnHandInput.value = formatCashAmountInput(ui.cashOnHandInput.value);
+            if (cursorWasAtEnd) {
+                ui.cashOnHandInput.setSelectionRange(ui.cashOnHandInput.value.length, ui.cashOnHandInput.value.length);
+            }
+        });
+
         function getSelectedRange() {
             const start = ui.startDateInput.value;
             const end = ui.endDateInput.value;
@@ -689,7 +731,7 @@
             return formatCurrency(amount);
         }
 
-        function buildSparkline(points, threshold) {
+        function buildSparkline(points, threshold, selectedIndex = 0) {
             if (!points || !points.length) {
                 return '';
             }
@@ -729,8 +771,42 @@
                     <line class="sparkline-threshold" x1="${leftPadding}" y1="${thresholdY}" x2="${width - rightPadding}" y2="${thresholdY}"></line>
                     <polygon class="sparkline-area" points="${areaPoints}"></polygon>
                     <polyline class="sparkline-line" points="${linePoints}"></polyline>
-                    ${points.map((point, index) => `<circle class="sparkline-point" cx="${mapX(index)}" cy="${mapY(Number(point.balance || 0))}" r="4"></circle>`).join('')}
+                    ${points.map((point, index) => `
+                        <circle
+                            class="sparkline-point ${selectedIndex === index ? 'active' : ''}"
+                            data-balance-point-index="${index}"
+                            cx="${mapX(index)}"
+                            cy="${mapY(Number(point.balance || 0))}"
+                            r="5"
+                            tabindex="0"
+                            role="button"
+                            aria-label="${escapeHtml(point.label)} ${formatCurrency(point.balance)}">
+                        </circle>
+                    `).join('')}
                 </svg>
+            `;
+        }
+
+        function buildBalanceDetailRow(points, selectedIndex) {
+            if (!points || !points.length) {
+                return '<div class="balance-detail-row"><span>-</span><strong>Saldo belum tersedia</strong><span>-</span></div>';
+            }
+            const index = Math.min(Math.max(Number(selectedIndex || 0), 0), points.length - 1);
+            const point = points[index];
+            const previous = index > 0 ? points[index - 1] : null;
+            const balance = Number(point.balance || 0);
+            const change = previous ? balance - Number(previous.balance || 0) : 0;
+            const changeClass = change < 0 ? 'negative' : 'positive';
+            const changePrefix = change > 0 ? '+' : '';
+            const changeLabel = previous
+                ? `${changePrefix}${formatCurrency(change)} dari ${escapeHtml(previous.label)}`
+                : 'Titik awal proyeksi';
+            return `
+                <div class="balance-detail-row">
+                    <span>${escapeHtml(point.label)}</span>
+                    <strong>${formatCurrency(balance)}</strong>
+                    <span class="${changeClass}">${changeLabel}</span>
+                </div>
             `;
         }
 
@@ -760,7 +836,7 @@
             const order = ['short_term', 'mid_term', 'long_term'];
             return `
                 <div class="dashboard-horizon-block">
-                    <div class="dashboard-horizon-title">TIME HORIZON</div>
+                    <div class="dashboard-horizon-title">HORIZON WAKTU</div>
                     <div class="dashboard-horizon-strip">
                         <div class="dashboard-horizon-grid">
                             ${order.map(key => {
@@ -791,9 +867,6 @@
                 return '<div class="cash-dashboard"><p class="mini-note">Dashboard kesehatan kas belum tersedia.</p></div>';
             }
 
-            const runwayChart = dashboard.runway_chart || {};
-            const projectedMonths = Number(runwayChart.projected_months || 0);
-            const runwayTop = Math.min(120, Math.max(10, 100 - ((Math.min(projectedMonths, 5) / 5) * 100)));
             const coverageBars = (dashboard.coverage_chart && dashboard.coverage_chart.bars) || [];
             const maxCoverage = Math.max(...coverageBars.map(bar => Number(bar.value || 0)), 1.5);
             const coverageMarkup = coverageBars.map(bar => {
@@ -836,7 +909,13 @@
             `).join('');
             const management = dashboard.management_interpretation || {};
             const actionMarkup = (management.actions || []).map(action => `<li>${escapeHtml(action)}</li>`).join('');
-            const decisionRows = (dashboard.decision_queue || []).slice(0, 3).map(row => `
+            const pyramid = management.minto_pyramid || {};
+            const supportingMarkup = (pyramid.supporting_arguments || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+            const evidenceMarkup = (pyramid.evidence || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+            const defensibility = dashboard.projection_defensibility || {};
+            const challengeMarkup = (defensibility.challenge_checks || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+            const sensitivityMarkup = (defensibility.sensitivity || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+            const decisionRows = (dashboard.decision_queue || []).map(row => `
                 <tr>
                     <td>${row.priority}</td>
                     <td>${escapeHtml(row.name)}</td>
@@ -844,6 +923,11 @@
                     <td>${escapeHtml(row.action)}</td>
                 </tr>
             `).join('');
+            const balancePoints = dashboard.balance_projection_30d || [];
+            const selectedBalancePointIndex = Math.min(
+                Math.max(Number(appState.selectedBalancePointIndex || 0), 0),
+                Math.max(balancePoints.length - 1, 0),
+            );
 
             return `
                 ${buildHorizonModeStrip(horizonSnapshot, dashboard.horizon_key || modeKey || 'short_term')}
@@ -851,22 +935,22 @@
                     <div class="cash-dashboard-header">
                         <div class="cash-dashboard-art" aria-hidden="true"></div>
                         <div class="cash-dashboard-title">
-                            <h3>CASHFLOW HEALTH DASHBOARD</h3>
+                            <h3>DASBOR KESEHATAN ARUS KAS</h3>
                             <div class="cash-dashboard-metrics">
                                 <div class="cash-metric-card primary">
-                                    <div class="cash-metric-label">💼 Cash</div>
+                                    <div class="cash-metric-label">💼 Kas</div>
                                     <div class="cash-metric-value">${formatShortCurrency(dashboard.current_cash)}</div>
                                 </div>
                                 <div class="cash-metric-card">
-                                    <div class="cash-metric-label">📈 Runway</div>
+                                    <div class="cash-metric-label">📈 Ketahanan Kas</div>
                                     <div class="cash-metric-value">${Number(dashboard.runway_months || 0).toFixed(1)}<span class="cash-metric-unit">bulan</span></div>
                                 </div>
                                 <div class="cash-metric-card">
-                                    <div class="cash-metric-label">⚖️ Coverage</div>
+                                    <div class="cash-metric-label">⚖️ Cakupan Kas</div>
                                     <div class="cash-metric-value">${Number(dashboard.coverage_ratio || 0).toFixed(2)}</div>
                                 </div>
                                 <div class="cash-metric-card">
-                                    <div class="cash-metric-label">🕒 Delay</div>
+                                    <div class="cash-metric-label">🕒 Keterlambatan</div>
                                     <div class="cash-metric-value">${Number(dashboard.average_delay_days || 0).toFixed(0)}<span class="cash-metric-unit">hari</span></div>
                                 </div>
                             </div>
@@ -882,62 +966,41 @@
                         <span class="status-value">${escapeHtml(dashboard.status || '-')}</span>
                         <span>✅</span>
                     </div>
-                    <div class="management-reaction">
-                        <h4>${escapeHtml(management.headline || 'Interpretasi manajemen belum tersedia.')}</h4>
-                        <p><strong>Makna:</strong> ${escapeHtml(management.meaning || '-')}</p>
-                        <p><strong>Keputusan:</strong> ${escapeHtml(management.decision || '-')}</p>
-                        ${actionMarkup ? `<ul>${actionMarkup}</ul>` : ''}
-                    </div>
 
                     <div class="cash-dashboard-grid">
                         <section class="dashboard-panel">
-                            <h4>Cash Runway (bulan)</h4>
-                            <div class="dashboard-chart-body">
-                                <div class="runway-zone-chart">
-                                    <div class="runway-marker" style="top:${runwayTop}%;">${Number(dashboard.runway_months || 0).toFixed(1)} bulan</div>
-                                    <div class="runway-threshold" aria-hidden="true"></div>
-                                </div>
-                                <div class="runway-axis">
-                                    <span>5 bulan</span>
-                                    <span>4 bulan</span>
-                                    <span>2 bulan</span>
-                                    <span>1 bulan</span>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="dashboard-panel">
-                            <h4>Cash Coverage Ratio</h4>
+                            <h4>Rasio Cakupan Kas</h4>
                             <div class="dashboard-chart-body">
                                 <div class="coverage-bars">${coverageMarkup}</div>
-                                <div class="coverage-benchmark">Current minimum 1.2</div>
+                                <div class="coverage-benchmark">Batas aman 1.2</div>
                             </div>
                         </section>
 
                         <section class="dashboard-panel">
                             <h4>Prediksi Saldo (${dashboard.period_days} Hari)</h4>
-                            <div class="dashboard-chart-body">
-                                ${buildSparkline(dashboard.balance_projection_30d || [], 100000000)}
+                            <div class="dashboard-chart-body balance-projection-body">
+                                ${buildSparkline(balancePoints, 100000000, selectedBalancePointIndex)}
                                 <div class="sparkline-axis-labels">
-                                    ${(dashboard.balance_projection_30d || []).map(point => `<span>${escapeHtml(point.label)}</span>`).join('')}
+                                    ${balancePoints.map(point => `<span>${escapeHtml(point.label)}</span>`).join('')}
                                 </div>
+                                ${buildBalanceDetailRow(balancePoints, selectedBalancePointIndex)}
                             </div>
                         </section>
 
                         <section class="dashboard-panel">
-                            <h4>Average Payment Delay</h4>
+                            <h4>Rata-rata Keterlambatan Bayar</h4>
                             <div class="delay-list">${delayMarkup}</div>
                         </section>
 
                         <section class="dashboard-panel">
-                            <h4>Top Overdue Clients</h4>
+                            <h4>Piutang Terlambat Utama</h4>
                             <table class="overdue-table">
                                 <thead>
                                     <tr>
                                         <th>#</th>
-                                        <th>Client</th>
-                                        <th class="numeric">Amount</th>
-                                        <th>Overdue</th>
+                                        <th>Klien</th>
+                                        <th class="numeric">Nilai</th>
+                                        <th>Terlambat</th>
                                     </tr>
                                 </thead>
                                 <tbody>${overdueMarkup || '<tr><td colspan="4">Belum ada overdue utama.</td></tr>'}</tbody>
@@ -946,12 +1009,12 @@
 
                         <section class="dashboard-panel">
                             <div class="alerts-panel">
-                                <h4>ALERTS &amp; RECOMMENDATIONS</h4>
+                                <h4>PERINGATAN &amp; REKOMENDASI</h4>
                                 ${alertsMarkup || '<div class="alert-line"><span class="icon">✅</span><span>Belum ada alert tambahan.</span></div>'}
                             </div>
                         </section>
                         <section class="dashboard-panel">
-                            <h4>Decision Queue</h4>
+                            <h4>Antrian Keputusan</h4>
                             <table class="overdue-table">
                                 <thead>
                                     <tr>
@@ -964,6 +1027,18 @@
                                 <tbody>${decisionRows || '<tr><td colspan="4">Belum ada antrian keputusan.</td></tr>'}</tbody>
                             </table>
                         </section>
+                    </div>
+                    <div class="management-reaction">
+                        <h4>${escapeHtml(management.headline || 'Interpretasi manajemen belum tersedia.')}</h4>
+                        <p><strong>Makna:</strong> ${escapeHtml(management.meaning || '-')}</p>
+                        <p><strong>Keputusan:</strong> ${escapeHtml(management.decision || '-')}</p>
+                        ${actionMarkup ? `<p><strong>Aksi:</strong></p><ul>${actionMarkup}</ul>` : ''}
+                        ${management.confidence ? `<p><strong>Keyakinan:</strong> ${escapeHtml(management.confidence)}</p>` : ''}
+                        ${supportingMarkup ? `<p><strong>Argumen pendukung:</strong></p><ul>${supportingMarkup}</ul>` : ''}
+                        ${evidenceMarkup ? `<p><strong>Bukti dashboard:</strong></p><ul>${evidenceMarkup}</ul>` : ''}
+                        ${defensibility.method ? `<p><strong>Basis proyeksi:</strong> ${escapeHtml(defensibility.method)}</p>` : ''}
+                        ${challengeMarkup ? `<p><strong>Cek tantangan:</strong></p><ul>${challengeMarkup}</ul>` : ''}
+                        ${sensitivityMarkup ? `<p><strong>Sensitivitas:</strong></p><ul>${sensitivityMarkup}</ul>` : ''}
                     </div>
                 </div>
             `;
@@ -1094,6 +1169,12 @@
                 forecast: {
                     time_horizon: forecast.time_horizon || null,
                     dashboard_snapshot: forecast.dashboard_snapshot || null,
+                    formula: forecast.forecast ? forecast.forecast.formula : null,
+                    formula_components: forecast.forecast ? forecast.forecast.formula_components : null,
+                    forecast_assumptions: forecast.forecast_assumptions || null,
+                    management_confidence: forecast.dashboard_snapshot && forecast.dashboard_snapshot.management_interpretation
+                        ? forecast.dashboard_snapshot.management_interpretation.confidence
+                        : null,
                     cash_out_source: forecast.forecast && forecast.forecast.cash_out ? forecast.forecast.cash_out.source : null,
                 },
                 horizon_snapshot: horizonSnapshot || null,
@@ -1115,7 +1196,7 @@
                     <div class="review-row"><span>Prediksi Arus Kas Keluar</span><span>${formatCurrency(forecast.forecast.cash_out.total_cash_out)}</span></div>
                     <div class="review-row"><span>Sumber Cash Out</span><span>${escapeHtml(forecast.forecast.cash_out.source === 'live_schedule' ? 'Komitmen keluar kas aktual' : 'Model operating cost bulanan')}</span></div>
                     <div class="review-row"><span>Ending Cash</span><span>${formatCurrency(forecast.forecast.ending_cash)}</span></div>
-                    <p class="mini-note">Formula internal: ${escapeHtml(forecast.forecast.formula)}</p>
+                    <div class="review-row"><span>Formula Penghitungan</span><span>${escapeHtml(forecast.forecast.formula)}</span></div>
                     ${appState.syncStatus && appState.syncStatus.financialData ? `<p class="mini-note"><strong>Freshness:</strong> sinkronisasi ${escapeHtml(appState.syncStatus.financialData.syncStatus || '-')} dengan usia data ${escapeHtml(formatRelativeMinutes(appState.syncStatus.financialData.sourceAgeMinutes))}.</p>` : ''}
                     ${reviewContext && reviewContext.controlNote ? `<p class="mini-note"><strong>Catatan kontrol:</strong> ${escapeHtml(reviewContext.controlNote)}</p>` : ''}
                 </div>
@@ -1207,7 +1288,8 @@
             ui.suggestionContainer.innerHTML = ''; 
             if (suggestionsList) {
                 suggestionsList.forEach(text => {
-                    let chip = document.createElement('span');
+                    let chip = document.createElement('button');
+                    chip.type = 'button';
                     chip.className = 'chip';
                     chip.innerText = "+ " + text;
                     chip.onclick = () => {
@@ -1242,7 +1324,7 @@
                     if (err.message.includes('Failed to fetch')) {
                         ui.loaderText.innerHTML = `<span style="color: #CC0000; font-weight: bold;">Error: Buka http://127.0.0.1:5000</span>`;
                     } else {
-                        ui.loaderText.innerHTML = `<span style="color: #CC0000; font-weight: bold;">Error: ${err.message}</span>`;
+                        ui.loaderText.innerHTML = `<span style="color: #CC0000; font-weight: bold;">Error: ${escapeHtml(err.message)}</span>`;
                     }
                 });
         }
@@ -1262,14 +1344,14 @@
         ui.btnReview.onclick = async () => { 
             syncNotesValue();
             const selectedPeriod = getSelectedRange();
-            const cashOnHand = Number(ui.cashOnHandInput.value || 0);
+            const cashOnHand = parseCashAmountInput(ui.cashOnHandInput.value);
 
             if (!selectedPeriod) {
-                alert('Pilih tanggal mulai dan tanggal selesai terlebih dahulu.');
+                showToast('Pilih tanggal mulai dan tanggal selesai terlebih dahulu.', 'error');
                 return;
             }
             if (!Number.isFinite(cashOnHand) || cashOnHand < 0) {
-                alert('Masukkan nilai kas tersedia saat ini yang valid.');
+                showToast('Masukkan nilai kas tersedia saat ini yang valid.', 'error');
                 return;
             }
 
@@ -1305,6 +1387,7 @@
 	                appState.forecastSnapshot = forecastSnapshot;
 	                appState.horizonSnapshot = horizonSnapshot;
                     appState.dashboardMode = 'short_term';
+                    appState.selectedBalancePointIndex = 0;
                     appState.syncStatus = forecastSnapshot.sync_status || horizonSnapshot.sync_status || appState.syncStatus;
 	                appState.analysisContext = buildAnalysisContext(
 	                    selectedPeriod,
@@ -1336,7 +1419,7 @@
 	                ui.reviewStep.classList.remove('hidden');
 	                ui.rootCard.classList.add('review-mode');
             } catch (error) {
-                alert(error.message);
+                showToast(error.message, 'error');
             } finally {
                 ui.btnReview.disabled = false;
                 ui.btnReview.textContent = originalLabel;
@@ -1356,6 +1439,13 @@
         };
 
         ui.cashHealthDashboard.addEventListener('click', event => {
+            const balancePoint = event.target.closest('[data-balance-point-index]');
+            if (balancePoint) {
+                appState.selectedBalancePointIndex = Number(balancePoint.getAttribute('data-balance-point-index') || 0);
+                renderDashboard();
+                return;
+            }
+
             const modeButton = event.target.closest('[data-dashboard-horizon]');
             if (!modeButton) {
                 return;
@@ -1365,6 +1455,7 @@
                 return;
             }
             appState.dashboardMode = nextMode;
+            appState.selectedBalancePointIndex = 0;
             renderDashboard();
         });
 
@@ -1442,7 +1533,7 @@
                     showToast('Laporan berhasil diunduh. Dashboard tetap tersedia untuk ditinjau atau generate ulang.');
                 })
                 .catch(err => {
-                    alert(err.message);
+                    showToast(err.message, 'error');
                     resetGenerateState();
                 });
         }
@@ -1493,7 +1584,7 @@
                     throw new Error(data.error || "Generate dokumen gagal.");
                 })
                 .catch(err => {
-                    alert(err.message);
+                    showToast(err.message, 'error');
                     resetGenerateState();
                 });
         }
@@ -1590,7 +1681,7 @@
                 pollJobStatus(data.jobId);
             })
             .catch(err => {
-                alert(err.message);
+                showToast(err.message, 'error');
                 resetGenerateState();
             });
         };
@@ -1611,7 +1702,7 @@
                     showToast('Sinkronisasi data selesai. Preview berikutnya akan memakai data terbaru.');
                 })
                 .catch(error => {
-                    alert(error.message);
+                    showToast(error.message, 'error');
                 });
         };
     </script>

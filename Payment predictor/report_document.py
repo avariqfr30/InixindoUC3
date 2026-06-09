@@ -21,13 +21,24 @@ class ReportDocumentAssembler:
         document = Document()
         self.document_builder.create_cover(document, theme_color)
         self.document_builder.add_table_of_contents(document)
-        self.document_builder.process_content(
-            document,
-            generated_content,
-            theme_color,
-        )
+        self._render_report_sections(document, generated_content, theme_color)
         self.embed_dashboard_screenshots(document, analysis_payload, theme_color)
         return document
+
+    def _render_report_sections(self, document, generated_content, theme_color):
+        sections = self.finalizer.split_top_level_sections(generated_content)
+        if not sections:
+            self.document_builder.process_content(document, generated_content, theme_color)
+            return
+
+        for index, section in enumerate(sections):
+            if index > 0:
+                document.add_page_break()
+            self.document_builder.process_content(
+                document,
+                self.finalizer.join_top_level_sections([section]),
+                theme_color,
+            )
 
     def has_dashboard_screenshots(self, analysis_payload):
         payload = self.finalizer.normalize_analysis_payload(analysis_payload)

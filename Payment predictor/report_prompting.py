@@ -1,4 +1,5 @@
 from config import FINANCE_SYSTEM_PROMPT, PERSONAS
+from reasoning_policy import CashflowHotsReasoningPolicy
 from report_structure import REPORT_STRUCTURE
 
 
@@ -59,17 +60,18 @@ class ReportPromptBuilder:
         final_editor_context = str(report_context.get("final_editor_context") or "").strip()
         if final_editor_context:
             agent_evidence_brief = f"{agent_evidence_brief}\n\n{final_editor_context}"
+        agent_evidence_brief = f"{agent_evidence_brief}\n\n{CashflowHotsReasoningPolicy.prompt_block()}"
         return FINANCE_SYSTEM_PROMPT.format(
             persona=persona,
-            financial_summary=report_context["financial_summary"],
-            management_brief=report_context["management_brief"],
-            internal_evidence=report_context["evidence"],
+            financial_summary=report_context.get("financial_summary") or "Ringkasan finansial belum tersedia.",
+            management_brief=report_context.get("management_brief") or "Belum ada brief manajemen tambahan.",
+            internal_evidence=report_context.get("evidence") or "Bukti operasional tambahan belum tersedia.",
             agent_evidence_brief=agent_evidence_brief,
             industry_trends=macro_osint,
             user_focus=(notes or "Tidak ada fokus tambahan."),
             cashflow_context=(structured_context or "Tidak ada konteks forecast terstruktur tambahan."),
-            readiness_signals=report_context["readiness_signals"],
+            readiness_signals=report_context.get("readiness_signals") or "Sinyal kesiapan kas belum tersedia.",
             section_scope=section_scope,
             section_headings=section_headings,
-            visual_prompt=report_context["visual_prompt"] if include_visuals else "",
+            visual_prompt=(report_context.get("visual_prompt") or "") if include_visuals else "",
         )

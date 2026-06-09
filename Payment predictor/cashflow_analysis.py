@@ -48,7 +48,18 @@ from finance_api_clients import InternalAPIClient
 from financial_analyzer import FinancialAnalyzer
 
 logger = logging.getLogger(__name__)
-EMBEDDING_BATCH_SIZE = max(int(os.getenv("EMBEDDING_BATCH_SIZE", "8")), 1)
+
+
+def _int_env(name, default):
+    raw = os.getenv(name, str(default))
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer for %s=%r, using default %s", name, raw, default)
+        return default
+
+
+EMBEDDING_BATCH_SIZE = max(_int_env("EMBEDDING_BATCH_SIZE", 8), 1)
 EMBEDDING_SYNC_ENABLED = os.getenv("EMBEDDING_SYNC_ENABLED", "false").strip().lower() in {
     "1",
     "true",

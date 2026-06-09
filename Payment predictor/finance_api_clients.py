@@ -789,8 +789,9 @@ class CashOutAPIClient(InternalAPIClient):
         }
 
 class CashOutStore:
-    def __init__(self):
-        self.client = CashOutAPIClient()
+    def __init__(self, source_profile=None):
+        profile_type = str((source_profile or {}).get("type") or "").strip().lower()
+        self.client = CashOutAPIClient(source_profile=source_profile) if profile_type == "json_api" else CashOutAPIClient()
         self.records = []
         self.summary = self.client.get_summary()
         self.lock = threading.Lock()
@@ -804,6 +805,30 @@ class CashOutStore:
         self.last_sync_error = None
         if self.client.is_configured():
             self.refresh_data()
+
+    def rebind_source_profile(self, source_profile=None, refresh=True):
+        if source_profile and str((source_profile or {}).get("type") or "").strip().lower() == "json_api":
+            next_client = CashOutAPIClient(source_profile=source_profile)
+        else:
+            next_client = CashOutAPIClient()
+
+        current_client = getattr(self, "client", None)
+        if current_client and current_client.source_profile == next_client.source_profile:
+            if refresh and current_client.is_configured():
+                return self.refresh_data()
+            return current_client.is_configured()
+
+        with self.lock:
+            self.client = next_client
+            self.records = []
+            self.summary = self.client.get_summary()
+            self.version += 1
+            self.sync_status = "not_loaded" if self.client.is_configured() else "not_configured"
+            self.last_sync_error = None
+
+        if refresh and self.client.is_configured():
+            return self.refresh_data()
+        return self.client.is_configured()
 
     def refresh_data(self):
         if not self.client.is_configured():

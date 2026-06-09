@@ -60,7 +60,11 @@ class BackgroundRefreshCoordinator:
 
     def refresh_all(self):
         knowledge_ok = self.knowledge_base.refresh_data()
-        cash_out_ok = self.cash_out_store.refresh_data() if self.cash_out_store else False
+        cash_out_ok = (
+            self.cash_out_store.rebind_source_profile(self.knowledge_base.source_profile, refresh=True)
+            if self.cash_out_store
+            else False
+        )
         self.forecast_cache.clear()
         return {
             "knowledgeBase": knowledge_ok,

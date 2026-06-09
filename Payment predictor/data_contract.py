@@ -122,6 +122,76 @@ INTERNAL_API_FIELD_SPECS = {
         ),
         "example": "Pembayaran tertunda karena revisi DIPA dan verifikasi dokumen termin belum selesai.",
     },
+    "invoice_date": {
+        "label": "Tanggal Invoice",
+        "required": False,
+        "description": "Tanggal invoice diterbitkan, dipakai untuk cutoff dan proyeksi umur tagihan.",
+        "aliases": (
+            "invoice date",
+            "invoice_date",
+            "issued date",
+            "issued_at",
+            "billing date",
+            "tanggal invoice",
+            "tanggal tagihan",
+            "tanggal penerbitan invoice",
+        ),
+        "example": "2026-01-03",
+    },
+    "invoice_due_date": {
+        "label": "Tanggal Jatuh Tempo Invoice",
+        "required": False,
+        "description": "Tanggal jatuh tempo pembayaran invoice.",
+        "aliases": (
+            "invoice due date",
+            "invoice_due_date",
+            "due date",
+            "due_date",
+            "due_at",
+            "payment due date",
+            "tanggal jatuh tempo invoice",
+            "tanggal jatuh tempo",
+            "jatuh tempo",
+        ),
+        "example": "2026-01-10",
+    },
+    "invoice_paid_date": {
+        "label": "Tanggal Bayar Invoice",
+        "required": False,
+        "description": "Tanggal invoice dibayar atau diselesaikan.",
+        "aliases": (
+            "invoice paid date",
+            "invoice_paid_date",
+            "paid date",
+            "paid_date",
+            "paid_at",
+            "payment date",
+            "settlement date",
+            "tanggal bayar invoice",
+            "tanggal bayar",
+            "tanggal pembayaran",
+        ),
+        "example": "2026-01-25",
+    },
+    "invoice_is_settled": {
+        "label": "Status Pembayaran Invoice",
+        "required": False,
+        "description": "Status lunas/belum lunas invoice.",
+        "aliases": (
+            "invoice is settled",
+            "invoice_is_settled",
+            "is settled",
+            "is_settled",
+            "settled",
+            "status",
+            "payment status",
+            "invoice status",
+            "status pembayaran invoice",
+            "status pembayaran",
+            "status tagihan",
+        ),
+        "example": "unpaid",
+    },
 }
 
 INTERNAL_API_ENVELOPE_CANDIDATES = ("records", "items", "results", "data", "invoices")
@@ -202,6 +272,79 @@ def _value_to_text(value):
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return str(value).strip()
+
+
+SETTLED_STATUS_TOKENS = {"yes", "y", "true", "1", "settled", "paid", "lunas", "closed", "done"}
+UNSETTLED_STATUS_TOKENS = {
+    "no",
+    "n",
+    "false",
+    "0",
+    "unsettled",
+    "unpaid",
+    "not paid",
+    "belum lunas",
+    "belumlunas",
+    "open",
+}
+PARTIAL_STATUS_PHRASES = ("terbayar sebagian", "partial", "partially paid", "sebagian")
+UNSETTLED_STATUS_PHRASES = ("belum lunas", "invoice dibuat", "dibuat", "open")
+SETTLED_STATUS_PHRASES = ("invoice lunas", "sudah lunas", "telah lunas", "terbayar penuh")
+
+
+def _normalize_status_text(value):
+    return re.sub(r"\s+", " ", _value_to_text(value).lower()).strip()
+
+
+def is_invoice_settled_status(value):
+    text = _normalize_status_text(value)
+    if not text or is_invoice_unsettled_status(value):
+        return False
+    return text in SETTLED_STATUS_TOKENS or any(phrase in text for phrase in SETTLED_STATUS_PHRASES)
+
+
+def is_invoice_unsettled_status(value):
+    text = _normalize_status_text(value)
+    if not text:
+        return False
+    return (
+        text in UNSETTLED_STATUS_TOKENS
+        or any(phrase in text for phrase in PARTIAL_STATUS_PHRASES)
+        or any(phrase in text for phrase in UNSETTLED_STATUS_PHRASES)
+    )
+
+
+def invoice_lifecycle_status(raw_status=None, paid_date=None):
+    paid_timestamp = pd.to_datetime(paid_date, errors="coerce") if _value_to_text(paid_date) else None
+    has_paid_date = paid_timestamp is not None and not pd.isna(paid_timestamp)
+    explicit_settled = is_invoice_settled_status(raw_status)
+    explicit_unsettled = is_invoice_unsettled_status(raw_status)
+    status_text = _normalize_status_text(raw_status)
+    is_partial = any(phrase in status_text for phrase in PARTIAL_STATUS_PHRASES)
+
+    if is_partial:
+        category = "partial"
+    elif explicit_settled or has_paid_date:
+        category = "lunas"
+    elif explicit_unsettled:
+        category = "not_lunas"
+    else:
+        category = "unknown"
+
+    conflict_reason = ""
+    if has_paid_date and explicit_unsettled and not is_partial:
+        conflict_reason = "paid_date_present_but_status_unsettled"
+    elif not has_paid_date and explicit_settled:
+        conflict_reason = "status_settled_without_paid_date"
+
+    return {
+        "category": category,
+        "is_settled": category == "lunas",
+        "is_unsettled": category in {"not_lunas", "partial"},
+        "is_partial": is_partial,
+        "has_paid_date": has_paid_date,
+        "conflict_reason": conflict_reason,
+    }
 
 
 def normalize_records(records):
@@ -341,19 +484,10 @@ def _parse_invoice_date(value):
 def _invoice_behavior_from_dates(record):
     due_date = _parse_invoice_date(record.get("invoice_due_date") or record.get("due_date"))
     paid_date = _parse_invoice_date(record.get("invoice_paid_date") or record.get("paid_date"))
-    settled_text = _value_to_text(record.get("invoice_is_settled") or record.get("is_settled")).lower()
-    is_settled = settled_text in {"yes", "y", "true", "1", "settled", "paid", "lunas"}
-    is_unsettled = settled_text in {
-        "no",
-        "n",
-        "false",
-        "0",
-        "unsettled",
-        "unpaid",
-        "not paid",
-        "belum lunas",
-        "belumlunas",
-    }
+    settled_text = _value_to_text(record.get("invoice_is_settled") or record.get("is_settled"))
+    lifecycle = invoice_lifecycle_status(settled_text, paid_date)
+    is_settled = lifecycle["is_settled"]
+    is_unsettled = lifecycle["is_unsettled"]
     if due_date is None:
         return "", ""
 
@@ -361,6 +495,17 @@ def _invoice_behavior_from_dates(record):
         if is_settled:
             return "Kelas C (tanggal bayar tidak tercatat)", "Invoice tercatat selesai, tetapi tanggal bayar belum tersedia."
         if is_unsettled:
+            # Age-aware classification instead of blanket Kelas E
+            invoice_date = _parse_invoice_date(record.get("invoice_date") or record.get("tanggal_invoice"))
+            if invoice_date and due_date:
+                age_days = max(0, int((pd.Timestamp.now().normalize() - due_date.normalize()).days))
+                if age_days <= 14:
+                    return "Kelas B (belum lunas)", f"Invoice belum lunas, {age_days} hari sejak jatuh tempo."
+                if age_days <= 60:
+                    return "Kelas C (belum lunas)", f"Invoice belum lunas, {age_days} hari sejak jatuh tempo."
+                if age_days <= 120:
+                    return "Kelas D (belum lunas)", f"Invoice belum lunas, {age_days} hari sejak jatuh tempo."
+                return "Kelas E (belum lunas)", f"Invoice belum lunas, {age_days} hari sejak jatuh tempo."
             return "Kelas E (belum lunas)", "Invoice belum tercatat lunas pada data internal."
         return "", ""
 
@@ -419,10 +564,10 @@ def _normalize_payment_class_value(value):
     text = _naturalize_report_value(value)
     if not text:
         return ""
-    match = re.search(r"kelas\s*([a-e])", text, flags=re.IGNORECASE)
+    match = re.search(r"(?:kelas|tipe|class|grade|kategori)\s*([a-e])", text, flags=re.IGNORECASE)
     if match:
         class_label = f"Kelas {match.group(1).upper()}"
-        suffix = re.sub(r"(?i).*?kelas\s*[a-e]", "", text).strip(" -:()")
+        suffix = re.sub(r"(?i).*?(?:kelas|tipe|class|grade|kategori)\s*[a-e]", "", text).strip(" -:()")
         return f"{class_label} ({suffix})" if suffix else class_label
     return text
 
@@ -461,7 +606,7 @@ def parse_internal_api_field_map(raw_value):
             raise ValueError(
                 "INTERNAL_API_FIELD_MAP_JSON contains an unknown field key: "
                 f"{config_key}. Use canonical keys such as period, partner_type, "
-                "service, payment_class, invoice_value, or delay_note."
+                "service, payment_class, invoice_value, delay_note, or invoice lifecycle keys."
             )
         normalized_mapping[canonical_key] = str(source_field).strip()
 
@@ -703,7 +848,7 @@ def resolve_financial_columns(data_frame, explicit_field_map=None, enable_semant
             if column in used_columns:
                 continue
             score = _semantic_score(column, data_frame[column], canonical_key)
-            if score >= 0.55:
+            if score >= 0.65:
                 assignments.append((score, canonical_key, column))
 
     for score, canonical_key, column in sorted(assignments, reverse=True):
@@ -728,6 +873,8 @@ def normalize_financial_dataframe(data_frame, explicit_field_map=None):
         if source_column == target_label:
             continue
         if target_label in working_frame.columns:
+            continue
+        if source_column in rename_map:
             continue
         rename_map[source_column] = target_label
 

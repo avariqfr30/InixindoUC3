@@ -183,7 +183,7 @@
             </div>
             <div>
                 <p>Gunakan akun internal sederhana untuk mengakses dasbor, meninjau proyeksi, dan menjalankan alur pembuatan laporan.</p>
-                <p>Pendaftaran dibatasi untuk email internal perusahaan. Kata sandi tetap disimpan dalam bentuk hash, bukan teks biasa.</p>
+                <p>Pendaftaran divalidasi terhadap data ReferenceInternalAccount. Kata sandi tetap disimpan dalam bentuk hash, bukan teks biasa.</p>
             </div>
         </section>
 
@@ -195,12 +195,14 @@
                 {% endif %}
             </div>
 
-            <h2>{% if mode == 'signup' %}Buat Akun{% else %}Selamat Datang Kembali{% endif %}</h2>
+            <h2>{% if mode == 'signup' %}Buat Akun{% elif mode == 'verify_signup' %}Verifikasi Pendaftaran{% else %}Selamat Datang Kembali{% endif %}</h2>
             <p>
                 {% if mode == 'signup' %}
-                Daftarkan email dan kata sandi untuk mengakses aplikasi.
+                Daftarkan email yang terdaftar pada ReferenceInternalAccount. Kata sandi awal dan token verifikasi akan dikirim melalui webhook verifikasi.
+                {% elif mode == 'verify_signup' %}
+                Masukkan token verifikasi yang dikirim melalui webhook untuk mengaktifkan akun. Setelah verifikasi, masuk dilakukan dengan kata sandi awal saja.
                 {% else %}
-                Masuk dengan email yang sudah terdaftar untuk melanjutkan.
+                Masuk dengan email yang sudah terdaftar dan kata sandi awal yang telah dikirim melalui webhook.
                 {% endif %}
             </p>
 
@@ -208,36 +210,45 @@
             <div class="error-banner">{{ error }}</div>
             {% endif %}
             {% if notice %}
-            <div class="notice-banner">{{ notice }}</div>
+            <div class="notice-banner">{{ notice|safe }}</div>
             {% endif %}
 
             {% if mode == 'signup' %}
             <form method="post" action="{{ url_for('signup') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div>
                     <label for="username">Email Kerja</label>
                     <input id="username" name="username" type="email" required autocomplete="email" value="{{ username or '' }}">
-                    <div class="field-hint">Hanya email dengan domain `@{{ allowed_email_domain }}` yang diizinkan.</div>
+                    <div class="field-hint">Email harus cocok persis dengan data ReferenceInternalAccount.</div>
                 </div>
-                <div>
-                    <label for="password">Kata Sandi</label>
-                    <input id="password" name="password" type="password" required autocomplete="new-password">
-                    <div class="field-hint">Gunakan minimal 8 karakter.</div>
-                </div>
-                <div>
-                    <label for="confirm_password">Konfirmasi Kata Sandi</label>
-                    <input id="confirm_password" name="confirm_password" type="password" required autocomplete="new-password">
-                </div>
-                <button type="submit">Buat Akun</button>
+                <button type="submit">Daftarkan Email</button>
             </form>
             <div class="auth-footer">
-                Jika email memakai domain internal yang benar dan belum terdaftar, akun akan langsung aktif. Sudah punya akun? <a href="{{ url_for('login') }}">Masuk di sini</a>.
+                Sudah punya akun? <a href="{{ url_for('login') }}">Masuk di sini</a>.
+            </div>
+            {% elif mode == 'verify_signup' %}
+            <form method="post" action="{{ url_for('verify_otp') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div>
+                    <label for="username">Email Kerja</label>
+                    <input id="username" name="username" type="email" value="{{ username }}" readonly required style="background: #f1f5f9; cursor: not-allowed;">
+                </div>
+                <div>
+                    <label for="otp_code">Token Verifikasi</label>
+                    <input id="otp_code" name="otp_code" type="text" pattern="[0-9]{6}" placeholder="Token dari email" required>
+                </div>
+                <button type="submit">Verifikasi & Aktifkan</button>
+            </form>
+            <div class="auth-footer">
+                Sudah punya akun? <a href="{{ url_for('login') }}">Masuk di sini</a>.
             </div>
             {% else %}
             <form method="post" action="{{ url_for('login') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div>
-                    <label for="username">Email Kerja</label>
-                    <input id="username" name="username" type="email" required autocomplete="email" value="{{ username or '' }}">
-                    <div class="field-hint">Gunakan email `@{{ allowed_email_domain }}` yang sudah terdaftar.</div>
+                    <label for="username">Email / Username</label>
+                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username or '' }}">
+                    <div class="field-hint">Gunakan email terverifikasi atau akun handover yang sudah disediakan.</div>
                 </div>
                 <div>
                     <label for="password">Kata Sandi</label>

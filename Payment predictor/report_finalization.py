@@ -76,6 +76,19 @@ class ReportFinalizer:
         if cash_on_hand is not None:
             lines.append(f"- Cash in hand pada saat review: Rp{int(cash_on_hand):,}.")
 
+        forecast_payload = payload.get("forecast") or {}
+        if forecast_payload.get("formula"):
+            lines.append(f"- Formula dashboard: {forecast_payload.get('formula')}.")
+        assumptions = forecast_payload.get("forecast_assumptions") or {}
+        if assumptions:
+            pipeline = assumptions.get("pipeline") or {}
+            lines.append(
+                "- Asumsi forecast: "
+                f"confidence {assumptions.get('confidence') or '-'}; "
+                f"pipeline {pipeline.get('status') or '-'}; "
+                f"{assumptions.get('basis') or '-'}"
+            )
+
         if financial_sync:
             freshness = financial_sync.get("sourceAgeMinutes")
             freshness_label = "belum tersedia"
@@ -117,13 +130,31 @@ class ReportFinalizer:
 
         return "\n".join(lines).strip()
 
+    def enrich_report_context_from_analysis_payload(self, report_context, analysis_payload):
+        context = dict(report_context or {})
+        payload = self.normalize_analysis_payload(analysis_payload)
+        forecast = payload.get("forecast") if isinstance(payload.get("forecast"), dict) else {}
+        dashboard = forecast.get("dashboard_snapshot") if isinstance(forecast.get("dashboard_snapshot"), dict) else {}
+        if not dashboard:
+            return context
+
+        management_interpretation = dashboard.get("management_interpretation")
+        if isinstance(management_interpretation, dict) and not context.get("management_interpretation"):
+            context["management_interpretation"] = management_interpretation
+
+        projection_defensibility = dashboard.get("projection_defensibility")
+        if isinstance(projection_defensibility, dict) and not context.get("projection_defensibility"):
+            context["projection_defensibility"] = projection_defensibility
+
+        return context
+
     @staticmethod
     def extract_visual_markers(visual_prompt):
         chart_marker = ""
         flow_marker = ""
         for line in str(visual_prompt or "").splitlines():
             stripped_line = line.strip()
-            if stripped_line.startswith("[[CHART:"):
+            if stripped_line.startswith("[[CHART:") or stripped_line.startswith("[[LINE:"):
                 chart_marker = stripped_line
             elif stripped_line.startswith("[[FLOW:"):
                 flow_marker = stripped_line
@@ -237,6 +268,7 @@ class ReportFinalizer:
         return sanitized.strip()
 
     def finalize(self, raw_text, report_context, macro_osint, analysis_payload=None):
+        report_context = self.enrich_report_context_from_analysis_payload(report_context, analysis_payload)
         raw_text = self.sanitize_generated_report_text(reader_safe_text(raw_text))
         sections = self.split_top_level_sections(raw_text)
         if not sections:
@@ -255,6 +287,17 @@ class ReportFinalizer:
 
             if section_title == "Ringkasan Eksekutif":
                 section_body = self.build_executive_summary(section_body, report_context, peer_sections=peer_sections)
+                dashboard_block = "\n\n".join(
+                    block for block in [operational_snapshot, "\n".join(dashboard_markers)]
+                    if str(block or "").strip()
+                )
+                if dashboard_block:
+                    section_body = self.inject_subheading_block(
+                        section_body,
+                        "Visual Dashboard Snapshot",
+                        dashboard_block,
+                        before_subheading="Alasan Utama",
+                    )
                 if evidence_block:
                     section_body = f"{section_body.rstrip()}\n\n{evidence_block}".strip()
             elif section_title == "Analisis Deskriptif Cashflow":
@@ -273,13 +316,6 @@ class ReportFinalizer:
                     operational_snapshot,
                     before_subheading="Skenario 1-2 Kuartal",
                 )
-                if dashboard_markers:
-                    section_body = self.inject_subheading_block(
-                        section_body,
-                        "Visual Dashboard Snapshot",
-                        "\n".join(dashboard_markers),
-                        before_subheading="Implikasi terhadap Arus Kas Masuk dan Keluar",
-                    )
             elif section_title == "Rekomendasi Preskriptif":
                 section_body = self.append_marker_block(section_body, flow_marker)
 
@@ -288,6 +324,26 @@ class ReportFinalizer:
         return reader_safe_text(self.join_top_level_sections(finalized_sections))
 
     def build_fallback_report(self, report_context, notes, analysis_context, macro_osint, analysis_payload=None, structured_context_block=""):
+        report_context = self.enrich_report_context_from_analysis_payload(report_context, analysis_payload)
+        fallback_context = {
+            "financial_summary": "Ringkasan finansial belum tersedia; gunakan formula proyeksi dan snapshot dashboard sebagai acuan utama.",
+            "assumptions": "Asumsi utama mengikuti data operasional yang tersedia pada saat laporan dibentuk.",
+            "diagnostic_breakdown": "Pola hambatan utama perlu dikonfirmasi dari data tagihan, jadwal bayar, dan komitmen keluar kas yang tersedia.",
+            "evidence": "Bukti internal tambahan belum tersedia dalam konteks laporan ini.",
+            "controls": "Kontrol utama adalah validasi saldo awal, proyeksi cash-in, jadwal cash-out, dan ending cash sebelum keputusan dijalankan.",
+            "scenario_table": "Base case mengikuti formula penghitungan yang tersedia; skenario lain perlu divalidasi dari perubahan tanggal bayar dan cash-out.",
+            "cash_plan_implications": "Implikasi arus kas dibaca dari perubahan opening cash, cash-in, cash-out, dan ending cash antar horizon.",
+            "implementation_prerequisites": "Tetapkan owner penagihan, validasi komitmen bayar, dan pastikan jadwal cash-out prioritas sudah terkunci.",
+            "organizational_readiness": "Kesiapan pelaksanaan bergantung pada kejelasan owner, ritme monitoring mingguan, dan tindak lanjut pembayaran tertulis.",
+            "priority_table": "Prioritas tindakan mengikuti akun dengan nilai terbesar, keterlambatan tertinggi, dan dampak langsung terhadap ending cash.",
+            "visual_prompt": "",
+        }
+        report_context = {
+            **fallback_context,
+            **{key: value for key, value in report_context.items() if value},
+        }
+        for field_name in ("financial_summary", "assumptions", "diagnostic_breakdown", "evidence", "controls"):
+            report_context[field_name] = self._strip_hidden_guardrail_lines(report_context.get(field_name))
         chart_marker, flow_marker = self.extract_visual_markers(report_context.get("visual_prompt", ""))
         dashboard_markers = self.build_dashboard_visual_markers(analysis_payload)
         operational_snapshot = self.build_operational_snapshot_block(analysis_payload)
@@ -297,6 +353,10 @@ class ReportFinalizer:
         lines = [
             "# Ringkasan Eksekutif",
             executive_summary,
+            "",
+            "### Cuplikan Dasbor Operasional",
+            operational_snapshot or "- Snapshot dashboard operasional belum tersedia pada saat laporan dibentuk.",
+            *dashboard_markers,
             "",
             "# Analisis Deskriptif Cashflow",
             "### Snapshot Portofolio dan Konsentrasi Risiko",
@@ -383,3 +443,24 @@ class ReportFinalizer:
             lines.extend(["", flow_marker])
 
         return reader_safe_text("\n".join(lines))
+
+    @staticmethod
+    def _strip_hidden_guardrail_lines(value):
+        visible_lines = []
+        for line in str(value or "").splitlines():
+            lowered = line.lower()
+            if any(
+                marker in lowered
+                for marker in (
+                    "jangan klaim",
+                    "jangan menyatakan",
+                    "klaim yang wajib ditolak",
+                    "guardrail kualitas laporan",
+                    "rejected claim",
+                    "rejected-claim",
+                )
+            ):
+                continue
+            visible_lines.append(line)
+        cleaned = "\n".join(visible_lines).strip()
+        return cleaned or "Bukti operasional tambahan belum tersedia dalam konteks laporan ini."

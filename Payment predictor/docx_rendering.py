@@ -177,6 +177,21 @@ class ChartEngine:
         return f"Rp {amount:,.0f}".replace(",", ".")
 
     @staticmethod
+    def _parse_chart_points(raw_data):
+        labels = []
+        values = []
+        for chunk in raw_data.split(";"):
+            if "," not in chunk:
+                continue
+            label, value = chunk.split(",", 1)
+            numeric_value = re.sub(r"[^\d.\-]", "", value)
+            if not numeric_value:
+                continue
+            labels.append(label.strip())
+            values.append(float(numeric_value))
+        return labels, values
+
+    @staticmethod
     def create_bar_chart(data_str, theme_color):
         try:
             parts = [part.strip() for part in data_str.split("|")]
@@ -189,17 +204,7 @@ class ChartEngine:
                 y_label = "Persentase"
                 raw_data = data_str
 
-            labels = []
-            values = []
-            for chunk in raw_data.split(";"):
-                if "," not in chunk:
-                    continue
-                label, value = chunk.split(",", 1)
-                numeric_value = re.sub(r"[^\d.]", "", value)
-                if not numeric_value:
-                    continue
-                labels.append(label.strip())
-                values.append(float(numeric_value))
+            labels, values = ChartEngine._parse_chart_points(raw_data)
 
             if not labels:
                 return None
@@ -216,6 +221,43 @@ class ChartEngine:
             axis.set_ylabel(y_label, fontsize=10)
             axis.spines["top"].set_visible(False)
             axis.spines["right"].set_visible(False)
+
+            image_stream = io.BytesIO()
+            plt.savefig(image_stream, format="png", bbox_inches="tight", dpi=150)
+            plt.close(fig)
+            image_stream.seek(0)
+            return image_stream
+        except Exception:
+            return None
+
+    @staticmethod
+    def create_line_chart(data_str, theme_color):
+        try:
+            parts = [part.strip() for part in data_str.split("|")]
+            if len(parts) >= 3:
+                title = parts[0]
+                y_label = parts[1]
+                raw_data = "|".join(parts[2:])
+            else:
+                title = "Tren Arus Kas"
+                y_label = "Nilai"
+                raw_data = data_str
+
+            labels, values = ChartEngine._parse_chart_points(raw_data)
+            if not labels:
+                return None
+
+            color = ChartEngine._theme_to_plt_color(theme_color)
+            fig, axis = plt.subplots(figsize=(7, 4.2))
+            axis.plot(labels, values, color=color, linewidth=2.4, marker="o", markersize=6)
+            axis.fill_between(labels, values, min(values), color=color, alpha=0.12)
+            axis.set_title(title, fontsize=12, fontweight="bold", pad=18)
+            axis.set_ylabel(y_label, fontsize=10)
+            axis.grid(axis="y", alpha=0.25)
+            axis.spines["top"].set_visible(False)
+            axis.spines["right"].set_visible(False)
+            for index, value in enumerate(values):
+                axis.annotate(f"{value:g}", (index, value), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=8)
 
             image_stream = io.BytesIO()
             plt.savefig(image_stream, format="png", bbox_inches="tight", dpi=150)
@@ -460,6 +502,7 @@ class ChartEngine:
 class DocumentBuilder:
     VISUAL_MARKER_PREFIXES = {
         "CHART": "[[CHART:",
+        "LINE": "[[LINE:",
         "DASHBOARD": "[[DASHBOARD:",
         "FLOW": "[[FLOW:",
     }
@@ -805,6 +848,10 @@ class DocumentBuilder:
             image = ChartEngine.create_bar_chart(marker_payload, theme_color)
             width = Inches(5.8)
             caption = "Grafik distribusi historis kelas pembayaran"
+        elif marker_type == "LINE":
+            image = ChartEngine.create_line_chart(marker_payload, theme_color)
+            width = Inches(5.8)
+            caption = "Grafik tren arus kas"
         elif marker_type == "DASHBOARD":
             image = ChartEngine.create_dashboard_snapshot(marker_payload, theme_color)
             try:

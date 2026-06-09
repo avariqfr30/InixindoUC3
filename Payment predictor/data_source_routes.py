@@ -40,7 +40,10 @@ def register_data_source_routes(app):
                     409,
                 )
             current_app.config["forecast_cache"].clear()
-            current_app.config["cash_out_store"].refresh_data()
+            current_app.config["cash_out_store"].rebind_source_profile(
+                current_app.config["knowledge_base"].source_profile,
+                refresh=True,
+            )
 
         refresh_result = current_app.config["refresh_coordinator"].refresh_all()
         refreshed_snapshot = build_sync_snapshot()
@@ -150,7 +153,10 @@ def register_data_source_routes(app):
 
         activation = current_app.config["knowledge_base"].activate_source(source_key)
         current_app.config["forecast_cache"].clear()
-        current_app.config["cash_out_store"].refresh_data()
+        current_app.config["cash_out_store"].rebind_source_profile(
+            current_app.config["knowledge_base"].source_profile,
+            refresh=True,
+        )
         response_payload = {
             **activation,
             "syncStatus": build_sync_snapshot(),

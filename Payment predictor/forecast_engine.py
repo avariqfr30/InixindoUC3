@@ -2,13 +2,17 @@
 Cashflow Forecast Engine
 Generates predictions for Cash In, Cash Out, and Safety Status
 """
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List
 import pandas as pd
 import statistics
 
-from data_contract import resolve_financial_columns
+logger = logging.getLogger(__name__)
+
+from cashflow_formula import build_cash_in_formula, build_cash_out_formula, build_horizon_assumptions, expected_invoice_amount
+from data_contract import invoice_lifecycle_status, is_invoice_settled_status, is_invoice_unsettled_status, resolve_financial_columns
 from management_interpretation import CashflowManagementInterpreter
 
 
@@ -31,8 +35,43 @@ def parse_idr_amount(value) -> int:
     if any(character.isalpha() for character in text) and "rp" not in lowered and "idr" not in lowered:
         raise ValueError(f"Unsupported currency format: {text}")
 
-    digits = re.sub(r"[^\d]", "", text)
+    amount_text = re.sub(r"(?i)\b(rp|idr)\b", "", text)
+    amount_text = re.sub(r"[^\d,.]", "", amount_text)
+    if "." in amount_text or "," in amount_text:
+        last_dot = amount_text.rfind(".")
+        last_comma = amount_text.rfind(",")
+        decimal_separator = None
+        if last_dot >= 0 and last_comma >= 0:
+            decimal_separator = "." if last_dot > last_comma else ","
+        else:
+            separator = "." if last_dot >= 0 else ","
+            parts = amount_text.split(separator)
+            if len(parts) == 2 and len(parts[1]) in {1, 2}:
+                decimal_separator = separator
+
+        if decimal_separator:
+            integer_part = amount_text.rsplit(decimal_separator, 1)[0]
+            digits = re.sub(r"[^\d]", "", integer_part)
+        else:
+            digits = re.sub(r"[^\d]", "", amount_text)
+    else:
+        digits = re.sub(r"[^\d]", "", amount_text)
     return int(digits) if digits else 0
+
+
+def _parse_optional_date(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.to_pydatetime()
+
+
+def _is_settled_status(value):
+    return is_invoice_settled_status(value)
+
+
+def _is_unsettled_status(value):
+    return is_invoice_unsettled_status(value)
 
 
 class PaymentBehaviorAnalyzer:
@@ -114,7 +153,7 @@ class PaymentBehaviorAnalyzer:
 class CashOutProjector:
     """Projects cash outflows (operating expenses)"""
     
-    def __init__(self, monthly_operating_cost_idr: int = 200_000_000):
+    def __init__(self, monthly_operating_cost_idr: int = 200_000_000, activity_multiplier: float = 1.0):
         """
         Initialize with monthly operating costs
         Args:
@@ -122,6 +161,7 @@ class CashOutProjector:
         """
         self.monthly_operating_cost = monthly_operating_cost_idr
         self.daily_rate = monthly_operating_cost_idr / 30
+        self.activity_multiplier = max(float(activity_multiplier or 1), 0)
     
     def project_cash_out(self, start_date: datetime, end_date: datetime, cash_out_records: List[Dict] = None) -> Dict:
         """
@@ -151,7 +191,14 @@ class CashOutProjector:
                 key=lambda item: item["amount"],
                 reverse=True,
             )
-            live_total = int(sum(record.get("amount") or 0 for record in relevant_records))
+            scheduled_total = int(sum(record.get("amount") or 0 for record in relevant_records))
+            formula_components = build_cash_out_formula(
+                scheduled_disbursement=scheduled_total,
+                fixed_cost_component=0,
+                activity_multiplier=self.activity_multiplier,
+                source="live_schedule",
+            )
+            live_total = formula_components["total_expected_cash_out"]
             return {
                 'total_cash_out': live_total,
                 'daily_rate': int(live_total / max(days, 1)),
@@ -160,23 +207,32 @@ class CashOutProjector:
                 'source': 'live_schedule',
                 'event_count': len(relevant_records),
                 'category_breakdown': sorted_categories,
+                'formula_components': formula_components,
             }
 
+        baseline_total = int(self.daily_rate * days)
+        formula_components = build_cash_out_formula(
+            scheduled_disbursement=0,
+            fixed_cost_component=baseline_total,
+            activity_multiplier=self.activity_multiplier,
+            source="modeled_monthly_rate",
+        )
         return {
-            'total_cash_out': int(self.daily_rate * days),
-            'daily_rate': int(self.daily_rate),
+            'total_cash_out': formula_components["total_expected_cash_out"],
+            'daily_rate': int(formula_components["total_expected_cash_out"] / max(days, 1)),
             'monthly_rate': self.monthly_operating_cost,
             'period_days': days,
             'source': 'modeled_monthly_rate',
             'event_count': 0,
             'category_breakdown': [],
+            'formula_components': formula_components,
         }
 
 
 class CashflowForecaster:
     """Main forecaster combining Cash In predictions, Cash Out projections, and safety analysis"""
     
-    AMAN_THRESHOLD_IDR = 100_000_000  # IDR 100M minimum safe buffer
+    AMAN_THRESHOLD_IDR_MINIMUM = 50_000_000  # IDR 50M absolute floor
     HEALTH_WEIGHTS = {
         'liquidity': 30,
         'stability': 20,
@@ -196,6 +252,10 @@ class CashflowForecaster:
         self.behavior_analyzer = PaymentBehaviorAnalyzer()
         self.out_projector = CashOutProjector(monthly_operating_cost_idr)
         self.monthly_cost = monthly_operating_cost_idr
+        self.AMAN_THRESHOLD_IDR = max(
+            int(monthly_operating_cost_idr * 0.5),
+            self.AMAN_THRESHOLD_IDR_MINIMUM,
+        )
     
     def forecast_by_horizon(
         self, 
@@ -204,20 +264,47 @@ class CashflowForecaster:
         start_date: datetime,
         cash_out_records: List[Dict] = None,
     ) -> Dict:
-        """Generate forecasts for all time horizons"""
+        """Generate connected forecasts for all time horizons."""
         forecasts = {}
+        rolling_cash = cash_on_hand
+        rolling_start = start_date
+        previous_horizon_days = 0
+        inherited_horizons = []
         
         for horizon_key, horizon_config in self.TIME_HORIZONS.items():
-            end_date = start_date + timedelta(days=horizon_config['days'])
+            horizon_days = int(horizon_config['days'])
+            segment_days = max(horizon_days - previous_horizon_days, 1)
+            if horizon_key == 'short_term':
+                end_date = rolling_start + timedelta(days=segment_days)
+            else:
+                end_date = rolling_start + timedelta(days=segment_days - 1)
             forecast = self.forecast(
                 df=df,
-                cash_on_hand=cash_on_hand,
-                start_date=start_date,
+                cash_on_hand=rolling_cash,
+                start_date=rolling_start,
                 end_date=end_date,
                 horizon_key=horizon_key,
                 cash_out_records=cash_out_records,
             )
+            forecast['connected_horizon_context'] = {
+                'opening_cash': rolling_cash,
+                'closing_cash': forecast['forecast']['ending_cash'],
+                'inherited_from': list(inherited_horizons),
+                'applies_to_following_horizons': [
+                    key
+                    for key, config in self.TIME_HORIZONS.items()
+                    if int(config['days']) > horizon_days
+                ],
+                'connection_rule': (
+                    'Ending cash from each horizon becomes the opening cash for the next horizon, '
+                    'so earlier findings affect later ranges.'
+                ),
+            }
             forecasts[horizon_key] = forecast
+            rolling_cash = forecast['forecast']['ending_cash']
+            rolling_start = end_date + timedelta(days=1)
+            previous_horizon_days = horizon_days
+            inherited_horizons.append(horizon_key)
         
         return forecasts
     
@@ -311,7 +398,18 @@ class CashflowForecaster:
                 'cash_out': cash_out_forecast,
                 'ending_cash': ending_cash,
                 'formula': f'{cash_on_hand:,} + {total_cash_in:,} - {total_cash_out:,} = {ending_cash:,}',
+                'formula_components': {
+                    'cash_on_hand': cash_on_hand,
+                    'cash_in': cash_in_forecast.get('formula_components', {}),
+                    'cash_out': cash_out_forecast.get('formula_components', {}),
+                    'ending_cash': ending_cash,
+                },
             },
+            'forecast_assumptions': build_horizon_assumptions(
+                horizon_key or 'short_term',
+                pipeline_available=bool(cash_in_forecast.get('formula_components', {}).get('pipeline_component')),
+                cash_out_source=cash_out_forecast.get('source'),
+            ),
             'cashflow_health': cashflow_health,
             'working_capital_signal': self._build_working_capital_signal(
                 cash_on_hand=cash_on_hand,
@@ -348,11 +446,76 @@ class CashflowForecaster:
         payment_class_column = resolved_columns.get('payment_class')
         invoice_value_column = resolved_columns.get('invoice_value')
         delay_note_column = resolved_columns.get('delay_note')
+        period_column = resolved_columns.get('period')
+        invoice_date_column = self._find_column(
+            df,
+            (
+                "invoice_date",
+                "tanggal_invoice",
+                "tanggal invoice",
+                "tanggal tagihan",
+                "billing_date",
+                "period",
+                "invoice period",
+            ),
+            fallback=period_column,
+        )
+        due_date_column = self._find_column(
+            df,
+            (
+                "invoice_due_date",
+                "due_date",
+                "tanggal_jatuh_tempo",
+                "tanggal jatuh tempo invoice",
+                "tanggal jatuh tempo",
+                "jatuh_tempo",
+                "payment_due_date",
+            ),
+        )
+        paid_date_column = self._find_column(
+            df,
+            (
+                "invoice_paid_date",
+                "paid_date",
+                "tanggal_bayar",
+                "tanggal bayar invoice",
+                "tanggal bayar",
+                "payment_date",
+                "settlement_date",
+            ),
+        )
+        settled_column = self._find_column(
+            df,
+            (
+                "invoice_is_settled",
+                "is_settled",
+                "status pembayaran invoice",
+                "status pembayaran",
+                "settled",
+                "payment_status",
+                "status",
+                "invoice_status",
+            ),
+        )
         
         for idx, row in df.iterrows():
             try:
                 nilai = parse_idr_amount(row.get(invoice_value_column, '')) if invoice_value_column else 0
-                
+                invoice_date = _parse_optional_date(row.get(invoice_date_column)) if invoice_date_column else None
+                due_date = _parse_optional_date(row.get(due_date_column)) if due_date_column else None
+                paid_date = _parse_optional_date(row.get(paid_date_column)) if paid_date_column else None
+                raw_settled = row.get(settled_column) if settled_column else ""
+                lifecycle = invoice_lifecycle_status(raw_settled, paid_date)
+                is_settled = lifecycle["is_settled"]
+                is_unsettled = lifecycle["is_unsettled"]
+
+                if paid_date and paid_date < start_date and not is_unsettled:
+                    continue
+                if is_settled and not is_unsettled:
+                    continue
+                if invoice_date and invoice_date > end_date:
+                    continue
+
                 invoices.append({
                     'index': idx,
                     'partner_type': str(row.get(partner_column, '')) if partner_column else '',
@@ -360,11 +523,28 @@ class CashflowForecaster:
                     'kelas': self.behavior_analyzer.extract_kelas(str(row.get(payment_class_column, ''))) if payment_class_column else 'Kelas C',
                     'amount': nilai,
                     'note': str(row.get(delay_note_column, '')) if delay_note_column else '',
+                    'invoice_date': invoice_date,
+                    'due_date': due_date,
+                    'paid_date': paid_date,
+                    'is_settled': is_settled,
                 })
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                logger.warning("Skipped unparseable invoice at row %s: %s", idx, exc)
                 continue
         
         return invoices
+
+    @staticmethod
+    def _find_column(df: pd.DataFrame, candidates, fallback=None):
+        normalized = {
+            re.sub(r"[^a-z0-9]+", "_", str(column or "").strip().lower()).strip("_"): column
+            for column in df.columns
+        }
+        for candidate in candidates:
+            key = re.sub(r"[^a-z0-9]+", "_", str(candidate or "").strip().lower()).strip("_")
+            if key in normalized:
+                return normalized[key]
+        return fallback
     
     def _forecast_cash_in(self, invoices: List[Dict], start_date: datetime, end_date: datetime) -> Dict:
         """Forecast cash in based on payment behavior"""
@@ -373,31 +553,48 @@ class CashflowForecaster:
         for invoice in invoices:
             kelas = invoice['kelas']
             profile = self.behavior_analyzer.get_payment_profile(kelas)
-            
-            # Assume invoice issued at start of period for simplicity
-            estimated_payment_date = start_date + timedelta(days=profile['days_delay'])
+
+            if invoice.get('paid_date'):
+                estimated_payment_date = invoice['paid_date']
+            else:
+                base_date = invoice.get('due_date') or invoice.get('invoice_date')
+                if base_date is None:
+                    base_date = start_date
+                estimated_payment_date = base_date + timedelta(days=profile['days_delay'])
             
             # Only count if payment falls within forecast period
-            if estimated_payment_date <= end_date:
+            if start_date <= estimated_payment_date <= end_date:
+                nominal_amount = int(invoice['amount'])
+                expected_amount = expected_invoice_amount(
+                    nominal_amount,
+                    profile['retention'],
+                    is_actual=bool(invoice.get('paid_date')),
+                )
                 predicted_payments.append({
                     'partner_type': invoice['partner_type'],
                     'service': invoice['service'],
                     'kelas': kelas,
-                    'amount': invoice['amount'],
+                    'nominal_amount': nominal_amount,
+                    'amount': expected_amount,
                     'estimated_payment_date': estimated_payment_date.isoformat(),
                     'days_delay': profile['days_delay'],
                     'retention_probability': profile['retention'],
                     'satisfaction_score': profile['satisfaction'],
+                    'basis': 'actual_paid_date' if invoice.get('paid_date') else 'expected_value_from_payment_behavior',
                 })
         
         total = sum(p['amount'] for p in predicted_payments)
+        nominal_total = sum(p.get('nominal_amount', p['amount']) for p in predicted_payments)
         behavior_summary = self._summarize_payment_behavior(predicted_payments)
+        formula_components = build_cash_in_formula(predicted_payments)
         
         return {
             'predicted_payments': predicted_payments,
             'total_predicted_cash_in': total,
+            'nominal_predicted_cash_in': nominal_total,
             'payment_count': len(predicted_payments),
             'behavior_summary': behavior_summary,
+            'formula_components': formula_components,
         }
     
     def _analyze_outstanding(self, invoices: List[Dict]) -> Dict:
@@ -520,9 +717,21 @@ class CashflowForecaster:
             key: payload['score']
             for key, payload in cashflow_health['dimensions'].items()
         }
+
+        def add_decision_metadata(item, owner, timing, trigger_condition, expected_cash_impact, confidence, decision_type):
+            enriched = dict(item)
+            enriched.update({
+                'owner': owner,
+                'timing': timing,
+                'trigger_condition': trigger_condition,
+                'expected_cash_impact': expected_cash_impact,
+                'confidence': confidence,
+                'decision_type': decision_type,
+            })
+            recommendations.append(enriched)
         
         if cashflow_health['internal_status'] != 'aman':
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'HIGH',
                 'action': 'Percepat penagihan dari high-priority clients',
                 'rationale': 'Buffer operasional menipis dan perlu dijaga agar kewajiban jangka pendek tetap tertutup',
@@ -531,14 +740,14 @@ class CashflowForecaster:
                 'customer_characteristic': 'Likuiditas internal tertekan',
                 'retention_signal': 'Pertahankan akun yang masih responsif agar arus kas masuk tidak makin tertunda',
                 'satisfaction_signal': 'Pastikan komunikasi tetap jelas agar percepatan penagihan tidak menurunkan trust',
-            })
+            }, 'Finance Lead + Client Relations', '0-7 hari', 'Status buffer bukan aman atau ending cash di bawah kebutuhan keluar kas', 'Prioritas pada invoice terbesar yang jatuh tempo dalam horizon aktif', 'medium', 'collection_acceleration')
         
         # High risk clients
         high_risk = [inv for inv in invoices if inv['kelas'] in ['Kelas D', 'Kelas E']]
         if high_risk:
             high_risk_total = sum(inv['amount'] for inv in high_risk)
             dominant_class = statistics.mode([inv['kelas'] for inv in high_risk]) if high_risk else 'Kelas D'
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'HIGH',
                 'action': 'Intervensi untuk clients dengan Kelas D-E',
                 'rationale': f'IDR {high_risk_total:,.0f} at high default risk',
@@ -547,12 +756,12 @@ class CashflowForecaster:
                 'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic(dominant_class),
                 'retention_signal': 'Retention rendah; akun seperti ini butuh intervensi yang lebih personal atau opsi restrukturisasi',
                 'satisfaction_signal': 'Satisfaction score rendah mengindikasikan potensi friksi layanan yang memperpanjang pembayaran',
-            })
+            }, 'Account Manager + Finance Lead', '0-14 hari', 'Ada invoice kelas D-E dalam horizon aktif', f'Eksposur expected-value sekitar IDR {high_risk_total:,.0f}', 'medium', 'risk_intervention')
         
         # Medium risk - retention focus
         medium_risk = [inv for inv in invoices if inv['kelas'] == 'Kelas C']
         if len(medium_risk) > 3:
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'MEDIUM',
                 'action': 'Relationship management untuk Kelas C clients',
                 'rationale': f'{len(medium_risk)} invoices dengan delay 1-2 bulan',
@@ -561,12 +770,12 @@ class CashflowForecaster:
                 'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic('Kelas C'),
                 'retention_signal': 'Retention berada di level menengah dan masih bisa ditingkatkan dengan ritme hubungan yang lebih baik',
                 'satisfaction_signal': 'Satisfaction menengah berarti pengalaman layanan dan kejelasan dokumen masih berpengaruh pada kecepatan bayar',
-            })
+            }, 'Client Relations', '14-30 hari', 'Lebih dari 3 invoice kelas C aktif', 'Mengurangi risiko invoice bergeser ke kelas D-E', 'medium', 'relationship_recovery')
         
         # Good performers
         good_clients = [inv for inv in invoices if inv['kelas'] in ['Kelas A', 'Kelas B']]
         if good_clients:
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'MEDIUM',
                 'action': 'Upselling & deepening untuk Kelas A-B performers',
                 'rationale': f'Proven payment discipline ({len(good_clients)} invoices)',
@@ -575,10 +784,10 @@ class CashflowForecaster:
                 'customer_characteristic': self.behavior_analyzer.describe_customer_characteristic('Kelas A'),
                 'retention_signal': 'Retention kuat; akun sehat bisa dijaga untuk menopang kestabilan arus kas masuk jangka menengah',
                 'satisfaction_signal': 'Satisfaction tinggi memberi ruang untuk cross-sell tanpa menambah risiko pembayaran berarti',
-            })
+            }, 'Commercial Lead', '30-90 hari', 'Ada akun kelas A-B yang terbukti disiplin bayar', 'Meningkatkan pipeline sehat tanpa menaikkan risiko collection secara material', 'medium', 'pipeline_quality')
 
         if dimension_scores.get('stability', 100) < 60:
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'HIGH',
                 'action': 'Perkuat visibilitas jadwal arus kas masuk mingguan',
                 'rationale': 'Pola masuk kas masih fluktuatif atau terlalu sedikit invoice yang punya timing realisasi yang jelas dalam periode ini',
@@ -587,10 +796,10 @@ class CashflowForecaster:
                 'customer_characteristic': 'Timing pembayaran belum cukup predictable untuk kebutuhan operasional',
                 'retention_signal': 'Komunikasi rutin menjaga akun tetap engaged sambil mendorong kepastian jadwal bayar',
                 'satisfaction_signal': 'Kepastian dokumen dan follow-up yang rapi membantu klien membayar lebih terjadwal',
-            })
+            }, 'Finance Operations', 'Setiap minggu', 'Skor stabilitas cashflow di bawah 60', 'Meningkatkan visibilitas timing cash-in pada horizon berikutnya', 'high', 'forecast_control')
 
         if dimension_scores.get('conversion', 100) < 60:
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'HIGH',
                 'action': 'Percepat konversi invoice menjadi kas',
                 'rationale': 'Rata-rata delay pembayaran masih terlalu panjang dibanding kebutuhan arus kas jangka pendek',
@@ -599,10 +808,10 @@ class CashflowForecaster:
                 'customer_characteristic': 'Revenue sudah ada, namun kecepatan konversi ke kas belum sehat',
                 'retention_signal': 'Percepatan harus tetap menjaga hubungan akun yang masih bisa diselamatkan',
                 'satisfaction_signal': 'Hambatan layanan atau administrasi perlu dibersihkan agar klien tidak menunda pembayaran lebih lama',
-            })
+            }, 'Finance Collection', '0-30 hari', 'Skor konversi invoice ke kas di bawah 60', 'Mempercepat realisasi invoice yang sudah memiliki dasar tagih', 'high', 'invoice_to_cash')
 
         if dimension_scores.get('risk', 100) < 60:
-            recommendations.append({
+            add_decision_metadata({
                 'priority': 'MEDIUM',
                 'action': 'Turunkan konsentrasi risiko pada segmen yang paling dominan',
                 'rationale': 'Eksposur outstanding terlalu terkonsentrasi pada partner/service tertentu atau terlalu berat di kelas D-E',
@@ -611,7 +820,7 @@ class CashflowForecaster:
                 'customer_characteristic': 'Risiko saat ini datang dari konsentrasi, bukan hanya dari total outstanding',
                 'retention_signal': 'Retensi akun besar tetap penting, tetapi ketergantungan berlebih perlu dikendalikan',
                 'satisfaction_signal': 'Perlu dibedakan mana isu relasi, mana isu struktur portofolio agar tindakan tidak salah sasaran',
-            })
+            }, 'Finance Lead + Commercial Lead', '30-90 hari', 'Skor risk exposure di bawah 60', 'Menurunkan ketergantungan pada satu segmen atau akun besar', 'medium', 'portfolio_risk_control')
         
         return recommendations
 
@@ -728,20 +937,13 @@ class CashflowForecaster:
             1,
         )
 
-        if overall_score >= 80:
-            internal_status = 'aman'
-            operating_signal = 'buffer operasional terjaga'
-        elif overall_score >= 60:
-            internal_status = 'waspada'
-            operating_signal = 'buffer perlu dipantau ketat'
-        else:
-            internal_status = 'bahaya'
-            operating_signal = 'buffer memerlukan intervensi cepat'
-
-        weakest_dimensions = [
-            payload['label']
-            for payload in sorted(dimensions.values(), key=lambda item: item['score'])[:2]
+        dimension_statuses = {key: payload.get('status') for key, payload in dimensions.items()}
+        dangerous_dimension_keys = [
+            key
+            for key, status in dimension_statuses.items()
+            if status == 'bahaya'
         ]
+        dangerous_weight = sum(self.HEALTH_WEIGHTS[key] for key in dangerous_dimension_keys)
 
         readiness_checks = {
             'cash_available_now': {
@@ -757,7 +959,7 @@ class CashflowForecaster:
                 ),
             },
             'risk_controlled': {
-                'ok': risk['score'] >= 60,
+                'ok': risk.get('status') != 'bahaya',
                 'label': 'Risiko cashflow terkendali',
                 'detail': (
                     f"Eksposur partner terbesar {risk['metrics']['top_partner_share_pct']:.1f}% "
@@ -765,14 +967,57 @@ class CashflowForecaster:
                 ),
             },
         }
+        readiness_ok = all(item['ok'] for item in readiness_checks.values())
+        cash_pressure_dangerous = any(
+            key in dangerous_dimension_keys
+            for key in ("liquidity", "coverage")
+        )
+        danger_dominant = (
+            len(dangerous_dimension_keys) >= 3 or dangerous_weight >= 50
+        ) and cash_pressure_dangerous
+
+        if danger_dominant:
+            internal_status = 'bahaya'
+            operating_signal = 'mayoritas kriteria kas memerlukan intervensi cepat'
+        elif overall_score >= 80 and readiness_ok and not dangerous_dimension_keys:
+            internal_status = 'aman'
+            operating_signal = 'cash tersedia, timing cash-in jelas, dan risiko terkendali'
+        elif overall_score >= 60:
+            internal_status = 'waspada'
+            operating_signal = 'buffer perlu dipantau ketat'
+        else:
+            internal_status = 'waspada'
+            operating_signal = 'beberapa kriteria melemah, tetapi bahaya belum dominan'
+
+        weakest_dimensions = [
+            payload['label']
+            for payload in sorted(dimensions.values(), key=lambda item: item['score'])[:2]
+        ]
 
         return {
             'overall_score': overall_score,
             'internal_status': internal_status,
             'operating_signal': operating_signal,
+            'dimension_statuses': dimension_statuses,
             'dimensions': dimensions,
             'weakest_dimensions': weakest_dimensions,
             'readiness_checks': readiness_checks,
+            'aman_definition': {
+                'cash_available_now': 'Ada uang cash sekarang.',
+                'cash_in_visibility': 'Ada tanda jelas kapan uang masuk.',
+                'risk_controlled': 'Risiko cashflow ditangani dan tidak dominan.',
+                'is_fulfilled': readiness_ok and internal_status == 'aman',
+            },
+            'overall_status_basis': {
+                'dangerous_dimension_count': len(dangerous_dimension_keys),
+                'dangerous_dimension_weight': dangerous_weight,
+                'dangerous_dimensions': [
+                    dimensions[key]['label']
+                    for key in dangerous_dimension_keys
+                ],
+                'cash_pressure_dangerous': cash_pressure_dangerous,
+                'danger_dominant': danger_dominant,
+            },
         }
 
     def _score_liquidity(self, cash_on_hand: int, total_cash_out: int, ending_cash: int) -> Dict:
@@ -783,10 +1028,17 @@ class CashflowForecaster:
         runway_score = self._score_runway(projected_runway_months)
         obligation_score = self._score_obligation_ratio(cash_vs_obligation_ratio)
         score = round((runway_score * 0.7) + (obligation_score * 0.3), 1)
+        if projected_runway_months >= 2 and cash_vs_obligation_ratio >= 1:
+            status = 'aman'
+        elif projected_runway_months < 1 or cash_vs_obligation_ratio < 0.75:
+            status = 'bahaya'
+        else:
+            status = 'waspada'
 
         return {
             'label': 'Likuiditas',
             'score': score,
+            'status': status,
             'weight': self.HEALTH_WEIGHTS['liquidity'],
             'summary': (
                 f"Runway proyeksi {projected_runway_months:.1f} bulan dengan rasio kas terhadap kewajiban jangka pendek "
@@ -837,10 +1089,12 @@ class CashflowForecaster:
             + (visibility_score * 0.3),
             1,
         )
+        status = self._status_from_score(score)
 
         return {
             'label': 'Stabilitas Cashflow',
             'score': score,
+            'status': status,
             'weight': self.HEALTH_WEIGHTS['stability'],
             'summary': (
                 f"Visibilitas arus kas masuk {visibility_ratio * 100:.1f}% dari outstanding dengan variasi realisasi "
@@ -875,10 +1129,17 @@ class CashflowForecaster:
         delay_score = self._score_delay_days(average_delay)
         quick_share_score = self._score_quick_share(quick_conversion_share)
         score = round((delay_score * 0.7) + (quick_share_score * 0.3), 1)
+        if average_delay > 30:
+            status = 'bahaya'
+        elif average_delay > 7:
+            status = 'waspada'
+        else:
+            status = 'aman'
 
         return {
             'label': 'Konversi Invoice ke Kas',
             'score': score,
+            'status': status,
             'weight': self.HEALTH_WEIGHTS['conversion'],
             'summary': (
                 f"Rata-rata delay tertimbang {average_delay:.1f} hari dengan porsi konversi cepat "
@@ -893,9 +1154,16 @@ class CashflowForecaster:
     def _score_coverage(self, total_cash_in: int, total_cash_out: int) -> Dict:
         coverage_ratio = (total_cash_in / total_cash_out) if total_cash_out else 999
         score = self._score_coverage_ratio(coverage_ratio)
+        if coverage_ratio > 1.2:
+            status = 'aman'
+        elif coverage_ratio >= 1.0:
+            status = 'waspada'
+        else:
+            status = 'bahaya'
         return {
             'label': 'Coverage',
             'score': score,
+            'status': status,
             'weight': self.HEALTH_WEIGHTS['coverage'],
             'summary': f"Rasio arus kas masuk terhadap arus kas keluar berada di {coverage_ratio:.2f}x.",
             'metrics': {
@@ -922,10 +1190,17 @@ class CashflowForecaster:
         concentration_score = self._score_concentration(top_partner_share, top_service_share)
         overdue_risk_score = self._score_high_risk_share(high_risk_share)
         score = round((concentration_score * 0.6) + (overdue_risk_score * 0.4), 1)
+        if top_partner_share > 0.5 or high_risk_share > 0.5:
+            status = 'bahaya'
+        elif top_partner_share > 0.3 or high_risk_share > 0.3:
+            status = 'waspada'
+        else:
+            status = 'aman'
 
         return {
             'label': 'Risk Exposure',
             'score': score,
+            'status': status,
             'weight': self.HEALTH_WEIGHTS['risk'],
             'summary': (
                 f"Konsentrasi partner terbesar {top_partner_share * 100:.1f}%, layanan terbesar {top_service_share * 100:.1f}%, "
@@ -1026,15 +1301,21 @@ class CashflowForecaster:
 
     @staticmethod
     def _score_coverage_ratio(ratio: float) -> float:
-        if ratio >= 1.5:
+        if ratio > 1.2:
             return 100
-        if ratio >= 1.2:
-            return 85
         if ratio >= 1.0:
             return 70
         if ratio >= 0.8:
             return 45
         return 20
+
+    @staticmethod
+    def _status_from_score(score: float) -> str:
+        if score >= 80:
+            return 'aman'
+        if score >= 60:
+            return 'waspada'
+        return 'bahaya'
 
     @staticmethod
     def _score_concentration(top_partner_share: float, top_service_share: float) -> float:
@@ -1104,11 +1385,30 @@ class CashflowForecaster:
             top_overdue_accounts=top_overdue_accounts,
             weakest_dimensions=cashflow_health.get('weakest_dimensions') or [],
         )
+        projection_defensibility = {
+            'method': 'Deterministic cashflow projection for decision support, not a statistical guarantee.',
+            'confidence_drivers': [
+                f"{len(invoices)} invoice terbaca pada horizon aktif.",
+                f"{len(predicted_payments)} pembayaran diproyeksikan masuk pada horizon aktif.",
+                f"Coverage ratio {round(ratio_forecast, 2)} dan projected runway {round(projected_runway, 1)} bulan.",
+            ],
+            'challenge_checks': [
+                'Validasi komitmen bayar tertulis sebelum menaikkan asumsi cash-in.',
+                'Cek konsentrasi akun agar satu invoice besar tidak menutupi risiko portofolio.',
+                'Bandingkan saldo aktual periode berikutnya dengan projection bridge ini.',
+            ],
+            'sensitivity': [
+                'Ending cash paling sensitif terhadap tanggal bayar akun prioritas dan cash-out terjadwal.',
+                'Jika pembayaran prioritas bergeser keluar horizon, status dapat turun walaupun nominal invoice tetap sama.',
+            ],
+            'statistical_backtesting_claimed': False,
+        }
 
         return {
             'status': management_interpretation['status'],
             'status_label': cashflow_health['operating_signal'],
             'management_interpretation': management_interpretation,
+            'projection_defensibility': projection_defensibility,
             'current_cash': cash_on_hand,
             'runway_months': projected_runway,
             'coverage_ratio': ratio_forecast,
@@ -1146,6 +1446,12 @@ class CashflowForecaster:
                 'top_partner_share_pct': risk['top_partner_share_pct'],
                 'top_service_share_pct': risk['top_service_share_pct'],
                 'high_risk_share_pct': risk['high_risk_share_pct'],
+            },
+            'cashflow_health_basis': {
+                'dimension_statuses': cashflow_health.get('dimension_statuses') or {},
+                'readiness_checks': cashflow_health.get('readiness_checks') or {},
+                'aman_definition': cashflow_health.get('aman_definition') or {},
+                'overall_status_basis': cashflow_health.get('overall_status_basis') or {},
             },
         }
 

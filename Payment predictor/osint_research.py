@@ -142,6 +142,69 @@ class Researcher:
         return candidate.strip(" ,;:-")
 
     @classmethod
+    def _sanitize_dashboard_osint_summary(cls, text, max_length=220):
+        cleaned = str(text or "")
+        cleaned = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", cleaned)
+        cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+        cleaned = re.sub(r"https?://\S+|www\.\S+", " ", cleaned)
+        cleaned = re.sub(r"\[\!?\[[^\]]*(?:\]|\Z)", " ", cleaned)
+        cleaned = re.sub(r"\b(?:Jl\.?|Jalan)\s+.*?(?=(?:\bPER[-\s]|\bTata Cara\b|$))", " ", cleaned, flags=re.IGNORECASE)
+
+        fragments = []
+        for fragment in re.split(r"\s+-\s+|\s+\|\s+", cleaned):
+            lowered = fragment.lower()
+            if any(
+                marker in lowered
+                for marker in (
+                    "jdihn logo",
+                    "sen - jum",
+                    "senin",
+                    "jumat",
+                    "08:00",
+                    "17:00",
+                    "hai.",
+                    "logo",
+                    "alamat",
+                )
+            ):
+                continue
+            fragments.append(fragment)
+
+        cleaned = " ".join(fragments)
+        cleaned = re.sub(r"[\[\]\(\)]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -;,.|")
+        return cls._normalize_osint_fragment(cleaned, max_length=max_length)
+
+    @classmethod
+    def sanitize_dashboard_external_factors(cls, factors):
+        sanitized = []
+        for factor in factors or []:
+            if not isinstance(factor, dict):
+                continue
+            item = dict(factor)
+            summary = cls._sanitize_dashboard_osint_summary(item.get("summary"), max_length=220)
+            summary_lower = summary.lower()
+            raw_markers = (
+                "kementerian",
+                "keputusan kepala",
+                " nomor ",
+                "sumber:",
+                "jl.",
+                "sen - jum",
+                "standar pelayanan",
+            )
+            if any(marker in summary_lower for marker in raw_markers) or len(summary.split()) < 6:
+                summary = (
+                    f"Sinyal eksternal untuk {item.get('factor') or 'risiko pembayaran'}: "
+                    f"{item.get('impact') or 'perlu dipakai sebagai konteks pendukung, bukan fakta utama internal.'}"
+                )
+            elif not summary_lower.startswith("sinyal eksternal"):
+                summary = f"Sinyal eksternal untuk {item.get('factor') or 'risiko pembayaran'}: {summary}"
+            item["summary"] = cls._normalize_osint_fragment(summary, max_length=220)
+            sanitized.append(item)
+        return sanitized
+
+    @classmethod
     def _extract_profile_tags(cls, text):
         lowered = str(text or "").lower()
         tags = set()
@@ -591,4 +654,4 @@ class Researcher:
                 }
             )
 
-        return factors
+        return cls.sanitize_dashboard_external_factors(factors)

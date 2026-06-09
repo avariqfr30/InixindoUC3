@@ -51,7 +51,7 @@ def connect_internal_data_source(payload, knowledge_base, forecast_cache, cash_o
     if ready and should_activate:
         activation = knowledge_base.activate_source("production")
         forecast_cache.clear()
-        cash_out_store.refresh_data()
+        cash_out_store.rebind_source_profile(knowledge_base.source_profile, refresh=True)
 
     sample_records = raw_df.head(preview_rows).to_dict(orient="records")
     response_payload = {

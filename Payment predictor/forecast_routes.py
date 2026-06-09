@@ -47,9 +47,7 @@ def register_forecast_routes(app, logger):
                 end_date=end_date,
             )
             forecast["currency"] = currency_code
-            forecast["external_factors"] = Researcher.get_payment_delay_risks(
-                _build_external_context(start_date, end_date)
-            )
+            forecast["external_factors"] = _get_sanitized_external_factors(start_date, end_date)
             forecast["sync_status"] = build_sync_snapshot()
             return jsonify(forecast)
         except Exception as e:
@@ -92,9 +90,7 @@ def register_forecast_routes(app, logger):
                 "currency": currency_code,
                 "forecasts": forecasts,
                 "time_horizons": CashflowForecaster.TIME_HORIZONS,
-                "external_factors": Researcher.get_payment_delay_risks(
-                    _build_external_context(start_date, horizon_end)
-                ),
+                "external_factors": _get_sanitized_external_factors(start_date, horizon_end),
                 "sync_status": build_sync_snapshot(),
             })
         except Exception as e:
@@ -274,6 +270,12 @@ def _validate_currency_code(payload):
     if currency not in {"IDR", "RP", "RUPIAH"}:
         raise ValueError("This app only accepts Rupiah (IDR) amounts.")
     return "IDR"
+
+
+def _get_sanitized_external_factors(start_date, end_date):
+    return Researcher.sanitize_dashboard_external_factors(
+        Researcher.get_payment_delay_risks(_build_external_context(start_date, end_date))
+    )
 
 
 def _get_cash_out_records():

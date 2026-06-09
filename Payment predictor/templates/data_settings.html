@@ -180,7 +180,9 @@
             </nav>
         </header>
 
-        <form id="logout-form" class="hidden" method="post" action="{{ url_for('logout') }}"></form>
+        <form id="logout-form" class="hidden" method="post" action="{{ url_for('logout') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        </form>
 
         <section id="settings-status" class="status-panel">Memuat status konfigurasi...</section>
 
@@ -192,6 +194,27 @@
     </main>
 
     <script>
+        // Global Fetch Interceptor for CSRF Protection
+        (function() {
+            const originalFetch = window.fetch;
+            window.fetch = function(url, options = {}) {
+                if (options.method && options.method.toUpperCase() === 'POST') {
+                    options.headers = options.headers || {};
+                    const token = document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                    if (token) {
+                        if (options.headers instanceof Headers) {
+                            options.headers.set('X-CSRFToken', token);
+                        } else if (Array.isArray(options.headers)) {
+                            options.headers.push(['X-CSRFToken', token]);
+                        } else {
+                            options.headers['X-CSRFToken'] = token;
+                        }
+                    }
+                }
+                return originalFetch(url, options);
+            };
+        })();
+
         const ui = {
             status: document.getElementById('settings-status'),
             message: document.getElementById('settings-message'),

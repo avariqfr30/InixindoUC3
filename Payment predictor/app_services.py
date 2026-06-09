@@ -7,11 +7,20 @@ from runtime_services import BackgroundRefreshCoordinator, ForecastSnapshotCache
 
 def configure_runtime_services(app, logger):
     from config import (
+        AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE,
+        AUTH_SIGNUP_VERIFICATION_TIMEOUT_SECONDS,
+        AUTH_SIGNUP_VERIFICATION_WEBHOOK_URL,
         AUTH_ALLOWED_EMAIL_DOMAIN,
         AUTH_MAX_ACTIVE_SESSIONS,
         AUTH_MAX_SESSIONS_PER_USER,
         AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS,
         AUTH_SESSION_IDLE_TIMEOUT_MINUTES,
+        REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE,
+        REFERENCE_INTERNAL_ACCOUNT_LOOKUP_PASSWORD,
+        REFERENCE_INTERNAL_ACCOUNT_LOOKUP_TIMEOUT_SECONDS,
+        REFERENCE_INTERNAL_ACCOUNT_LOOKUP_URL,
+        REFERENCE_INTERNAL_ACCOUNT_LOOKUP_USERNAME,
+        REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS,
         DATA_REFRESH_INTERVAL_SECONDS,
         DB_URI,
         FORECAST_CACHE_TTL_SECONDS,
@@ -31,7 +40,7 @@ def configure_runtime_services(app, logger):
     from forecast_engine import CashflowForecaster
 
     knowledge_base = KnowledgeBase(DB_URI)
-    cash_out_store = CashOutStore()
+    cash_out_store = CashOutStore(source_profile=knowledge_base.source_profile)
     report_generator = ReportGenerator(knowledge_base)
     job_store = ReportJobStore(JOB_STATE_DB_PATH, REPORT_ARTIFACTS_DIR)
     user_store = UserStore(
@@ -39,6 +48,15 @@ def configure_runtime_services(app, logger):
         allowed_email_domain=AUTH_ALLOWED_EMAIL_DOMAIN,
         temporary_full_access_username=TEMP_FULL_ACCESS_USERNAME,
         temporary_full_access_password=TEMP_FULL_ACCESS_PASSWORD,
+        reference_internal_account_lookup_mode=REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE,
+        reference_internal_account_lookup_url=REFERENCE_INTERNAL_ACCOUNT_LOOKUP_URL,
+        reference_internal_account_lookup_username=REFERENCE_INTERNAL_ACCOUNT_LOOKUP_USERNAME,
+        reference_internal_account_lookup_password=REFERENCE_INTERNAL_ACCOUNT_LOOKUP_PASSWORD,
+        reference_internal_account_lookup_timeout_seconds=REFERENCE_INTERNAL_ACCOUNT_LOOKUP_TIMEOUT_SECONDS,
+        reference_internal_account_test_emails=REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS,
+        signup_verification_delivery_mode=AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE,
+        signup_verification_webhook_url=AUTH_SIGNUP_VERIFICATION_WEBHOOK_URL,
+        signup_verification_timeout_seconds=AUTH_SIGNUP_VERIFICATION_TIMEOUT_SECONDS,
     )
     session_store = ActiveSessionStore(JOB_STATE_DB_PATH)
     forecast_cache = ForecastSnapshotCache(FORECAST_CACHE_TTL_SECONDS)

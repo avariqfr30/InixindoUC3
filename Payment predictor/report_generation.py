@@ -129,27 +129,47 @@ class ReportGenerator:
             include_visuals,
         )
         user_instruction = self._build_user_instruction(notes, active_sections)
-        response = self.ollama.chat(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_instruction},
-            ],
-            options={
-                "num_ctx": REPORT_NUM_CTX,
-                "num_predict": REPORT_NUM_PREDICT,
-                "temperature": REPORT_TEMPERATURE,
-                "top_p": REPORT_TOP_P,
-                "repeat_penalty": REPORT_REPEAT_PENALTY,
-            },
-        )
-        logger.info(
-            "Generation pass %s completed with done_reason=%s, eval_count=%s.",
-            label,
-            response.get("done_reason"),
-            response.get("eval_count"),
-        )
-        return response["message"]["content"]
+
+        max_attempts = 2
+        num_predict = REPORT_NUM_PREDICT
+
+        for attempt in range(1, max_attempts + 1):
+            response = self.ollama.chat(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_instruction},
+                ],
+                options={
+                    "num_ctx": REPORT_NUM_CTX,
+                    "num_predict": num_predict,
+                    "temperature": REPORT_TEMPERATURE,
+                    "top_p": REPORT_TOP_P,
+                    "repeat_penalty": REPORT_REPEAT_PENALTY,
+                },
+            )
+
+            done_reason = response.get("done_reason")
+            content = response["message"]["content"]
+
+            logger.info(
+                "Generation pass %s (attempt %s/%s) completed with done_reason=%s, eval_count=%s.",
+                label,
+                attempt,
+                max_attempts,
+                done_reason,
+                response.get("eval_count"),
+            )
+
+            if done_reason == "length" and attempt < max_attempts:
+                logger.warning(
+                    "Generation pass %s was truncated due to length limits. Retrying with increased token budget.",
+                    label
+                )
+                num_predict = int(num_predict * 1.5)
+                continue
+
+            return content
 
     def run(self, notes="", analysis_context="", analysis_payload=None):
         logger.info("Starting cashflow intelligence report generation.")
@@ -165,31 +185,40 @@ class ReportGenerator:
 
         fallback_used = False
         generated_sections = []
-        for section_pass in self.SECTION_PASSES:
-            generated_sections.append(
-                self._run_generation_pass(
-                    report_context,
-                    notes,
-                    analysis_context,
-                    macro_osint,
-                    section_pass["sections"],
-                    section_pass["include_visuals"],
-                    section_pass["label"],
-                ).strip()
-            )
+        try:
+            for section_pass in self.SECTION_PASSES:
+                generated_sections.append(
+                    self._run_generation_pass(
+                        report_context,
+                        notes,
+                        analysis_context,
+                        macro_osint,
+                        section_pass["sections"],
+                        section_pass["include_visuals"],
+                        section_pass["label"],
+                    ).strip()
+                )
 
-        generated_content = "\n\n".join(section for section in generated_sections if section).strip()
-        generated_content = self._finalize_report_content(
-            generated_content,
-            report_context,
-            macro_osint,
-            analysis_payload=analysis_payload,
-        )
-        completeness_result = self.quality_scorer.score(generated_content)
-        logger.info(
-            "Report completeness score %.1f/100 before fallback.",
-            completeness_result["score"],
-        )
+            generated_content = "\n\n".join(section for section in generated_sections if section).strip()
+            generated_content = self._finalize_report_content(
+                generated_content,
+                report_context,
+                macro_osint,
+                analysis_payload=analysis_payload,
+            )
+            completeness_result = self.quality_scorer.score(generated_content)
+            logger.info(
+                "Report completeness score %.1f/100 before fallback.",
+                completeness_result["score"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "LLM report generation failed. Falling back to deterministic management draft: %s",
+                exc,
+            )
+            generated_content = ""
+            completeness_result = {"passed": False, "score": 0, "missing": ["llm_generation"]}
+
         if not completeness_result["passed"]:
             logger.warning("Generated report failed quality gate. Falling back to deterministic management draft.")
             fallback_used = True

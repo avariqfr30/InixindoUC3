@@ -1,6 +1,7 @@
 import re
 
 from config import REPORT_MIN_COMPLETENESS_SCORE
+from reasoning_policy import CashflowHotsReasoningPolicy
 from report_structure import REPORT_STRUCTURE
 
 
@@ -9,7 +10,7 @@ class ReportQualityScorer:
         self.structure = structure
         self.min_score = min_score
 
-    def score(self, raw_text):
+    def score(self, raw_text, analysis_payload=None):
         report_text = str(raw_text or "")
         if not report_text.strip():
             return {
@@ -104,6 +105,9 @@ class ReportQualityScorer:
             missing.append("Rujukan bukti internal belum cukup terlihat.")
         components["narrative_density"] = round(density_score, 1)
 
+        numeric_accuracy_score = self._score_numeric_accuracy(report_text, analysis_payload)
+        components["numeric_accuracy"] = round(numeric_accuracy_score, 1)
+
         total_score = round(sum(components.values()), 1)
         return {
             "score": total_score,
@@ -111,6 +115,37 @@ class ReportQualityScorer:
             "components": components,
             "missing": missing,
         }
+
+    @staticmethod
+    def _score_numeric_accuracy(report_text, analysis_payload):
+        """Verify key financial figures from source data appear in the report."""
+        if not analysis_payload or not isinstance(analysis_payload, dict):
+            return 10  # No payload to check against
+
+        key_figures = []
+        for key in ("total_outstanding", "ending_cash", "total_cash_in",
+                     "coverage_ratio", "total_nominal"):
+            val = analysis_payload.get(key)
+            if val and isinstance(val, (int, float)) and val > 0:
+                key_figures.append(val)
+
+        if not key_figures:
+            return 10
+
+        matched = 0
+        for figure in key_figures:
+            formatted_variants = [
+                f"{figure:,.0f}",
+                f"{figure/1e6:,.0f}",
+                f"{figure/1e9:,.1f}",
+                f"{figure/1e9:,.2f}",
+                str(int(figure)),
+            ]
+            if any(v in report_text for v in formatted_variants):
+                matched += 1
+
+        accuracy_ratio = matched / len(key_figures)
+        return round(accuracy_ratio * 10)
 
     def final_qa(self, raw_text, rejected_claims=None):
         report_text = str(raw_text or "")
@@ -123,6 +158,13 @@ class ReportQualityScorer:
         ):
             categories.add("raw_source_label")
             findings.append("Laporan masih memuat label sumber atau peran internal.")
+        visible_reasoning = CashflowHotsReasoningPolicy.find_visible_reasoning(report_text)
+        if visible_reasoning:
+            categories.add("visible_reasoning")
+            findings.append("Laporan masih memuat label atau proses penalaran internal.")
+        if CashflowHotsReasoningPolicy.has_uncalibrated_horizon_claim(report_text):
+            categories.add("uncalibrated_horizon_claim")
+            findings.append("Klaim jangka panjang terlalu keras tanpa catatan batasan atau tingkat keyakinan.")
         rejected_findings = self._find_rejected_claim_violations(report_text, rejected_claims)
         if rejected_findings:
             categories.add("rejected_claim")

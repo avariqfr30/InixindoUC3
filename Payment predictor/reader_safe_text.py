@@ -33,6 +33,10 @@ _REPLACEMENTS = (
     (r"\bending cash\b", "saldo kas akhir"),
     (r"\brunway\b", "ketahanan kas"),
     (r"\bcoverage ratio\b", "rasio cakupan"),
+    (r"\bDeterministic cashflow projection\b", "Proyeksi arus kas deterministik"),
+    (r"\bnot a statistical guarantee\b", "bukan jaminan statistik"),
+    (r"\bChallenge Check\b", "Uji Kewajaran"),
+    (r"\bSensitivity\b", "Sensitivitas"),
     (r"\binvoice\b", "tagihan"),
     (r"\binvoices\b", "tagihan"),
     (r"Visual Dashboard Snapshot", "Cuplikan Dasbor Operasional"),
@@ -58,11 +62,25 @@ _REPLACEMENTS = (
     (r"\bworkflow\b", "alur kerja"),
 )
 _FORBIDDEN_TECH = r"\b(endpoint|schema|Waitress|queue|thread|runtime)\b"
+_MARKER_RE = re.compile(r"\[\[.*?\]\]", re.DOTALL)
 
 
 def reader_safe_text(raw_text):
     text = str(raw_text or "")
+
+    # Preserve [[CHART:...]] and [[FLOW:...]] markers from regex mangling
+    markers = []
+    def _preserve(match):
+        markers.append(match.group(0))
+        return f"__PRESERVED_MARKER_{len(markers) - 1}__"
+    text = _MARKER_RE.sub(_preserve, text)
+
     for pattern, replacement in _REPLACEMENTS:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     text = re.sub(_FORBIDDEN_TECH, "kesiapan operasional", text, flags=re.IGNORECASE)
+
+    # Restore preserved markers
+    for i, marker in enumerate(markers):
+        text = text.replace(f"__PRESERVED_MARKER_{i}__", marker)
+
     return "\n".join(re.sub(r"[ \t]+", " ", line).rstrip() for line in text.splitlines()).strip()

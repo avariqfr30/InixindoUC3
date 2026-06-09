@@ -4,8 +4,8 @@ class CashflowManagementInterpreter:
     STATUS_MAP = {
         "aman": "AMAN",
         "waspada": "WASPADA",
-        "bahaya": "KRITIS",
-        "kritis": "KRITIS",
+        "bahaya": "BAHAYA",
+        "kritis": "BAHAYA",
     }
 
     @classmethod
@@ -27,11 +27,12 @@ class CashflowManagementInterpreter:
         weakest = ", ".join(weakest_dimensions or []) or "likuiditas dan konversi invoice"
 
         if status == "AMAN":
-            headline = "Kas masih berada dalam zona aman."
-            meaning = "Prioritas manajemen adalah menjaga ritme penagihan dan mencegah konsentrasi risiko baru."
+            headline = "Kas berada dalam zona aman karena cash tersedia, jadwal masuk kas terlihat, dan risiko utama terkendali."
+            meaning = "Prioritas manajemen adalah menjaga ritme penagihan, memantau jadwal uang masuk, dan mencegah konsentrasi risiko baru."
             decision = "Pertahankan pola follow-up saat ini sambil memantau akun dengan overdue terbesar."
             actions = [
                 "Jaga cadence penagihan mingguan pada akun prioritas.",
+                "Pastikan jadwal uang masuk tetap tercatat dan dikonfirmasi.",
                 "Pantau perubahan cash-out agar buffer tidak turun tanpa sinyal awal.",
             ]
             confidence = "Kuat - buffer dan coverage masih memadai untuk horizon aktif."
@@ -40,18 +41,18 @@ class CashflowManagementInterpreter:
             meaning = f"Risiko utama berada pada {weakest}; keterlambatan {top_account} dapat menekan ending cash."
             decision = "Manajemen perlu memilih invoice yang dieskalasi minggu ini dan mengunci komitmen pembayaran."
             actions = [
-                f"Eskalasi {top_account} ke owner bisnis dan finance.",
+                f"Eskalasi {top_account} ke penanggung jawab bisnis dan keuangan.",
                 "Konfirmasi tanggal bayar tertulis sebelum memperluas eskalasi ke akun lain.",
             ]
             confidence = "Sedang - sinyal risiko jelas, tetapi komitmen bayar terbaru tetap perlu validasi."
         else:
-            headline = "Kas akhir berisiko jika invoice prioritas tidak segera terkonversi."
+            headline = "Kas akhir masuk zona bahaya jika invoice prioritas tidak segera terkonversi."
             meaning = f"Tekanan cash-out lebih cepat dari cash-in; {top_account} menjadi titik keputusan paling mendesak."
             decision = "Manajemen perlu menjalankan eskalasi senior dan meninjau cash-out non-prioritas."
             actions = [
                 f"Eskalasi senior untuk {top_account} hari ini atau pada forum manajemen terdekat.",
                 "Tahan atau review cash-out non-prioritas sampai komitmen pembayaran lebih jelas.",
-                "Pantau saldo akhir secara mingguan sampai status keluar dari zona kritis.",
+                "Pantau saldo akhir secara mingguan sampai status keluar dari zona bahaya.",
             ]
             confidence = "Cukup kuat - gap kas terlihat pada horizon aktif, tetapi timing realisasi masih perlu validasi operasional."
 
@@ -63,6 +64,19 @@ class CashflowManagementInterpreter:
             "decision": decision,
             "actions": actions,
             "confidence": confidence,
+            "minto_pyramid": {
+                "main_answer": f"{headline} {decision}",
+                "supporting_arguments": [
+                    meaning,
+                    f"Cash bridge menunjukkan cash in Rp{int(total_cash_in):,}, cash out Rp{int(total_cash_out):,}, dan ending cash Rp{int(ending_cash):,}.",
+                    f"Akun prioritas yang perlu dibaca lebih dulu adalah {top_account}.",
+                ],
+                "evidence": [
+                    f"Status dashboard: {status}.",
+                    f"Dimensi terlemah: {weakest}.",
+                    f"Confidence: {confidence}",
+                ],
+            },
         }
 
     @classmethod

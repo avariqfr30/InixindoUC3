@@ -128,7 +128,12 @@ def _build_next_steps(contract_summary, extraction_summary, profile_summary, che
 
 
 def run_production_source_doctor(source_profile=None, preview_rows=10):
-    from data_contract import build_internal_data_summary, normalize_financial_dataframe
+    from data_contract import (
+        build_internal_data_summary,
+        enrich_invoice_records_with_payment_behavior,
+        enrich_records_with_account_reference,
+        normalize_financial_dataframe,
+    )
     from data_sources import summarize_source_profile
     from finance_api_clients import InternalAPIClient
 
@@ -200,7 +205,14 @@ def run_production_source_doctor(source_profile=None, preview_rows=10):
     contract_summary = build_internal_data_summary(None, explicit_field_map=client.field_map)
     fetch_error = None
     try:
-        records, extraction_summary = client.fetch_records(preview_limit=max(int(preview_rows or 10), 1))
+        records, extraction_summary = client.fetch_invoice_records(preview_limit=max(int(preview_rows or 10), 1))
+        records, invoice_behavior_summary = enrich_invoice_records_with_payment_behavior(records)
+        reference_enrichment_summary = None
+        try:
+            account_records, _ = client.fetch_reference_account_records()
+            records, reference_enrichment_summary = enrich_records_with_account_reference(records, account_records)
+        except Exception:
+            reference_enrichment_summary = None
         raw_df = _normalize_records(records)
         if raw_df.empty:
             checks.append(_check("records_path", "fail", "The API response was reachable but no financial records were returned."))
@@ -211,6 +223,9 @@ def run_production_source_doctor(source_profile=None, preview_rows=10):
                 explicit_field_map=client.field_map,
                 extraction_summary=extraction_summary,
             )
+            contract_summary["invoiceBehaviorEnrichment"] = invoice_behavior_summary
+            if reference_enrichment_summary:
+                contract_summary["referenceAccountEnrichment"] = reference_enrichment_summary
             records_path_status = "pass" if extraction_summary.get("resolvedRecordsPath") else "fail"
             if records_path_status == "pass" and not endpoint.get("records_key"):
                 records_path_status = "warn"

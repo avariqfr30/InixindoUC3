@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import timedelta
 
@@ -5,6 +6,31 @@ from report_structure import REPORT_STRUCTURE
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+def _int_env(name, default):
+    raw = os.getenv(name, str(default))
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        logging.warning("Invalid integer for %s=%r, using default %s", name, raw, default)
+        return default
+
+
+def _float_env(name, default):
+    raw = os.getenv(name, str(default))
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        logging.warning("Invalid float for %s=%r, using default %s", name, raw, default)
+        return default
+
+
+def _csv_env(name, default=""):
+    raw = os.getenv(name, default)
+    if raw is None:
+        return set()
+    return {item.strip().lower() for item in str(raw).split(",") if item.strip()}
 
 DATA_ACQUISITION_MODE = os.getenv("DATA_ACQUISITION_MODE", "demo").strip().lower()
 DATA_SOURCE_ACTIVE_STATE_PATH = os.getenv(
@@ -15,24 +41,47 @@ DATA_SOURCE_DEMO_PROFILE_PATH = os.getenv("DATA_SOURCE_DEMO_PROFILE_PATH", "").s
 DATA_SOURCE_PRODUCTION_PROFILE_PATH = os.getenv("DATA_SOURCE_PRODUCTION_PROFILE_PATH", "").strip()
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "change-this-secret-key-in-production")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes"}
-SESSION_LIFETIME_HOURS = int(os.getenv("SESSION_LIFETIME_HOURS", "12"))
-AUTH_MAX_ACTIVE_SESSIONS = int(os.getenv("AUTH_MAX_ACTIVE_SESSIONS", "8"))
-AUTH_MAX_SESSIONS_PER_USER = int(os.getenv("AUTH_MAX_SESSIONS_PER_USER", "1"))
-AUTH_SESSION_IDLE_TIMEOUT_MINUTES = int(os.getenv("AUTH_SESSION_IDLE_TIMEOUT_MINUTES", "30"))
-AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS = int(
-    os.getenv("AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS", str(SESSION_LIFETIME_HOURS))
+SESSION_LIFETIME_HOURS = _int_env("SESSION_LIFETIME_HOURS", 12)
+AUTH_MAX_ACTIVE_SESSIONS = _int_env("AUTH_MAX_ACTIVE_SESSIONS", 8)
+AUTH_MAX_SESSIONS_PER_USER = _int_env("AUTH_MAX_SESSIONS_PER_USER", 1)
+AUTH_SESSION_IDLE_TIMEOUT_MINUTES = _int_env("AUTH_SESSION_IDLE_TIMEOUT_MINUTES", 30)
+AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS = _int_env(
+    "AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS", SESSION_LIFETIME_HOURS
 )
 AUTH_ALLOWED_EMAIL_DOMAIN = os.getenv("AUTH_ALLOWED_EMAIL_DOMAIN", "inixindojogja.co.id").strip().lower()
-TEMP_FULL_ACCESS_USERNAME = os.getenv("TEMP_FULL_ACCESS_USERNAME", "").strip()
-TEMP_FULL_ACCESS_PASSWORD = os.getenv("TEMP_FULL_ACCESS_PASSWORD", "")
+TEMP_FULL_ACCESS_USERNAME = os.getenv("TEMP_FULL_ACCESS_USERNAME", "test1234").strip()
+TEMP_FULL_ACCESS_PASSWORD = os.getenv("TEMP_FULL_ACCESS_PASSWORD", "1234")
+AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE = os.getenv("AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE", "webhook").strip().lower()
+AUTH_SIGNUP_VERIFICATION_WEBHOOK_URL = os.getenv("AUTH_SIGNUP_VERIFICATION_WEBHOOK_URL", "").strip()
+AUTH_SIGNUP_VERIFICATION_TIMEOUT_SECONDS = _int_env("AUTH_SIGNUP_VERIFICATION_TIMEOUT_SECONDS", 20)
+REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE = os.getenv("REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE", "api").strip().lower()
+REFERENCE_INTERNAL_ACCOUNT_LOOKUP_URL = os.getenv(
+    "REFERENCE_INTERNAL_ACCOUNT_LOOKUP_URL",
+    os.getenv("INTERNAL_API_ENDPOINT_URL", ""),
+).strip()
+REFERENCE_INTERNAL_ACCOUNT_LOOKUP_USERNAME = os.getenv(
+    "REFERENCE_INTERNAL_ACCOUNT_LOOKUP_USERNAME",
+    os.getenv("INTERNAL_API_USERNAME", ""),
+).strip()
+REFERENCE_INTERNAL_ACCOUNT_LOOKUP_PASSWORD = os.getenv(
+    "REFERENCE_INTERNAL_ACCOUNT_LOOKUP_PASSWORD",
+    os.getenv("INTERNAL_API_PASSWORD", ""),
+).strip()
+REFERENCE_INTERNAL_ACCOUNT_LOOKUP_TIMEOUT_SECONDS = _int_env("REFERENCE_INTERNAL_ACCOUNT_LOOKUP_TIMEOUT_SECONDS", 20)
+REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS = _csv_env("REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS")
 APP_SERVER = os.getenv("APP_SERVER", "flask").strip().lower()
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1").strip()
-APP_PORT = int(os.getenv("APP_PORT", "5000"))
+APP_PORT = _int_env("APP_PORT", 5000)
 APP_DEBUG = os.getenv("APP_DEBUG", "false").strip().lower() in {"1", "true", "yes"}
-WAITRESS_THREADS = int(os.getenv("WAITRESS_THREADS", "12"))
-WAITRESS_CONNECTION_LIMIT = int(os.getenv("WAITRESS_CONNECTION_LIMIT", "100"))
-WAITRESS_CHANNEL_TIMEOUT = int(os.getenv("WAITRESS_CHANNEL_TIMEOUT", "120"))
-SERPER_API_KEY = os.getenv("SERPER_API_KEY", "masukkan_api_key_serper_anda_disini")
+WAITRESS_THREADS = _int_env("WAITRESS_THREADS", 12)
+WAITRESS_CONNECTION_LIMIT = _int_env("WAITRESS_CONNECTION_LIMIT", 100)
+WAITRESS_CHANNEL_TIMEOUT = _int_env("WAITRESS_CHANNEL_TIMEOUT", 120)
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+
+import logging as _boot_logging
+_boot_logger = _boot_logging.getLogger("config.boot")
+if TEMP_FULL_ACCESS_USERNAME:
+    _boot_logger.warning("TEMP_FULL_ACCESS_USERNAME is set — backdoor auth bypass is ACTIVE.")
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "").strip()
 OLLAMA_WEB_SEARCH_URL = os.getenv("OLLAMA_WEB_SEARCH_URL", "https://ollama.com/api/web_search").strip()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -40,27 +89,27 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss:120b-cloud")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3:latest")
 DB_URI = os.getenv("DB_URI", f"sqlite:///{os.path.join(DATA_DIR, 'finance_predictor.db')}")
 DEMO_CSV_PATH = os.getenv("DEMO_CSV_PATH", os.path.join(DATA_DIR, "db.csv"))
-REPORT_MAX_CONCURRENT_JOBS = int(os.getenv("REPORT_MAX_CONCURRENT_JOBS", "4"))
-REPORT_MAX_PENDING_JOBS = int(os.getenv("REPORT_MAX_PENDING_JOBS", "12"))
-REPORT_JOB_RETENTION_SECONDS = int(os.getenv("REPORT_JOB_RETENTION_SECONDS", "1800"))
-REPORT_STATUS_POLL_INTERVAL_MS = int(os.getenv("REPORT_STATUS_POLL_INTERVAL_MS", "1500"))
-REPORT_METRICS_WINDOW_HOURS = int(os.getenv("REPORT_METRICS_WINDOW_HOURS", "24"))
+REPORT_MAX_CONCURRENT_JOBS = _int_env("REPORT_MAX_CONCURRENT_JOBS", 4)
+REPORT_MAX_PENDING_JOBS = _int_env("REPORT_MAX_PENDING_JOBS", 12)
+REPORT_JOB_RETENTION_SECONDS = _int_env("REPORT_JOB_RETENTION_SECONDS", 1800)
+REPORT_STATUS_POLL_INTERVAL_MS = _int_env("REPORT_STATUS_POLL_INTERVAL_MS", 1500)
+REPORT_METRICS_WINDOW_HOURS = _int_env("REPORT_METRICS_WINDOW_HOURS", 24)
 REPORT_ARTIFACTS_DIR = os.getenv(
     "REPORT_ARTIFACTS_DIR",
     os.path.join(DATA_DIR, "generated_reports"),
 )
-REPORT_MIN_COMPLETENESS_SCORE = float(os.getenv("REPORT_MIN_COMPLETENESS_SCORE", "80"))
+REPORT_MIN_COMPLETENESS_SCORE = _float_env("REPORT_MIN_COMPLETENESS_SCORE", 80.0)
 JOB_STATE_DB_PATH = os.getenv(
     "JOB_STATE_DB_PATH",
     os.path.join(DATA_DIR, "report_jobs.db"),
 )
-REPORT_NUM_CTX = int(os.getenv("REPORT_NUM_CTX", "24576"))
-REPORT_NUM_PREDICT = int(os.getenv("REPORT_NUM_PREDICT", "2200"))
-REPORT_TEMPERATURE = float(os.getenv("REPORT_TEMPERATURE", "0.2"))
-REPORT_TOP_P = float(os.getenv("REPORT_TOP_P", "0.85"))
-REPORT_REPEAT_PENALTY = float(os.getenv("REPORT_REPEAT_PENALTY", "1.1"))
-DATA_REFRESH_INTERVAL_SECONDS = int(os.getenv("DATA_REFRESH_INTERVAL_SECONDS", "0"))
-FORECAST_CACHE_TTL_SECONDS = int(os.getenv("FORECAST_CACHE_TTL_SECONDS", "300"))
+REPORT_NUM_CTX = _int_env("REPORT_NUM_CTX", 24576)
+REPORT_NUM_PREDICT = _int_env("REPORT_NUM_PREDICT", 3500)
+REPORT_TEMPERATURE = _float_env("REPORT_TEMPERATURE", 0.2)
+REPORT_TOP_P = _float_env("REPORT_TOP_P", 0.85)
+REPORT_REPEAT_PENALTY = _float_env("REPORT_REPEAT_PENALTY", 1.1)
+DATA_REFRESH_INTERVAL_SECONDS = _int_env("DATA_REFRESH_INTERVAL_SECONDS", 0)
+FORECAST_CACHE_TTL_SECONDS = _int_env("FORECAST_CACHE_TTL_SECONDS", 300)
 PERMANENT_SESSION_LIFETIME = timedelta(hours=SESSION_LIFETIME_HOURS)
 
 INTERNAL_API_ENDPOINT_URL = os.getenv("INTERNAL_API_ENDPOINT_URL", "").strip()
@@ -78,7 +127,7 @@ INTERNAL_API_HEADERS_JSON = os.getenv("INTERNAL_API_HEADERS_JSON", "{}").strip()
 INTERNAL_API_QUERY_PARAMS_JSON = os.getenv("INTERNAL_API_QUERY_PARAMS_JSON", "{}").strip()
 INTERNAL_API_BODY_JSON = os.getenv("INTERNAL_API_BODY_JSON", "").strip()
 INTERNAL_API_FIELD_MAP_JSON = os.getenv("INTERNAL_API_FIELD_MAP_JSON", "{}").strip()
-INTERNAL_API_TIMEOUT = int(os.getenv("INTERNAL_API_TIMEOUT", "20"))
+INTERNAL_API_TIMEOUT = _int_env("INTERNAL_API_TIMEOUT", 20)
 INTERNAL_API_VERIFY_SSL = os.getenv("INTERNAL_API_VERIFY_SSL", "true").strip().lower() not in {
     "0",
     "false",
@@ -93,15 +142,15 @@ INTERNAL_API_CONFIG_FILE = os.getenv(
 
 # Pagination support
 INTERNAL_API_PAGINATION_MODE = os.getenv("INTERNAL_API_PAGINATION_MODE", "").strip().lower()  # offset, cursor, link, or empty
-INTERNAL_API_PAGE_SIZE = int(os.getenv("INTERNAL_API_PAGE_SIZE", "0"))  # 0 = disabled
+INTERNAL_API_PAGE_SIZE = _int_env("INTERNAL_API_PAGE_SIZE", 0)  # 0 = disabled
 INTERNAL_API_PAGINATION_CURSOR_KEY = os.getenv("INTERNAL_API_PAGINATION_CURSOR_KEY", "").strip()
 INTERNAL_API_PAGINATION_OFFSET_PARAM = os.getenv("INTERNAL_API_PAGINATION_OFFSET_PARAM", "offset").strip()
 INTERNAL_API_PAGINATION_LIMIT_PARAM = os.getenv("INTERNAL_API_PAGINATION_LIMIT_PARAM", "limit").strip()
-INTERNAL_API_PAGINATION_MAX_PAGES = int(os.getenv("INTERNAL_API_PAGINATION_MAX_PAGES", "50"))
+INTERNAL_API_PAGINATION_MAX_PAGES = _int_env("INTERNAL_API_PAGINATION_MAX_PAGES", 50)
 
 # Retry config
-INTERNAL_API_MAX_RETRIES = int(os.getenv("INTERNAL_API_MAX_RETRIES", "3"))
-INTERNAL_API_RETRY_BACKOFF_BASE = float(os.getenv("INTERNAL_API_RETRY_BACKOFF_BASE", "1.0"))
+INTERNAL_API_MAX_RETRIES = _int_env("INTERNAL_API_MAX_RETRIES", 3)
+INTERNAL_API_RETRY_BACKOFF_BASE = _float_env("INTERNAL_API_RETRY_BACKOFF_BASE", 1.0)
 
 CASH_OUT_API_ENDPOINT_URL = os.getenv("CASH_OUT_API_ENDPOINT_URL", "").strip()
 CASH_OUT_API_METHOD = os.getenv("CASH_OUT_API_METHOD", "GET").strip().upper()
@@ -112,7 +161,7 @@ CASH_OUT_API_BASIC_PASSWORD = os.getenv("CASH_OUT_API_BASIC_PASSWORD", "").strip
 CASH_OUT_API_HEADERS_JSON = os.getenv("CASH_OUT_API_HEADERS_JSON", "{}").strip()
 CASH_OUT_API_QUERY_PARAMS_JSON = os.getenv("CASH_OUT_API_QUERY_PARAMS_JSON", "{}").strip()
 CASH_OUT_API_BODY_JSON = os.getenv("CASH_OUT_API_BODY_JSON", "").strip()
-CASH_OUT_API_TIMEOUT = int(os.getenv("CASH_OUT_API_TIMEOUT", "20"))
+CASH_OUT_API_TIMEOUT = _int_env("CASH_OUT_API_TIMEOUT", 20)
 CASH_OUT_API_VERIFY_SSL = os.getenv("CASH_OUT_API_VERIFY_SSL", "true").strip().lower() not in {
     "0",
     "false",

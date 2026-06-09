@@ -1,9 +1,22 @@
 import json
+import logging
 import os
 import re
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+_KNOWN_FIELD_MAP_KEYS = frozenset({"period", "partner_type", "service", "payment_class", "invoice_value", "delay_note"})
+
+
+def validate_field_map_keys(field_map: dict) -> list:
+    warnings = []
+    for key in field_map:
+        if key not in _KNOWN_FIELD_MAP_KEYS:
+            warnings.append(f"Unknown field_map key '{key}' — expected one of: {sorted(_KNOWN_FIELD_MAP_KEYS)}")
+    return warnings
 
 
 def _normalize_key(value):
@@ -31,6 +44,22 @@ def _parse_optional_json_value(raw_value, label):
         return json.loads(raw_value)
     except json.JSONDecodeError as exc:
         raise ValueError(f"{label} must be valid JSON: {exc}") from exc
+
+
+def _parse_int_value(raw_value, default, label):
+    try:
+        return int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer for %s=%r, using default %s", label, raw_value, default)
+        return default
+
+
+def _parse_float_value(raw_value, default, label):
+    try:
+        return float(str(raw_value).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid float for %s=%r, using default %s", label, raw_value, default)
+        return default
 
 
 def build_internal_api_profile_template():
@@ -264,7 +293,8 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
                 file_defaults = json.loads(config_path.read_text(encoding="utf-8"))
                 if not isinstance(file_defaults, dict):
                     file_defaults = {}
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Failed to parse API config file %s: %s", config_path, exc)
                 file_defaults = {}
 
     if _is_full_source_profile(file_defaults):
@@ -297,7 +327,11 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
             "base_url": base_url,
             "path": dataset_path,
             "method": method or "GET",
-            "timeout": int(os.getenv(f"{prefix}_TIMEOUT", str(file_defaults.get("timeout") or 20))),
+            "timeout": _parse_int_value(
+                os.getenv(f"{prefix}_TIMEOUT", str(file_defaults.get("timeout") or 20)),
+                file_defaults.get("timeout") or 20,
+                f"{prefix}_TIMEOUT",
+            ),
             "verify_ssl": os.getenv(f"{prefix}_VERIFY_SSL", str(file_defaults.get("verify_ssl", "true"))).strip().lower() not in {"0", "false", "no"},
             "records_key": os.getenv(f"{prefix}_RECORDS_KEY", file_defaults.get("records_key") or "").strip(),
         },
@@ -320,15 +354,31 @@ def _build_json_api_profile_from_env(prefix, key, name, mode, endpoint_url, base
         "field_map": _parse_json_object(os.getenv(f"{prefix}_FIELD_MAP_JSON", ""), f"{prefix}_FIELD_MAP_JSON") or (file_defaults.get("field_map") if isinstance(file_defaults.get("field_map"), dict) else {}),
         "pagination": {
             "mode": os.getenv(f"{prefix}_PAGINATION_MODE", file_pagination.get("mode") or "").strip().lower(),
-            "page_size": int(os.getenv(f"{prefix}_PAGE_SIZE", str(file_pagination.get("page_size") or 0))),
+            "page_size": _parse_int_value(
+                os.getenv(f"{prefix}_PAGE_SIZE", str(file_pagination.get("page_size") or 0)),
+                file_pagination.get("page_size") or 0,
+                f"{prefix}_PAGE_SIZE",
+            ),
             "cursor_key": os.getenv(f"{prefix}_PAGINATION_CURSOR_KEY", file_pagination.get("cursor_key") or "").strip(),
             "offset_param": os.getenv(f"{prefix}_PAGINATION_OFFSET_PARAM", file_pagination.get("offset_param") or "offset").strip(),
             "limit_param": os.getenv(f"{prefix}_PAGINATION_LIMIT_PARAM", file_pagination.get("limit_param") or "limit").strip(),
-            "max_pages": int(os.getenv(f"{prefix}_PAGINATION_MAX_PAGES", str(file_pagination.get("max_pages") or 50))),
+            "max_pages": _parse_int_value(
+                os.getenv(f"{prefix}_PAGINATION_MAX_PAGES", str(file_pagination.get("max_pages") or 50)),
+                file_pagination.get("max_pages") or 50,
+                f"{prefix}_PAGINATION_MAX_PAGES",
+            ),
         },
         "retry": {
-            "max_retries": int(os.getenv(f"{prefix}_MAX_RETRIES", str(file_retry.get("max_retries") or 3))),
-            "backoff_base": float(os.getenv(f"{prefix}_RETRY_BACKOFF_BASE", str(file_retry.get("backoff_base") or 1.0))),
+            "max_retries": _parse_int_value(
+                os.getenv(f"{prefix}_MAX_RETRIES", str(file_retry.get("max_retries") or 3)),
+                file_retry.get("max_retries") or 3,
+                f"{prefix}_MAX_RETRIES",
+            ),
+            "backoff_base": _parse_float_value(
+                os.getenv(f"{prefix}_RETRY_BACKOFF_BASE", str(file_retry.get("backoff_base") or 1.0)),
+                file_retry.get("backoff_base") or 1.0,
+                f"{prefix}_RETRY_BACKOFF_BASE",
+            ),
         },
     }
     return profile
@@ -379,23 +429,16 @@ def _apply_env_overrides_to_json_api_profile(profile, prefix, endpoint_url, base
     if field_map:
         profile["field_map"] = field_map
 
-    for env_name, target, caster in (
-        (f"{prefix}_TIMEOUT", endpoint, int),
-        (f"{prefix}_PAGE_SIZE", pagination, int),
-        (f"{prefix}_PAGINATION_MAX_PAGES", pagination, int),
-        (f"{prefix}_MAX_RETRIES", retry, int),
-        (f"{prefix}_RETRY_BACKOFF_BASE", retry, float),
+    for env_name, target, target_key, parser in (
+        (f"{prefix}_TIMEOUT", endpoint, "timeout", _parse_int_value),
+        (f"{prefix}_PAGE_SIZE", pagination, "page_size", _parse_int_value),
+        (f"{prefix}_PAGINATION_MAX_PAGES", pagination, "max_pages", _parse_int_value),
+        (f"{prefix}_MAX_RETRIES", retry, "max_retries", _parse_int_value),
+        (f"{prefix}_RETRY_BACKOFF_BASE", retry, "backoff_base", _parse_float_value),
     ):
         raw_value = os.getenv(env_name, "").strip()
         if raw_value:
-            target_key = {
-                f"{prefix}_TIMEOUT": "timeout",
-                f"{prefix}_PAGE_SIZE": "page_size",
-                f"{prefix}_PAGINATION_MAX_PAGES": "max_pages",
-                f"{prefix}_MAX_RETRIES": "max_retries",
-                f"{prefix}_RETRY_BACKOFF_BASE": "backoff_base",
-            }[env_name]
-            target[target_key] = caster(raw_value)
+            target[target_key] = parser(raw_value, target.get(target_key), env_name)
 
     if os.getenv(f"{prefix}_VERIFY_SSL", "").strip():
         endpoint["verify_ssl"] = os.getenv(f"{prefix}_VERIFY_SSL", "").strip().lower() not in {"0", "false", "no"}

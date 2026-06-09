@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from flask import current_app, jsonify, render_template, request, send_file, session
 
 from app_services import build_sync_snapshot, get_auth_security_snapshot
@@ -10,6 +12,7 @@ def register_report_routes(app):
         return render_template(
             "index.html",
             current_username=session.get("username", ""),
+            current_user_fullname=session.get("user_fullname", ""),
         )
 
     @app.route("/settings")
@@ -17,6 +20,7 @@ def register_report_routes(app):
         return render_template(
             "data_settings.html",
             current_username=session.get("username", ""),
+            current_user_fullname=session.get("user_fullname", ""),
         )
 
     @app.route("/get-config")
@@ -52,7 +56,11 @@ def register_report_routes(app):
         analysis_payload = payload.get("analysis_payload") if isinstance(payload.get("analysis_payload"), dict) else None
         active_job_manager = current_app.config["job_manager"]
         try:
-            job_id = active_job_manager.submit(notes, analysis_context, analysis_payload=analysis_payload)
+            job_id = active_job_manager.submit(
+                notes, analysis_context,
+                analysis_payload=analysis_payload,
+                submitted_by=session.get("username", ""),
+            )
         except QueueCapacityError as exc:
             return (
                 jsonify(
@@ -79,6 +87,8 @@ def register_report_routes(app):
         status = active_job_manager.get_status(job_id)
         if status is None:
             return jsonify({"error": "Job not found."}), 404
+        if status.get("submitted_by") and status["submitted_by"] != session.get("username"):
+            return jsonify({"error": "Akses ditolak."}), 403
         return jsonify(status)
 
     @app.route("/jobs/<job_id>/download")
@@ -87,10 +97,16 @@ def register_report_routes(app):
         download_payload = active_job_manager.get_download(job_id)
         if download_payload is None:
             return jsonify({"error": "Job not found."}), 404
+        if download_payload.get("submitted_by") and download_payload["submitted_by"] != session.get("username"):
+            return jsonify({"error": "Akses ditolak."}), 403
         if "artifactPath" not in download_payload:
             return jsonify(download_payload), 409
+        artifact = Path(download_payload["artifactPath"]).resolve()
+        artifacts_dir = current_app.config.get("report_artifacts_dir")
+        if artifacts_dir and not str(artifact).startswith(str(Path(artifacts_dir).resolve())):
+            return jsonify({"error": "Invalid artifact path."}), 403
         return send_file(
-            download_payload["artifactPath"],
+            artifact,
             as_attachment=True,
             download_name=f"{download_payload['filename']}.docx",
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

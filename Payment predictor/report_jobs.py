@@ -46,6 +46,7 @@ class ReportJobStore:
                     filename TEXT,
                     artifact_path TEXT,
                     notes_preview TEXT,
+                    submitted_by TEXT DEFAULT '',
                     fallback_used INTEGER DEFAULT 0,
                     osint_available INTEGER DEFAULT 0,
                     visuals_included INTEGER DEFAULT 0,
@@ -64,6 +65,7 @@ class ReportJobStore:
                 "visuals_included": "ALTER TABLE report_jobs ADD COLUMN visuals_included INTEGER DEFAULT 0",
                 "quality_gate_passed": "ALTER TABLE report_jobs ADD COLUMN quality_gate_passed INTEGER DEFAULT 0",
                 "completeness_score": "ALTER TABLE report_jobs ADD COLUMN completeness_score REAL DEFAULT 0",
+                "submitted_by": "ALTER TABLE report_jobs ADD COLUMN submitted_by TEXT DEFAULT ''",
             }
             for column_name, migration_sql in column_migrations.items():
                 if column_name not in existing_columns:
@@ -117,7 +119,7 @@ class ReportJobStore:
             )
             connection.commit()
 
-    def create_job(self, job_id, notes_preview):
+    def create_job(self, job_id, notes_preview, submitted_by=""):
         now = time.time()
         with self.lock, self._connect() as connection:
             connection.execute(
@@ -127,12 +129,20 @@ class ReportJobStore:
                     status,
                     created_at,
                     updated_at,
-                    notes_preview
-                ) VALUES (?, 'queued', ?, ?, ?)
+                    notes_preview,
+                    submitted_by
+                ) VALUES (?, 'queued', ?, ?, ?, ?)
                 """,
-                (job_id, now, now, notes_preview),
+                (job_id, now, now, notes_preview, submitted_by),
             )
             connection.commit()
+
+    _ALLOWED_UPDATE_FIELDS = frozenset({
+        "status", "started_at", "updated_at", "duration_seconds",
+        "error", "filename", "artifact_path", "notes_preview", "submitted_by",
+        "fallback_used", "osint_available", "visuals_included",
+        "quality_gate_passed", "completeness_score",
+    })
 
     def update_job(self, job_id, **fields):
         if not fields:
@@ -141,6 +151,8 @@ class ReportJobStore:
         assignments = []
         values = []
         for field_name, field_value in fields.items():
+            if field_name not in self._ALLOWED_UPDATE_FIELDS:
+                raise ValueError(f"Disallowed update field: {field_name}")
             assignments.append(f"{field_name} = ?")
             values.append(field_value)
         values.append(job_id)
@@ -295,7 +307,7 @@ class ReportJobManager:
             "completenessScore": job["completeness_score"],
         }
 
-    def submit(self, notes, analysis_context="", analysis_payload=None):
+    def submit(self, notes, analysis_context="", analysis_payload=None, submitted_by=""):
         job_id = uuid.uuid4().hex
         preview_source = (notes or "").strip() or (analysis_context or "").strip()
         notes_preview = preview_source.replace("\n", " ")[:240]
@@ -305,7 +317,7 @@ class ReportJobManager:
             active_jobs = self.job_store.count_active_jobs()
             if active_jobs >= self.max_pending_jobs:
                 raise QueueCapacityError(active_jobs, self.max_pending_jobs)
-            self.job_store.create_job(job_id, notes_preview)
+            self.job_store.create_job(job_id, notes_preview, submitted_by=submitted_by)
 
         self.executor.submit(self._run_job, job_id, notes, analysis_context, analysis_payload)
         return job_id

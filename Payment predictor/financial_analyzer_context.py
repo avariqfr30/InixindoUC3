@@ -3,6 +3,7 @@ import statistics
 import pandas as pd
 
 from cashflow_intelligence_desk import CashflowIntelligenceDesk
+from data_contract import invoice_lifecycle_status
 
 
 class FinancialAnalyzerContextMixin:
@@ -96,6 +97,48 @@ class FinancialAnalyzerContextMixin:
             class_scores.append(score)
         working_df["__payment_class"] = class_labels
         working_df["__payment_score"] = class_scores
+
+        normalized_column_map = {
+            cls._normalize_column_name(column): column
+            for column in working_df.columns
+        }
+
+        def find_optional_column(aliases):
+            for alias in aliases:
+                column = normalized_column_map.get(cls._normalize_column_name(alias))
+                if column:
+                    return column
+            return None
+
+        status_column = find_optional_column((
+            "status pembayaran invoice",
+            "invoice_is_settled",
+            "is_settled",
+            "status pembayaran",
+            "payment_status",
+            "invoice_status",
+        ))
+        paid_date_column = find_optional_column((
+            "tanggal bayar invoice",
+            "invoice_paid_date",
+            "paid_date",
+            "tanggal bayar",
+            "payment_date",
+            "settlement_date",
+        ))
+        lifecycle_rows = []
+        for _, lifecycle_row in working_df.iterrows():
+            lifecycle_rows.append(
+                invoice_lifecycle_status(
+                    lifecycle_row.get(status_column) if status_column else "",
+                    lifecycle_row.get(paid_date_column) if paid_date_column else "",
+                )
+            )
+        working_df["__settlement_status"] = [item["category"] for item in lifecycle_rows]
+        working_df["__is_settled"] = [item["is_settled"] for item in lifecycle_rows]
+        working_df["__is_current_open"] = ~working_df["__is_settled"]
+        working_df["__is_settled_late"] = working_df["__is_settled"] & (working_df["__payment_score"] > 1)
+
         working_df["__base_realization"] = working_df.apply(
             lambda row: row["__invoice_value"] * cls.REALIZATION_RATE_MAP.get(row["__payment_class"], 0.65),
             axis=1,
@@ -111,17 +154,27 @@ class FinancialAnalyzerContextMixin:
 
         total_invoices = len(working_df)
         total_invoice_value = int(working_df["__invoice_value"].sum())
-        delayed_invoices = int((working_df["__payment_score"] > 1).sum())
-        high_risk_invoices = int((working_df["__payment_score"] >= 4).sum())
-        delayed_invoice_value = int(working_df.loc[working_df["__payment_score"] > 1, "__invoice_value"].sum())
-        high_risk_invoice_value = int(working_df.loc[working_df["__payment_score"] >= 4, "__invoice_value"].sum())
-        weighted_risk_score = statistics.fmean(working_df["__payment_score"]) if total_invoices else 0
-        expected_realization_base = int(round(working_df["__base_realization"].sum()))
-        expected_realization_upside = int(round(working_df["__upside_realization"].sum()))
-        expected_realization_downside = int(round(working_df["__downside_realization"].sum()))
-        expected_gap_base = max(total_invoice_value - expected_realization_base, 0)
-        expected_gap_upside = max(total_invoice_value - expected_realization_upside, 0)
-        expected_gap_downside = max(total_invoice_value - expected_realization_downside, 0)
+        current_open_mask = working_df["__is_current_open"]
+        settled_mask = working_df["__is_settled"]
+        current_open_invoice_value = int(working_df.loc[current_open_mask, "__invoice_value"].sum())
+        settled_invoices = int(settled_mask.sum())
+        open_invoices = int(current_open_mask.sum())
+        settled_late_mask = working_df["__is_settled_late"]
+        settled_late_invoices = int(settled_late_mask.sum())
+        settled_late_invoice_value = int(working_df.loc[settled_late_mask, "__invoice_value"].sum())
+        delayed_mask = current_open_mask & (working_df["__payment_score"] > 1)
+        high_risk_mask = current_open_mask & (working_df["__payment_score"] >= 4)
+        delayed_invoices = int(delayed_mask.sum())
+        high_risk_invoices = int(high_risk_mask.sum())
+        delayed_invoice_value = int(working_df.loc[delayed_mask, "__invoice_value"].sum())
+        high_risk_invoice_value = int(working_df.loc[high_risk_mask, "__invoice_value"].sum())
+        weighted_risk_score = statistics.fmean(working_df.loc[current_open_mask, "__payment_score"]) if open_invoices else 0
+        expected_realization_base = int(round(working_df.loc[current_open_mask, "__base_realization"].sum()))
+        expected_realization_upside = int(round(working_df.loc[current_open_mask, "__upside_realization"].sum()))
+        expected_realization_downside = int(round(working_df.loc[current_open_mask, "__downside_realization"].sum()))
+        expected_gap_base = max(current_open_invoice_value - expected_realization_base, 0)
+        expected_gap_upside = max(current_open_invoice_value - expected_realization_upside, 0)
+        expected_gap_downside = max(current_open_invoice_value - expected_realization_downside, 0)
 
         class_summary_df = (
             working_df.groupby("__payment_class", dropna=False)
@@ -175,7 +228,7 @@ class FinancialAnalyzerContextMixin:
         period_summary_df["__sort_key"] = period_summary_df["__period"].apply(cls._parse_period_sort_key)
         period_summary_df = period_summary_df.sort_values("__sort_key").tail(6)
 
-        high_risk_subset_df = working_df[working_df["__payment_score"] >= 4].copy()
+        high_risk_subset_df = working_df[high_risk_mask].copy()
         high_risk_partner_df = (
             high_risk_subset_df.groupby("__partner", dropna=False)
             .agg(
@@ -202,7 +255,10 @@ class FinancialAnalyzerContextMixin:
         )
 
         top_themes = cls._extract_delay_themes(working_df["__note"])
-        evidence_rows = working_df.sort_values(
+        evidence_source_df = working_df[current_open_mask].copy()
+        if evidence_source_df.empty:
+            evidence_source_df = working_df[settled_late_mask].copy()
+        evidence_rows = evidence_source_df.sort_values(
             ["__payment_score", "__invoice_value"],
             ascending=[False, False],
         ).head(8)
@@ -292,12 +348,15 @@ class FinancialAnalyzerContextMixin:
             "## Snapshot Arus Kas Masuk",
             f"- Total invoice dianalisis: {total_invoices}",
             f"- Total nilai invoice: {cls._format_currency(total_invoice_value)}",
-            f"- Porsi invoice terlambat: {cls._format_percentage((delayed_invoices / total_invoices) * 100 if total_invoices else 0)}",
+            f"- Invoice sudah lunas: {settled_invoices} dari {total_invoices} invoice.",
+            f"- Invoice masih terbuka/parsial/unknown: {open_invoices} invoice senilai {cls._format_currency(current_open_invoice_value)}.",
+            f"- Invoice sudah lunas tetapi historis terlambat: {settled_late_invoices} invoice senilai {cls._format_currency(settled_late_invoice_value)}.",
+            f"- Porsi invoice terbuka yang terlambat: {cls._format_percentage((delayed_invoices / open_invoices) * 100 if open_invoices else 0)}",
             f"- Nilai invoice terlambat: {cls._format_currency(delayed_invoice_value)}",
-            f"- Porsi invoice risiko tinggi (Kelas D/E): {cls._format_percentage((high_risk_invoices / total_invoices) * 100 if total_invoices else 0)}",
+            f"- Porsi invoice terbuka risiko tinggi (Kelas D/E): {cls._format_percentage((high_risk_invoices / open_invoices) * 100 if open_invoices else 0)}",
             f"- Nilai invoice risiko tinggi (Kelas D/E): {cls._format_currency(high_risk_invoice_value)}",
             f"- Skor risiko penagihan rata-rata: {weighted_risk_score:.2f} dari 5.00",
-            f"- Estimasi arus kas masuk risk-adjusted (base case): {cls._format_currency(expected_realization_base)} atau {cls._format_percentage((expected_realization_base / total_invoice_value) * 100 if total_invoice_value else 0)} dari total nilai invoice",
+            f"- Estimasi arus kas masuk terbuka risk-adjusted (base case): {cls._format_currency(expected_realization_base)} atau {cls._format_percentage((expected_realization_base / current_open_invoice_value) * 100 if current_open_invoice_value else 0)} dari nilai invoice terbuka",
             f"- Gap arus kas masuk pada base case: {cls._format_currency(expected_gap_base)}",
             "",
             "## Pergerakan Periode Terbaru",
@@ -396,8 +455,8 @@ class FinancialAnalyzerContextMixin:
             evidence_lines.append("- Tidak ada catatan historis yang cukup untuk dikutip.")
 
         executive_fact_lines = [
-            f"- Portofolio yang dianalisis mencakup {total_invoices} invoice dengan total nilai {cls._format_currency(total_invoice_value)}.",
-            f"- Invoice terlambat mencapai {delayed_invoices} kasus atau {cls._format_percentage((delayed_invoices / total_invoices) * 100 if total_invoices else 0)} dari populasi, dengan nilai tertunda {cls._format_currency(delayed_invoice_value)}.",
+            f"- Portofolio yang dianalisis mencakup {total_invoices} invoice dengan total nilai {cls._format_currency(total_invoice_value)}; {settled_invoices} sudah lunas dan {open_invoices} masih terbuka/parsial/unknown.",
+            f"- Invoice terbuka yang terlambat mencapai {delayed_invoices} kasus atau {cls._format_percentage((delayed_invoices / open_invoices) * 100 if open_invoices else 0)} dari invoice terbuka, dengan nilai tertunda {cls._format_currency(delayed_invoice_value)}.",
             f"- Eksposur risiko tinggi Kelas D/E mencapai {high_risk_invoices} invoice senilai {cls._format_currency(high_risk_invoice_value)} dan terkonsentrasi pada {top_risk_partner_names}.",
             f"- Estimasi arus kas masuk risk-adjusted base case adalah {cls._format_currency(expected_realization_base)} dengan gap {cls._format_currency(expected_gap_base)} terhadap total nilai invoice.",
             recent_trend_line,
@@ -461,6 +520,11 @@ class FinancialAnalyzerContextMixin:
             "data_mode": data_mode,
             "total_invoices": total_invoices,
             "total_invoice_value": total_invoice_value,
+            "settled_invoices": settled_invoices,
+            "open_invoices": open_invoices,
+            "current_open_invoice_value": current_open_invoice_value,
+            "settled_late_invoices": settled_late_invoices,
+            "settled_late_invoice_value": settled_late_invoice_value,
             "delayed_invoices": delayed_invoices,
             "delayed_invoice_value": delayed_invoice_value,
             "high_risk_invoices": high_risk_invoices,

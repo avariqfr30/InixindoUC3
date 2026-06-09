@@ -72,6 +72,13 @@ class ExecutiveSummaryBuilder:
             "confidence": str(context.get("confidence_summary") or "Sedang - data operasional cukup, tetapi status komitmen bayar perlu validasi."),
         }
 
+    @staticmethod
+    def _bullet_lines(items, fallback):
+        rows = [str(item).strip().lstrip("- ").strip() for item in items or [] if str(item).strip()]
+        if not rows:
+            rows = [fallback]
+        return "\n".join(f"- {row}" for row in rows)
+
     @classmethod
     def build(cls, report_context, existing_body="", peer_sections=None):
         context = report_context or {}
@@ -93,7 +100,35 @@ class ExecutiveSummaryBuilder:
         section_digest = cls._section_digest(peer_sections)
         digest_block = ["### Ringkasan Isi Laporan\n" + section_digest] if section_digest else []
         interpretation = context.get("management_interpretation") or cls._fallback_management_interpretation(context, partner, service)
+        pyramid = interpretation.get("minto_pyramid") or {}
+        main_answer = str(pyramid.get("main_answer") or decision_position or interpretation.get("headline") or interpretation.get("decision") or "").strip()
+        if not main_answer:
+            main_answer = "Manajemen perlu menjaga disiplin kas dan memprioritaskan akun yang paling memengaruhi saldo kas akhir."
+        supporting_arguments = pyramid.get("supporting_arguments") or [
+            interpretation.get("meaning"),
+            drivers,
+            highlights,
+        ]
+        evidence = pyramid.get("evidence") or [
+            interpretation.get("signal"),
+            section_digest,
+            interpretation.get("confidence"),
+        ]
         interpretation_block = CashflowManagementInterpreter.to_markdown_table(interpretation)
+        projection_defensibility = context.get("projection_defensibility") or {}
+        defensibility_lines = []
+        if projection_defensibility:
+            defensibility_lines.append(str(projection_defensibility.get("method") or "").strip())
+            defensibility_lines.append("Penggerak keyakinan:")
+            defensibility_lines.extend(f"- {item}" for item in projection_defensibility.get("confidence_drivers", []) if str(item).strip())
+            defensibility_lines.append("Challenge Check:")
+            defensibility_lines.extend(f"- {item}" for item in projection_defensibility.get("challenge_checks", []) if str(item).strip())
+            defensibility_lines.append("Sensitivity:")
+            defensibility_lines.extend(f"- {item}" for item in projection_defensibility.get("sensitivity", []) if str(item).strip())
+            if projection_defensibility.get("statistical_backtesting_claimed") is False:
+                defensibility_lines.append("- Tidak ada klaim backtesting statistik; proyeksi harus dibandingkan dengan realisasi periode berikutnya.")
+        else:
+            defensibility_lines.append(confidence)
         timeline = (
             f"- Minggu ini: eskalasi {partner} dan konfirmasi ulang komitmen pembayaran yang masih bisa dipulihkan.\n"
             f"- Dalam 30 hari: kunci daftar tagihan pada {service} dan batasi arus kas keluar yang tidak mendukung stabilitas kas.\n"
@@ -105,12 +140,12 @@ class ExecutiveSummaryBuilder:
             "- Siapa penanggung jawab tindak lanjut dan kapan komitmen pembayaran berikutnya harus dikonfirmasi."
         )
         return "\n\n".join([
-            "### Posisi Keputusan dan Risiko Kas\n" + decision_position,
-            "### Faktor Utama\n" + drivers,
-            "### Sorotan Utama untuk Manajemen\n" + highlights,
-            *digest_block,
+            "### Kesimpulan Utama\n" + main_answer,
+            "### Keputusan yang Diminta\n" + decisions,
             "### Interpretasi Manajemen\n" + interpretation_block,
-            "### Jadwal Aksi Manajemen\n" + timeline,
-            "### Keputusan yang Dibutuhkan\n" + decisions,
-            "### Asumsi Proyeksi dan Catatan Batasan\n" + confidence,
+            "### Alasan Utama\n" + cls._bullet_lines(supporting_arguments, "Prioritas utama adalah menjaga arus kas masuk, mengendalikan arus kas keluar, dan memperjelas tindak lanjut penagihan."),
+            "### Bukti Pendukung\n" + cls._bullet_lines(evidence, "Bukti utama berasal dari invoice, cash bridge, dan dashboard forecast."),
+            "### Catatan Keyakinan dan Batasan\n" + "\n".join(line for line in defensibility_lines if str(line).strip()),
+            "### Agenda Follow-up Meeting\n" + timeline,
+            *digest_block,
         ])
