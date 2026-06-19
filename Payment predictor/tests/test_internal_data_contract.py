@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 
-WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
+WORKSPACE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 from data_contract import (
@@ -23,12 +23,23 @@ from data_contract import (
     normalize_financial_dataframe,
     parse_internal_api_field_map,
 )
+from dataset_catalog import invoice_dataset_codes, source_dataset_label
 from internal_api_doctor import main as internal_api_doctor_main, run_production_source_doctor
 from finance_api_clients import CashOutAPIClient, InternalAPIClient
 from financial_analyzer import FinancialAnalyzer
 
 
 class InternalDataContractUnitTest(unittest.TestCase):
+    def test_placeholder_dataset_codes_do_not_change_invoice_dataset_union(self):
+        self.assertEqual(invoice_dataset_codes(""), ("InvoiceTraining", "InvoiceConsultant"))
+        self.assertEqual(invoice_dataset_codes("FinanceInvoice"), ("InvoiceTraining", "InvoiceConsultant"))
+        self.assertEqual(invoice_dataset_codes("InvoiceKonsultan"), ("InvoiceTraining", "InvoiceConsultant"))
+
+    def test_source_dataset_labels_are_reader_friendly(self):
+        self.assertEqual(source_dataset_label("InvoiceTraining"), "Training")
+        self.assertEqual(source_dataset_label("InvoiceConsultant"), "Consulting")
+        self.assertEqual(source_dataset_label("FinanceInvoice"), "")
+
     def test_internal_api_doctor_json_cli_serializes_result(self):
         doctor_result = {
             "ok": True,
@@ -122,7 +133,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertTrue(contract_summary["isReady"])
         self.assertEqual(normalized_df.loc[0, "Periode Laporan"], "2021-03-30")
         self.assertEqual(normalized_df.loc[0, "Tipe Partner"], "PT Jasa Raharja Cabang Jambi")
-        self.assertEqual(normalized_df.loc[0, "Layanan"], "InvoiceTraining")
+        self.assertEqual(normalized_df.loc[0, "Layanan"], "Training")
         self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas B (Telat 1-14 hari)")
         self.assertIn("dibayar 11 hari setelah jatuh tempo", normalized_df.loc[0, "Catatan Historis Keterlambatan"])
 
@@ -149,7 +160,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(context["base_profile"]["delayed_invoices"], 0)
         self.assertEqual(context["base_profile"]["high_risk_invoices"], 0)
 
-    def test_explicit_unsettled_invoice_still_becomes_high_risk(self):
+    def test_explicit_unsettled_invoice_uses_age_aware_risk_class(self):
         invoice_records = [
             {
                 "invoice_number": "INV-OPEN-001",
@@ -167,11 +178,11 @@ class InternalDataContractUnitTest(unittest.TestCase):
         context = FinancialAnalyzer.build_report_context(normalized_df)
 
         self.assertEqual(behavior_summary["invoiceBehaviorFilled"], 1)
-        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas E (belum lunas)")
+        self.assertEqual(normalized_df.loc[0, "Kelas Pembayaran"], "Kelas C (belum lunas)")
         self.assertEqual(context["base_profile"]["delayed_invoices"], 1)
-        self.assertEqual(context["base_profile"]["high_risk_invoices"], 1)
+        self.assertEqual(context["base_profile"]["high_risk_invoices"], 0)
 
-    def test_internal_client_unions_training_invoice_and_reports_missing_consultant(self):
+    def test_internal_client_unions_real_invoice_datasets_and_ignores_placeholder_body(self):
         profile = {
             "type": "json_api",
             "endpoint": {
@@ -241,7 +252,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
         client = CashOutAPIClient(source_profile=source_profile)
 
         self.assertTrue(client.is_configured())
-        self.assertEqual(client.body, {"dataset": "BankDisbursement", "dataset_cache": "disabled"})
+        self.assertEqual(client.body, {"dataset": "BankDisbursement", "dataset_cache": "enabled"})
         self.assertEqual(client.body_format, "form")
 
     def test_preview_source_profile_returns_normalized_contract_summary(self):
@@ -656,10 +667,10 @@ class InternalDataContractUnitTest(unittest.TestCase):
         self.assertEqual(records[0]["company_category_name"], "Tipe B")
         self.assertEqual(summary["referenceDataset"], "ReferenceAccount")
         _, kwargs = request_mock.call_args
-        self.assertEqual(kwargs["data"], {"dataset": "ReferenceAccount", "dataset_cache": "disabled"})
+        self.assertEqual(kwargs["data"], {"dataset": "ReferenceAccount", "dataset_cache": "enabled"})
         self.assertEqual(client.body, {"dataset": "FinanceInvoice"})
 
-    def test_internal_client_disables_apidog_cache_for_date_sensitive_dataset_clones(self):
+    def test_internal_client_enables_apidog_cache_for_date_sensitive_dataset_clones(self):
         profile = {
             "type": "json_api",
             "endpoint": {
@@ -679,7 +690,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
         invoice_client = client._clone_for_dataset("InvoiceTraining")
 
         self.assertEqual(invoice_client.body["dataset"], "InvoiceTraining")
-        self.assertEqual(invoice_client.body["dataset_cache"], "disabled")
+        self.assertEqual(invoice_client.body["dataset_cache"], "enabled")
         self.assertEqual(client.body["dataset_cache"], "enabled")
 
     def test_internal_client_fetches_reference_account_with_dataset_code_replaced(self):
@@ -724,7 +735,7 @@ class InternalDataContractUnitTest(unittest.TestCase):
             {
                 "dataset": "ReferenceAccount",
                 "dataset_code": "ReferenceAccount",
-                "dataset_cache": "disabled",
+                "dataset_cache": "enabled",
             },
         )
         self.assertEqual(
@@ -894,6 +905,12 @@ class InternalDataContractRouteTest(unittest.TestCase):
         os.environ["INTERNAL_API_CONFIG_FILE"] = os.path.join(cls._tmpdir, "production-source.json")
         os.environ["APP_SECRET_KEY"] = "test-secret-key"
         os.environ["SESSION_COOKIE_SECURE"] = "false"
+        os.environ["DISABLE_CSRF_FOR_TESTING"] = "1"
+        os.environ["TEMP_FULL_ACCESS_USERNAME"] = "contract_user@inixindojogja.co.id"
+        os.environ["TEMP_FULL_ACCESS_PASSWORD"] = "password123"
+        os.environ["REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE"] = "test_double"
+        os.environ["REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS"] = "contract_user@inixindojogja.co.id"
+        os.environ["AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE"] = "capture"
 
         for module_name in (
             "app",
@@ -1069,7 +1086,10 @@ class InternalDataContractRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         fake_knowledge_base.activate_source.assert_called_once_with("production")
         fake_forecast_cache.clear.assert_called_once()
-        fake_cash_out_store.refresh_data.assert_called_once()
+        fake_cash_out_store.rebind_source_profile.assert_called_once_with(
+            fake_knowledge_base.source_profile,
+            refresh=True,
+        )
 
     def test_connect_endpoint_saves_and_activates_ready_api_profile(self):
         import core as core_module

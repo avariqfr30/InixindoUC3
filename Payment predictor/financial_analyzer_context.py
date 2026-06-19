@@ -4,6 +4,7 @@ import pandas as pd
 
 from cashflow_intelligence_desk import CashflowIntelligenceDesk
 from data_contract import invoice_lifecycle_status
+from editorial_intelligence import compact_repeated_finance_cells
 
 
 class FinancialAnalyzerContextMixin:
@@ -126,12 +127,26 @@ class FinancialAnalyzerContextMixin:
             "payment_date",
             "settlement_date",
         ))
+        invoice_date_column = find_optional_column((
+            "tanggal invoice",
+            "invoice_date",
+            "issued_date",
+            "billing_date",
+        ))
+        due_date_column = find_optional_column((
+            "tanggal jatuh tempo invoice",
+            "invoice_due_date",
+            "due_date",
+            "payment_due_date",
+        ))
         lifecycle_rows = []
         for _, lifecycle_row in working_df.iterrows():
             lifecycle_rows.append(
                 invoice_lifecycle_status(
-                    lifecycle_row.get(status_column) if status_column else "",
-                    lifecycle_row.get(paid_date_column) if paid_date_column else "",
+                    raw_status=lifecycle_row.get(status_column) if status_column else "",
+                    paid_date=lifecycle_row.get(paid_date_column) if paid_date_column else "",
+                    invoice_date=lifecycle_row.get(invoice_date_column) if invoice_date_column else "",
+                    due_date=lifecycle_row.get(due_date_column) if due_date_column else "",
                 )
             )
         working_df["__settlement_status"] = [item["category"] for item in lifecycle_rows]
@@ -317,8 +332,16 @@ class FinancialAnalyzerContextMixin:
                 f"yang berarti kondisi penagihan {risk_interpretation}."
             )
 
-        top_risk_partner_names = ", ".join(high_risk_partner_df.index.tolist()[:3]) if not high_risk_partner_df.empty else "-"
-        top_risk_service_names = ", ".join(high_risk_service_df.index.tolist()[:3]) if not high_risk_service_df.empty else "-"
+        top_risk_partner_names = (
+            ", ".join(high_risk_partner_df.index.tolist()[:3])
+            if not high_risk_partner_df.empty
+            else "akun prioritas yang belum cukup dominan pada data risiko tinggi"
+        )
+        top_risk_service_names = (
+            ", ".join(high_risk_service_df.index.tolist()[:3])
+            if not high_risk_service_df.empty
+            else "layanan prioritas yang belum cukup dominan pada data risiko tinggi"
+        )
         top_theme_map = {theme: count for theme, count in top_themes}
         process_issue_count = top_theme_map.get("Dokumen dan administrasi", 0) + top_theme_map.get("Sengketa atau klarifikasi", 0)
         budget_issue_count = top_theme_map.get("Siklus anggaran", 0) + top_theme_map.get("Persetujuan internal klien", 0)
@@ -337,7 +360,7 @@ class FinancialAnalyzerContextMixin:
             diagnostic_breakdown_lines.append(
                 f"3. Tekanan likuiditas pelanggan muncul pada {liquidity_issue_count} catatan; risiko ini perlu dibedakan dari isu administratif karena membutuhkan pola negosiasi dan komitmen bayar yang lebih aktif."
             )
-        if top_risk_partner_names != "-":
+        if not high_risk_partner_df.empty:
             diagnostic_breakdown_lines.append(
                 f"4. Eksposur dampak terbesar saat ini terkonsentrasi pada {top_risk_partner_names}, sehingga setiap bottleneck di segmen tersebut memberi pengaruh paling besar ke arus kas masuk dan kualitas ending cash."
             )
@@ -485,6 +508,8 @@ class FinancialAnalyzerContextMixin:
             "|---:|---|---|---:|---|---|---|",
         ]
         issue_seen = {}
+        priority_rows_for_table = []
+        management_rows_for_table = []
         for item in priority_rows[:6]:
             issue_key = str(item.get("issue") or "").strip().lower()
             issue_seen[issue_key] = issue_seen.get(issue_key, 0) + 1
@@ -493,12 +518,27 @@ class FinancialAnalyzerContextMixin:
                 action_text = f"Konfirmasi bukti pendukung dan owner keputusan untuk {item['focus']} sebelum eskalasi berikutnya."
             elif issue_seen[issue_key] >= 3:
                 action_text = f"Kunci komitmen pembayaran tertulis untuk {item['focus']} dan jadwalkannya dalam forum follow-up mingguan."
-            management_priority_lines.append(
-                f"| {item['priority']} | {item['focus']} | {item['payment_class']} | {cls._format_currency(item['invoice_value'])} | {item['issue']} | {action_text} | {item['owner']} |"
-            )
-            priority_table_lines.append(
-                f"| {item['priority']} | {item['focus']} | {item['owner']} | {item['issue']} | {action_text} | {item['impact']} |"
-            )
+            management_rows_for_table.append([
+                item["priority"],
+                item["focus"],
+                item["payment_class"],
+                cls._format_currency(item["invoice_value"]),
+                item["issue"],
+                action_text,
+                item["owner"],
+            ])
+            priority_rows_for_table.append([
+                item["priority"],
+                item["focus"],
+                item["owner"],
+                item["issue"],
+                action_text,
+                item["impact"],
+            ])
+        for compacted in compact_repeated_finance_cells(management_rows_for_table):
+            management_priority_lines.append("| " + " | ".join(str(cell) for cell in compacted) + " |")
+        for compacted in compact_repeated_finance_cells(priority_rows_for_table):
+            priority_table_lines.append("| " + " | ".join(str(cell) for cell in compacted) + " |")
         meeting_questions = [
             "Segmen partner mana yang paling layak mendapat eskalasi manajemen karena menggabungkan nilai invoice besar dan skor risiko tinggi?",
             "Hambatan apa yang paling sering berulang: anggaran, approval, dokumen, likuiditas, atau sengketa ruang lingkup?",
@@ -547,7 +587,7 @@ class FinancialAnalyzerContextMixin:
         )
         management_interpretation = {
             "signal": f"Cash in tertahan {cls._format_currency(delayed_invoice_value)} dengan gap base case {cls._format_currency(expected_gap_base)}.",
-            "meaning": f"Risiko utama adalah kontrol waktu pada {top_risk_partner_names}, terutama layanan {top_risk_service_names}.",
+            "meaning": f"Risiko utama adalah kontrol waktu pada {top_risk_partner_names}, terutama pada {top_risk_service_names}.",
             "decision": "Manajemen perlu memilih akun yang dieskalasi dan batas cash-out yang dijaga selama 30 hari.",
             "actions": [
                 "Eskalasi akun D/E bernilai terbesar dengan komitmen pembayaran tertulis.",

@@ -84,7 +84,7 @@ def build_internal_api_profile_template():
         "request": {
             "headers": {},
             "query_params": {},
-            "body": {"dataset": "InvoiceTraining"},
+            "body": {},
             "body_format": "form",
         },
         "field_map": {
@@ -151,6 +151,23 @@ def _normalize_body_format(value):
     if raw_value in {"none", "empty", "kosong"}:
         return "none"
     return "json"
+
+
+def _env_value(prefix, primary_suffix, *legacy_names):
+    value = os.getenv(f"{prefix}_{primary_suffix}", "").strip()
+    if value:
+        return value
+    for legacy_name in legacy_names:
+        legacy_value = os.getenv(legacy_name, "").strip()
+        if legacy_value:
+            return legacy_value
+    return ""
+
+
+def _resolve_env_placeholder(value, env_value):
+    if str(value or "").strip() == "__ENV__":
+        return env_value
+    return value
 
 
 def build_internal_api_profile_from_connection_payload(payload):
@@ -406,12 +423,18 @@ def _apply_env_overrides_to_json_api_profile(profile, prefix, endpoint_url, base
     if env_records_key:
         endpoint["records_key"] = env_records_key
 
-    if os.getenv(f"{prefix}_AUTH_TOKEN", "").strip():
-        auth["bearer_token"] = os.getenv(f"{prefix}_AUTH_TOKEN", "").strip()
-    if os.getenv(f"{prefix}_BASIC_USERNAME", "").strip():
-        auth["basic_username"] = os.getenv(f"{prefix}_BASIC_USERNAME", "").strip()
-    if os.getenv(f"{prefix}_BASIC_PASSWORD", "").strip():
-        auth["basic_password"] = os.getenv(f"{prefix}_BASIC_PASSWORD", "")
+    env_auth_token = _env_value(prefix, "AUTH_TOKEN")
+    env_basic_username = _env_value(prefix, "BASIC_USERNAME", f"{prefix}_USERNAME")
+    env_basic_password = _env_value(prefix, "BASIC_PASSWORD", f"{prefix}_PASSWORD")
+    auth["bearer_token"] = _resolve_env_placeholder(auth.get("bearer_token"), env_auth_token)
+    auth["basic_username"] = _resolve_env_placeholder(auth.get("basic_username"), env_basic_username)
+    auth["basic_password"] = _resolve_env_placeholder(auth.get("basic_password"), env_basic_password)
+    if env_auth_token:
+        auth["bearer_token"] = env_auth_token
+    if env_basic_username:
+        auth["basic_username"] = env_basic_username
+    if env_basic_password:
+        auth["basic_password"] = env_basic_password
 
     headers = _parse_json_object(os.getenv(f"{prefix}_HEADERS_JSON", ""), f"{prefix}_HEADERS_JSON")
     if headers:

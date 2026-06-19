@@ -505,7 +505,12 @@ class CashflowForecaster:
                 due_date = _parse_optional_date(row.get(due_date_column)) if due_date_column else None
                 paid_date = _parse_optional_date(row.get(paid_date_column)) if paid_date_column else None
                 raw_settled = row.get(settled_column) if settled_column else ""
-                lifecycle = invoice_lifecycle_status(raw_settled, paid_date)
+                lifecycle = invoice_lifecycle_status(
+                    raw_status=raw_settled,
+                    paid_date=paid_date,
+                    invoice_date=invoice_date,
+                    due_date=due_date,
+                )
                 is_settled = lifecycle["is_settled"]
                 is_unsettled = lifecycle["is_unsettled"]
 

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 
-WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
+WORKSPACE = Path(__file__).resolve().parents[1]
 
 
 class AuthFlowTestCase(unittest.TestCase):
@@ -25,8 +25,18 @@ class AuthFlowTestCase(unittest.TestCase):
         os.environ["AUTH_MAX_SESSIONS_PER_USER"] = "1"
         os.environ["AUTH_SESSION_IDLE_TIMEOUT_MINUTES"] = "60"
         os.environ["AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS"] = "12"
-        os.environ.pop("TEMP_FULL_ACCESS_USERNAME", None)
-        os.environ.pop("TEMP_FULL_ACCESS_PASSWORD", None)
+        os.environ["DISABLE_CSRF_FOR_TESTING"] = "1"
+        os.environ["TEMP_FULL_ACCESS_USERNAME"] = cls.TEST_USERNAME
+        os.environ["TEMP_FULL_ACCESS_PASSWORD"] = cls.TEST_PASSWORD
+        os.environ["REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE"] = "test_double"
+        os.environ["REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS"] = ",".join(
+            {
+                cls.TEST_USERNAME,
+                "second_user@inixindojogja.co.id",
+                "mismatch@inixindojogja.co.id",
+            }
+        )
+        os.environ["AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE"] = "capture"
 
         sys.path.insert(0, str(WORKSPACE))
         for module_name in ("app", "config"):
@@ -163,19 +173,16 @@ class AuthFlowTestCase(unittest.TestCase):
         signup_page = self.client.get("/signup")
         self.assertEqual(signup_page.status_code, 200)
         html = signup_page.get_data(as_text=True)
-        self.assertIn("@inixindojogja.co.id", html)
+        self.assertIn("ReferenceInternalAccount", html)
         self.assertIn(">Daftar</a>", html)
 
         second_signup = self._signup(self.client, "second_user@inixindojogja.co.id")
-        self.assertEqual(second_signup.status_code, 302)
-
-        self.client.post("/logout", follow_redirects=False)
-        approved_login = self.client.post(
-            "/login",
-            data={"username": "second_user@inixindojogja.co.id", "password": self.TEST_PASSWORD},
-            follow_redirects=False,
-        )
-        self.assertEqual(approved_login.status_code, 302)
+        self.assertEqual(second_signup.status_code, 200)
+        self.assertIn("Verifikasi Pendaftaran", second_signup.get_data(as_text=True))
+        payload = self.flask_app.config["last_signup_verification_payload"]
+        self.assertEqual(payload["email"], "second_user@inixindojogja.co.id")
+        self.assertTrue(payload["initial_password"])
+        self.assertTrue(payload["verification_token"])
 
     def test_signup_rejects_invalid_email_format_and_non_company_domain(self):
         self._signup_or_login(self.client)
@@ -191,7 +198,7 @@ class AuthFlowTestCase(unittest.TestCase):
         external_signup = self._signup(self.client, "external@example.com")
         self.assertEqual(external_signup.status_code, 200)
         self.assertIn(
-            "Hanya email @inixindojogja.co.id yang diizinkan.",
+            "Email tidak terdaftar di sistem internal.",
             external_signup.get_data(as_text=True),
         )
 
@@ -208,7 +215,7 @@ class AuthFlowTestCase(unittest.TestCase):
         self.assertIsNone(user_store.authenticate("test1234", "wrong-password"))
         self.assertIsNone(user_store.authenticate("other-user", "test1234"))
 
-    def test_signup_password_mismatch_stays_on_form_without_bad_request(self):
+    def test_signup_uses_generated_credentials_instead_of_submitted_passwords(self):
         response = self.client.post(
             "/signup",
             data={
@@ -219,7 +226,10 @@ class AuthFlowTestCase(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Konfirmasi kata sandi tidak cocok.", response.get_data(as_text=True))
+        self.assertIn("Verifikasi Pendaftaran", response.get_data(as_text=True))
+        payload = self.flask_app.config["last_signup_verification_payload"]
+        self.assertEqual(payload["email"], "mismatch@inixindojogja.co.id")
+        self.assertNotIn(payload["initial_password"], {"password123", "password456"})
 
 
 if __name__ == "__main__":

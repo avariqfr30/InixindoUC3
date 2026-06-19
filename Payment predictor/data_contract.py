@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pandas as pd
 from data_sources import build_internal_api_profile_template
+from dataset_catalog import INVOICE_TRAINING_DATASET, source_dataset_label
 
 
 INTERNAL_API_FIELD_SPECS = {
@@ -314,9 +315,16 @@ def is_invoice_unsettled_status(value):
     )
 
 
-def invoice_lifecycle_status(raw_status=None, paid_date=None):
+def invoice_lifecycle_status(raw_status=None, paid_date=None, invoice_date=None, due_date=None):
     paid_timestamp = pd.to_datetime(paid_date, errors="coerce") if _value_to_text(paid_date) else None
+    invoice_timestamp = pd.to_datetime(invoice_date, errors="coerce") if _value_to_text(invoice_date) else None
+    due_timestamp = pd.to_datetime(due_date, errors="coerce") if _value_to_text(due_date) else None
     has_paid_date = paid_timestamp is not None and not pd.isna(paid_timestamp)
+    has_invoice_date = invoice_timestamp is not None and not pd.isna(invoice_timestamp)
+    has_due_date = due_timestamp is not None and not pd.isna(due_timestamp)
+    paid_before_invoice = bool(has_paid_date and has_invoice_date and paid_timestamp < invoice_timestamp)
+    due_before_invoice = bool(has_due_date and has_invoice_date and due_timestamp < invoice_timestamp)
+    valid_paid_date = bool(has_paid_date and not paid_before_invoice)
     explicit_settled = is_invoice_settled_status(raw_status)
     explicit_unsettled = is_invoice_unsettled_status(raw_status)
     status_text = _normalize_status_text(raw_status)
@@ -324,7 +332,7 @@ def invoice_lifecycle_status(raw_status=None, paid_date=None):
 
     if is_partial:
         category = "partial"
-    elif explicit_settled or has_paid_date:
+    elif explicit_settled or valid_paid_date:
         category = "lunas"
     elif explicit_unsettled:
         category = "not_lunas"
@@ -332,10 +340,14 @@ def invoice_lifecycle_status(raw_status=None, paid_date=None):
         category = "unknown"
 
     conflict_reason = ""
-    if has_paid_date and explicit_unsettled and not is_partial:
+    if paid_before_invoice:
+        conflict_reason = "paid_date_before_invoice_date"
+    elif valid_paid_date and explicit_unsettled and not is_partial:
         conflict_reason = "paid_date_present_but_status_unsettled"
-    elif not has_paid_date and explicit_settled:
+    elif not valid_paid_date and explicit_settled:
         conflict_reason = "status_settled_without_paid_date"
+    elif due_before_invoice:
+        conflict_reason = "due_date_before_invoice_date"
 
     return {
         "category": category,
@@ -343,6 +355,9 @@ def invoice_lifecycle_status(raw_status=None, paid_date=None):
         "is_unsettled": category in {"not_lunas", "partial"},
         "is_partial": is_partial,
         "has_paid_date": has_paid_date,
+        "valid_paid_date": valid_paid_date,
+        "has_invoice_date": has_invoice_date,
+        "has_due_date": has_due_date,
         "conflict_reason": conflict_reason,
     }
 
@@ -482,10 +497,11 @@ def _parse_invoice_date(value):
 
 
 def _invoice_behavior_from_dates(record):
+    invoice_date = _parse_invoice_date(record.get("invoice_date") or record.get("tanggal_invoice"))
     due_date = _parse_invoice_date(record.get("invoice_due_date") or record.get("due_date"))
     paid_date = _parse_invoice_date(record.get("invoice_paid_date") or record.get("paid_date"))
     settled_text = _value_to_text(record.get("invoice_is_settled") or record.get("is_settled"))
-    lifecycle = invoice_lifecycle_status(settled_text, paid_date)
+    lifecycle = invoice_lifecycle_status(settled_text, paid_date, invoice_date, due_date)
     is_settled = lifecycle["is_settled"]
     is_unsettled = lifecycle["is_unsettled"]
     if due_date is None:
@@ -496,7 +512,6 @@ def _invoice_behavior_from_dates(record):
             return "Kelas C (tanggal bayar tidak tercatat)", "Invoice tercatat selesai, tetapi tanggal bayar belum tersedia."
         if is_unsettled:
             # Age-aware classification instead of blanket Kelas E
-            invoice_date = _parse_invoice_date(record.get("invoice_date") or record.get("tanggal_invoice"))
             if invoice_date and due_date:
                 age_days = max(0, int((pd.Timestamp.now().normalize() - due_date.normalize()).days))
                 if age_days <= 14:
@@ -526,7 +541,8 @@ def enrich_invoice_records_with_payment_behavior(invoice_records):
         if not isinstance(raw_record, dict):
             continue
         record = dict(raw_record)
-        dataset_label = _value_to_text(record.get("_source_dataset_code")) or "InvoiceTraining"
+        dataset_code = _value_to_text(record.get("_source_dataset_code")) or INVOICE_TRAINING_DATASET
+        dataset_label = source_dataset_label(dataset_code) or dataset_code
         record.setdefault("source_dataset_label", dataset_label)
         if not _value_to_text(record.get("payment_class")) or not _value_to_text(record.get("delay_note")):
             payment_class, delay_note = _invoice_behavior_from_dates(record)
@@ -892,6 +908,30 @@ def normalize_financial_dataframe(data_frame, explicit_field_map=None):
         label = INTERNAL_API_FIELD_SPECS[canonical_key]["label"]
         if label in working_frame.columns:
             working_frame[label] = working_frame[label].apply(normalizer)
+
+    status_label = INTERNAL_API_FIELD_SPECS["invoice_is_settled"]["label"]
+    paid_date_label = INTERNAL_API_FIELD_SPECS["invoice_paid_date"]["label"]
+    invoice_date_label = INTERNAL_API_FIELD_SPECS["invoice_date"]["label"]
+    due_date_label = INTERNAL_API_FIELD_SPECS["invoice_due_date"]["label"]
+    if status_label in working_frame.columns and paid_date_label in working_frame.columns:
+        def reconcile_status(row):
+            raw_status = row.get(status_label)
+            lifecycle = invoice_lifecycle_status(
+                raw_status=raw_status,
+                paid_date=row.get(paid_date_label),
+                invoice_date=row.get(invoice_date_label) if invoice_date_label in working_frame.columns else None,
+                due_date=row.get(due_date_label) if due_date_label in working_frame.columns else None,
+            )
+            if (
+                lifecycle["is_settled"]
+                and lifecycle["valid_paid_date"]
+                and is_invoice_unsettled_status(raw_status)
+                and not lifecycle["is_partial"]
+            ):
+                return "Invoice Lunas"
+            return raw_status
+
+        working_frame[status_label] = working_frame.apply(reconcile_status, axis=1)
 
     return working_frame, build_internal_data_summary(working_frame, explicit_field_map=explicit_field_map)
 

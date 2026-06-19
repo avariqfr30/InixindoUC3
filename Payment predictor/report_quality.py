@@ -2,6 +2,7 @@ import re
 
 from config import REPORT_MIN_COMPLETENESS_SCORE
 from reasoning_policy import CashflowHotsReasoningPolicy
+from editorial_intelligence import evaluate_payment_document_spine
 from report_structure import REPORT_STRUCTURE
 
 
@@ -147,7 +148,7 @@ class ReportQualityScorer:
         accuracy_ratio = matched / len(key_figures)
         return round(accuracy_ratio * 10)
 
-    def final_qa(self, raw_text, rejected_claims=None):
+    def final_qa(self, raw_text, rejected_claims=None, deliberation_contract=None):
         report_text = str(raw_text or "")
         categories = set()
         findings = []
@@ -177,9 +178,39 @@ class ReportQualityScorer:
             if len(re.sub(r"\s+", " ", plain_body).strip()) < 40:
                 categories.add("empty_section")
                 findings.append(f"{section} kosong atau terlalu tipis.")
+        spine_result = evaluate_payment_document_spine(report_text)
+        if not spine_result["passes"]:
+            categories.update(spine_result["categories"])
+            findings.extend(spine_result["findings"])
         if "### Ringkasan Isi Laporan" not in report_text:
             categories.add("missing_section_synthesis")
             findings.append("Ringkasan eksekutif belum merangkum isi laporan akhir.")
+        if not re.search(self.structure.required_tables["priority_30_day"], report_text, re.IGNORECASE):
+            categories.add("missing_finance_action_contract")
+            findings.append(
+                "Prioritas 30 hari belum mengikat akun, hambatan, tindakan, owner, tenggat, dampak, dan kontrol tindak lanjut."
+            )
+        contract = deliberation_contract or {}
+        if deliberation_contract is not None:
+            required = {
+                "evidence_dossier", "research_plan", "document_thesis", "chapter_contracts",
+                "claim_ledger", "data_gap_register", "editorial_contract", "appendix_manifest",
+            }
+            if not required.issubset(contract):
+                categories.add("missing_deliberation_contract")
+                findings.append("Kontrak deliberasi laporan cashflow belum lengkap.")
+            required_appendix_headings = (
+                "## A. Dasar Perhitungan dan Cakupan",
+                "## B. Sensitivitas dan Countercheck",
+                "## C. Rekonsiliasi Siklus Tagihan",
+                "## D. Kesenjangan Data",
+            )
+            if not all(heading in report_text for heading in required_appendix_headings):
+                categories.add("missing_tiered_appendix")
+                findings.append("Lampiran perhitungan, sensitivitas, siklus tagihan, dan kesenjangan data belum lengkap.")
+            if re.search(r"\b(?:InvoiceTraining|InvoiceConsultant|SECTION_PLAN_JSON|DOCUMENT_DELIBERATION)\b", report_text):
+                categories.add("raw_source_label")
+                findings.append("Lampiran masih memuat label sumber atau perencanaan internal.")
         return {"passes": not categories, "categories": sorted(categories), "findings": findings}
 
     @staticmethod

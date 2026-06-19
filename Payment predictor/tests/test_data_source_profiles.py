@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 
-WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
+WORKSPACE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 from data_sources import (
@@ -108,13 +108,36 @@ class DataSourceProfilesTest(unittest.TestCase):
         self.assertEqual(profiles["production"]["endpoint"]["url"], "https://example.com/api/Resource/dataset")
         self.assertEqual(profiles["production"]["request"]["body"]["dataset"], "FinanceInvoice")
 
-    def test_internal_api_profile_template_uses_invoice_training_apidog_dataset(self):
+    def test_single_file_profile_resolves_env_auth_placeholders(self):
+        os.environ["INTERNAL_API_BASIC_USERNAME"] = "demo-user"
+        os.environ["INTERNAL_API_BASIC_PASSWORD"] = "demo-pass"
+        profile = build_internal_api_profile_template()
+        profile["endpoint"]["url"] = "https://example.com/api/Resource/dataset"
+        profile["auth"]["basic_username"] = "__ENV__"
+        profile["auth"]["basic_password"] = "__ENV__"
+        profile_path = os.path.join(self.tmpdir, "production-profile.json")
+        Path(profile_path).write_text(json.dumps(profile), encoding="utf-8")
+
+        profiles, issues, _ = load_available_source_profiles(
+            demo_csv_path=self.demo_csv,
+            legacy_data_mode="internal_api",
+            internal_api_endpoint_url="",
+            internal_api_base_url="",
+            internal_api_dataset_path="/api/finance/invoices",
+            config_file_path=profile_path,
+        )
+
+        self.assertEqual(issues, [])
+        self.assertEqual(profiles["production"]["auth"]["basic_username"], "demo-user")
+        self.assertEqual(profiles["production"]["auth"]["basic_password"], "demo-pass")
+
+    def test_internal_api_profile_template_defers_to_explicit_invoice_dataset_union(self):
         profile = build_internal_api_profile_template()
 
         self.assertEqual(profile["endpoint"]["method"], "POST")
         self.assertEqual(profile["endpoint"]["records_key"], "data.dataset_result")
         self.assertEqual(profile["request"]["body_format"], "form")
-        self.assertEqual(profile["request"]["body"], {"dataset": "InvoiceTraining"})
+        self.assertEqual(profile["request"]["body"], {})
         self.assertIn("invoice_value", profile["field_map"])
 
     def test_active_source_state_roundtrip(self):

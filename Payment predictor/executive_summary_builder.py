@@ -61,12 +61,18 @@ class ExecutiveSummaryBuilder:
         profile = (context or {}).get("base_profile") or {}
         expected_gap = profile.get("expected_gap_base")
         gap_text = f"Rp{int(expected_gap):,}" if isinstance(expected_gap, (int, float)) else "gap arus kas yang masih perlu dipersempit"
+        safe_partner = str(partner or "").strip()
+        if not safe_partner or safe_partner == "-":
+            safe_partner = "akun prioritas yang perlu dipilih dari daftar eksposur terbesar"
+        safe_service = str(service or "").strip()
+        if not safe_service or safe_service == "-":
+            safe_service = "layanan prioritas yang perlu dikonfirmasi dari data risiko"
         return {
             "signal": str(context.get("executive_facts") or context.get("executive_headlines") or "Cash in dan cash out perlu dibaca bersama sebelum keputusan dibuat.").splitlines()[0].lstrip("- ").strip(),
-            "meaning": f"Risiko utama adalah kontrol waktu pada {partner} dan layanan {service}, bukan hanya nominal tagihan.",
-            "decision": f"Manajemen perlu menentukan apakah {partner} masuk eskalasi senior minggu ini.",
+            "meaning": f"Risiko utama adalah kontrol waktu pada {safe_partner} dan pada {safe_service}, bukan hanya nominal tagihan.",
+            "decision": f"Manajemen perlu menentukan apakah {safe_partner} masuk eskalasi senior minggu ini.",
             "actions": [
-                f"Kunci komitmen pembayaran untuk {partner}.",
+                f"Kunci komitmen pembayaran untuk {safe_partner}.",
                 f"Gunakan {gap_text} sebagai batas risiko yang harus diperkecil dalam 30 hari.",
             ],
             "confidence": str(context.get("confidence_summary") or "Sedang - data operasional cukup, tetapi status komitmen bayar perlu validasi."),
@@ -144,8 +150,8 @@ class ExecutiveSummaryBuilder:
             "### Keputusan yang Diminta\n" + decisions,
             "### Interpretasi Manajemen\n" + interpretation_block,
             "### Alasan Utama\n" + cls._bullet_lines(supporting_arguments, "Prioritas utama adalah menjaga arus kas masuk, mengendalikan arus kas keluar, dan memperjelas tindak lanjut penagihan."),
+            *digest_block,
             "### Bukti Pendukung\n" + cls._bullet_lines(evidence, "Bukti utama berasal dari invoice, cash bridge, dan dashboard forecast."),
             "### Catatan Keyakinan dan Batasan\n" + "\n".join(line for line in defensibility_lines if str(line).strip()),
             "### Agenda Follow-up Meeting\n" + timeline,
-            *digest_block,
         ])

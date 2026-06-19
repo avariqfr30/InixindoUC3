@@ -116,8 +116,8 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         }
         result = finalizer.finalize(raw, context, "", analysis_payload={})
         self.assertIn("# Ringkasan Eksekutif", result)
-        self.assertIn("### Posisi Keputusan dan Risiko Kas", result)
-        self.assertIn("### Keputusan yang Dibutuhkan", result)
+        self.assertIn("### Kesimpulan Utama", result)
+        self.assertIn("### Keputusan yang Diminta", result)
         for token in ["API internal", "endpoint", "source-of-truth", "Waitress", "queue", "thread", "sync status"]:
             self.assertNotIn(token, result)
 
@@ -144,7 +144,7 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         self.assertIn("| Sinyal | Makna | Keputusan | Aksi | Keyakinan |", summary_body)
         self.assertIn("kontrol waktu", summary_body)
         self.assertIn("Eskalasi senior", summary_body)
-        self.assertLess(summary_body.index("### Interpretasi Manajemen"), summary_body.index("### Jadwal Aksi Manajemen"))
+        self.assertLess(summary_body.index("### Interpretasi Manajemen"), summary_body.index("### Agenda Follow-up Meeting"))
 
     def test_finalization_strips_hidden_workflow_roles_and_source_mechanics(self):
         finalizer = ReportFinalizer()
@@ -182,10 +182,13 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         result = finalizer.finalize(raw, context, "", analysis_payload={})
         summary_body = result.split("# Analisis Deskriptif Cashflow", 1)[0]
 
-        self.assertRegex(summary_body, r"^# Ringkasan Eksekutif\n### Posisi Keputusan dan Risiko Kas")
-        self.assertLess(summary_body.index("### Posisi Keputusan dan Risiko Kas"), summary_body.index("### Faktor Utama"))
-        self.assertLess(summary_body.index("### Faktor Utama"), summary_body.index("### Jadwal Aksi Manajemen"))
-        self.assertLess(summary_body.index("### Jadwal Aksi Manajemen"), summary_body.index("### Asumsi Proyeksi dan Catatan Batasan"))
+        self.assertRegex(summary_body, r"^# Ringkasan Eksekutif\n### Kesimpulan Utama")
+        self.assertLess(summary_body.index("### Kesimpulan Utama"), summary_body.index("### Keputusan yang Diminta"))
+        self.assertLess(summary_body.index("### Keputusan yang Diminta"), summary_body.index("### Interpretasi Manajemen"))
+        self.assertLess(summary_body.index("### Interpretasi Manajemen"), summary_body.index("### Alasan Utama"))
+        self.assertLess(summary_body.index("### Alasan Utama"), summary_body.index("### Bukti Pendukung"))
+        self.assertLess(summary_body.index("### Bukti Pendukung"), summary_body.index("### Catatan Keyakinan dan Batasan"))
+        self.assertLess(summary_body.index("### Catatan Keyakinan dan Batasan"), summary_body.index("### Agenda Follow-up Meeting"))
         self.assertNotIn("Endpoint", summary_body)
         self.assertNotIn("Internal API", summary_body)
 
@@ -223,12 +226,12 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
 
         result = finalizer.finalize(raw, context, "", analysis_payload={})
         summary_body = result.split("# Analisis Deskriptif Cashflow", 1)[0]
-        factors = summary_body.split("### Faktor Utama", 1)[1].split("### Sorotan Utama untuk Manajemen", 1)[0].strip()
-        highlights = summary_body.split("### Sorotan Utama untuk Manajemen", 1)[1].split("### Jadwal Aksi Manajemen", 1)[0].strip()
+        factors = summary_body.split("### Alasan Utama", 1)[1].split("### Bukti Pendukung", 1)[0].strip()
+        evidence = summary_body.split("### Bukti Pendukung", 1)[1].split("### Catatan Keyakinan dan Batasan", 1)[0].strip()
 
-        self.assertNotEqual(factors, highlights)
+        self.assertNotEqual(factors, evidence)
         self.assertIn("Fakta utama", factors)
-        self.assertIn("Keputusan kas", highlights)
+        self.assertIn("Keputusan kas", summary_body.split("### Keputusan yang Diminta", 1)[0])
 
     def test_executive_summary_synthesizes_finished_report_sections(self):
         finalizer = ReportFinalizer()
@@ -253,8 +256,8 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         self.assertIn("### Ringkasan Isi Laporan", summary_body)
         self.assertIn("Saldo kas akhir stabil", summary_body)
         self.assertIn("tagihan terlambat akun besar", summary_body)
-        self.assertLess(summary_body.index("### Faktor Utama"), summary_body.index("### Ringkasan Isi Laporan"))
-        self.assertLess(summary_body.index("### Ringkasan Isi Laporan"), summary_body.index("### Jadwal Aksi Manajemen"))
+        self.assertLess(summary_body.index("### Alasan Utama"), summary_body.index("### Ringkasan Isi Laporan"))
+        self.assertLess(summary_body.index("### Ringkasan Isi Laporan"), summary_body.index("### Bukti Pendukung"))
 
     def test_finalization_inserts_source_safe_evidence_cards(self):
         finalizer = ReportFinalizer()
@@ -365,10 +368,10 @@ class ReaderFacingDocumentContractTests(unittest.TestCase):
         result = finalizer.finalize(raw, context, "", analysis_payload={})
 
         self.assertIn("# Ringkasan Eksekutif", result)
-        self.assertIn("### Posisi Keputusan dan Risiko Kas", result)
-        self.assertIn("### Faktor Utama", result)
-        self.assertIn("### Jadwal Aksi Manajemen", result)
-        self.assertIn("### Asumsi Proyeksi dan Catatan Batasan", result)
+        self.assertIn("### Kesimpulan Utama", result)
+        self.assertIn("### Alasan Utama", result)
+        self.assertIn("### Agenda Follow-up Meeting", result)
+        self.assertIn("### Catatan Keyakinan dan Batasan", result)
         self.assertIn("Inti Keputusan", result)
         self.assertIn("Temuan Utama", result)
         for label in self.UNNECESSARY_ENGLISH_LABELS:

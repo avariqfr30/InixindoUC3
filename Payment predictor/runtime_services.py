@@ -11,6 +11,7 @@ class ForecastSnapshotCache:
         self.ttl_seconds = max(int(ttl_seconds or 0), 0)
         self.lock = threading.Lock()
         self._items = {}
+        self._stats = {"hits": 0, "misses": 0, "sets": 0, "clears": 0}
 
     def _purge_locked(self):
         if not self._items:
@@ -30,7 +31,9 @@ class ForecastSnapshotCache:
             self._purge_locked()
             item = self._items.get(key)
             if not item:
+                self._stats["misses"] += 1
                 return None
+            self._stats["hits"] += 1
             return copy.deepcopy(item["value"])
 
     def set(self, key, value):
@@ -42,11 +45,22 @@ class ForecastSnapshotCache:
                 "stored_at": time.time(),
                 "value": copy.deepcopy(value),
             }
+            self._stats["sets"] += 1
         return copy.deepcopy(value)
 
     def clear(self):
         with self.lock:
             self._items.clear()
+            self._stats["clears"] += 1
+
+    def stats(self):
+        with self.lock:
+            self._purge_locked()
+            return {
+                **self._stats,
+                "items": len(self._items),
+                "ttl_seconds": self.ttl_seconds,
+            }
 
 
 class BackgroundRefreshCoordinator:

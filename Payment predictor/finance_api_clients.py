@@ -47,17 +47,18 @@ from config import (
     INTERNAL_API_VERIFY_SSL,
 )
 from data_contract import extract_records_from_payload, normalize_records, parse_internal_api_field_map
+from dataset_catalog import (
+    CASH_OUT_DATASET,
+    DATE_SENSITIVE_DATASETS,
+    INVOICE_DATASET_CODES,
+    REFERENCE_ACCOUNT_DATASET,
+    invoice_dataset_codes,
+)
 from forecast_engine import parse_idr_amount
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INVOICE_DATASET_CODES = ("InvoiceTraining", "InvoiceConsultant")
-DATE_SENSITIVE_APIDOG_DATASETS = {
-    "bankdisbursement",
-    "invoiceconsultant",
-    "invoicetraining",
-    "referenceaccount",
-}
+DEFAULT_INVOICE_DATASET_CODES = INVOICE_DATASET_CODES
 
 class InternalAPIClient:
     def __init__(self, source_profile=None):
@@ -456,16 +457,13 @@ class InternalAPIClient:
                 dataset_body["dataset_code"] = dataset_code
         else:
             dataset_body = {"dataset": dataset_code}
-        if str(dataset_code or "").strip().lower() in DATE_SENSITIVE_APIDOG_DATASETS:
-            dataset_body["dataset_cache"] = "disabled"
+        if str(dataset_code or "").strip() in DATE_SENSITIVE_DATASETS:
+            dataset_body["dataset_cache"] = "enabled"
         request_config["body"] = dataset_body
         return self.__class__(source_profile=dataset_profile)
 
     def _invoice_dataset_codes(self):
-        configured_dataset = self._body_dataset_code()
-        if configured_dataset in {"", "FinanceInvoice", "InvoiceTraining", "InvoiceConsultant", "InvoiceKonsultan"}:
-            return list(DEFAULT_INVOICE_DATASET_CODES)
-        return [configured_dataset]
+        return list(invoice_dataset_codes(self._body_dataset_code()))
 
     def fetch_invoice_records(self, preview_limit=0):
         combined_records = []
@@ -518,17 +516,17 @@ class InternalAPIClient:
         body = request_config.get("body")
         if isinstance(body, dict):
             reference_body = dict(body)
-            reference_body["dataset"] = "ReferenceAccount"
+            reference_body["dataset"] = REFERENCE_ACCOUNT_DATASET
             if "dataset_code" in reference_body:
-                reference_body["dataset_code"] = "ReferenceAccount"
+                reference_body["dataset_code"] = REFERENCE_ACCOUNT_DATASET
         else:
-            reference_body = {"dataset": "ReferenceAccount"}
-        reference_body["dataset_cache"] = "disabled"
+            reference_body = {"dataset": REFERENCE_ACCOUNT_DATASET}
+        reference_body["dataset_cache"] = "enabled"
         request_config["body"] = reference_body
 
         reference_client = self.__class__(source_profile=reference_profile)
         records, extraction_summary = reference_client.fetch_records(preview_limit=preview_limit)
-        extraction_summary["referenceDataset"] = "ReferenceAccount"
+        extraction_summary["referenceDataset"] = REFERENCE_ACCOUNT_DATASET
         return records, extraction_summary
 
 class CashOutAPIClient(InternalAPIClient):
@@ -605,12 +603,12 @@ class CashOutAPIClient(InternalAPIClient):
             body = request_config.get("body")
             if isinstance(body, dict):
                 cash_out_body = dict(body)
-                cash_out_body["dataset"] = "BankDisbursement"
+                cash_out_body["dataset"] = CASH_OUT_DATASET
                 if "dataset_code" in cash_out_body:
-                    cash_out_body["dataset_code"] = "BankDisbursement"
+                    cash_out_body["dataset_code"] = CASH_OUT_DATASET
             else:
-                cash_out_body = {"dataset": "BankDisbursement"}
-            cash_out_body["dataset_cache"] = "disabled"
+                cash_out_body = {"dataset": CASH_OUT_DATASET}
+            cash_out_body["dataset_cache"] = "enabled"
             request_config["body"] = cash_out_body
             request_config.setdefault("body_format", "form")
             source_profile.setdefault("field_map", {})
@@ -644,7 +642,7 @@ class CashOutAPIClient(InternalAPIClient):
                         INTERNAL_API_QUERY_PARAMS_JSON if use_internal_api_default else CASH_OUT_API_QUERY_PARAMS_JSON,
                         "query params",
                     ),
-                    "body": {"dataset": "BankDisbursement"} if use_internal_api_default else self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body"),
+                    "body": {"dataset": CASH_OUT_DATASET} if use_internal_api_default else self._parse_optional_json_value(CASH_OUT_API_BODY_JSON, "body"),
                     "body_format": "form" if use_internal_api_default else "json",
                 },
                 "field_map": {},

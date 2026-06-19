@@ -19,6 +19,7 @@ from report_finalization import ReportFinalizer
 from report_prompting import ReportPromptBuilder
 from report_quality import ReportQualityScorer
 from report_structure import REPORT_STRUCTURE
+from payment_deliberation import PaymentDeliberationBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,29 @@ class ReportGenerator:
 
             return content
 
+    def _polish_generated_content(self, content, report_context, editor=None):
+        if editor is None:
+            try:
+                from writing_quality import ProtectedIndonesianEditor
+                editor = ProtectedIndonesianEditor()
+            except Exception:
+                return content
+        try:
+            polished = editor.polish(content)
+            if not polished or polished == content:
+                return content
+            score = self.quality_scorer.score(polished)
+            final_qa = self.quality_scorer.final_qa(
+                polished,
+                rejected_claims=(report_context or {}).get("agent_rejected_claims"),
+                deliberation_contract=(report_context or {}).get("document_contract"),
+            )
+            if score.get("passed") and final_qa.get("passes"):
+                return polished
+        except Exception:
+            pass
+        return content
+
     def run(self, notes="", analysis_context="", analysis_payload=None):
         logger.info("Starting cashflow intelligence report generation.")
 
@@ -182,6 +206,22 @@ class ReportGenerator:
             macro_osint = global_osint_future.result(timeout=45)
         except Exception:
             macro_osint = "OSINT tidak dipakai karena konteks eksternal yang cukup sebanding tidak tersedia."
+        report_context["osint_dossier"] = Researcher.build_osint_dossier(
+            macro_osint,
+            {
+                "focus": notes,
+                "financial_summary": report_context.get("financial_summary"),
+                "notes": notes,
+            },
+        )
+        deliberation_builder = PaymentDeliberationBuilder()
+        document_contract = deliberation_builder.build(
+            list(self.structure.section_sequence),
+            report_context,
+            analysis_payload,
+            data_version=str(report_context.get("data_version") or ""),
+        )
+        report_context["document_contract"] = document_contract
 
         fallback_used = False
         generated_sections = []
@@ -241,9 +281,12 @@ class ReportGenerator:
                 completeness_result["score"],
             )
 
+        generated_content = self._polish_generated_content(generated_content, report_context)
+        completeness_result = self.quality_scorer.score(generated_content)
         final_qa = self.quality_scorer.final_qa(
             generated_content,
             rejected_claims=report_context.get("agent_rejected_claims"),
+            deliberation_contract=document_contract,
         )
         if not final_qa["passes"]:
             logger.warning("Final report QA failed before DOCX render: %s", final_qa["findings"])
@@ -266,6 +309,7 @@ class ReportGenerator:
                 final_qa = self.quality_scorer.final_qa(
                     generated_content,
                     rejected_claims=report_context.get("agent_rejected_claims"),
+                    deliberation_contract=document_contract,
                 )
             if not final_qa["passes"]:
                 raise ValueError("Final report QA failed: " + "; ".join(final_qa["findings"]))
@@ -283,6 +327,12 @@ class ReportGenerator:
             "completeness_score": completeness_result["score"],
             "completeness_missing": completeness_result["missing"],
             "final_qa": final_qa,
+            "document_deliberation": {
+                "cache_key": document_contract.get("cache_key"),
+                "accepted_claim_count": len(document_contract.get("claim_ledger") or []),
+                "data_gap_count": len(document_contract.get("data_gap_register") or []),
+                "appendix_sections": list((document_contract.get("appendix_manifest") or {}).keys()),
+            },
             "osint_available": bool(
                 macro_osint
                 and "tidak tersedia" not in macro_osint.lower()

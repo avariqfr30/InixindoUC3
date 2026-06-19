@@ -651,8 +651,6 @@
                         <strong>${escapeHtml(factor.factor)}</strong>:
                         ${escapeHtml(factor.impact)}
                         Potensi dampak waktu: ${factor.potential_delay_days.min}-${factor.potential_delay_days.max} hari.
-                        ${factor.summary ? `${escapeHtml(factor.summary)} ` : ''}
-                        <span class="mini-note">Sumber: ${escapeHtml((factor.source_domains || []).join(', ') || '-')}</span>
                     </li>
                 `)
                 .join('');

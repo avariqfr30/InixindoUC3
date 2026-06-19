@@ -370,6 +370,44 @@ class KnowledgeBase:
             "activeSourceKey": previous_key,
         }
 
+    @staticmethod
+    def _rerank_documents(query_text, documents, metadatas=None, distances=None, limit=12, enabled=None):
+        if enabled is None:
+            enabled = os.getenv("EVIDENCE_QUALITY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return list(documents[:limit])
+        try:
+            from evidence_quality import rerank
+            candidates = []
+            for index, document in enumerate(documents):
+                metadata = metadatas[index] if metadatas and index < len(metadatas) else {}
+                distance = distances[index] if distances and index < len(distances) else 1.0
+                try:
+                    semantic_score = 1.0 / (1.0 + max(0.0, float(distance)))
+                except (TypeError, ValueError):
+                    semantic_score = 0.0
+                normalized_meta = dict(metadata or {})
+                for target, aliases in {
+                    "customer": ("customer", "customer_name", "company_name", "client"),
+                    "invoice": ("invoice", "invoice_number", "invoice_no"),
+                    "status": ("status", "payment_status", "invoice_status"),
+                    "age_days": ("age_days", "days_overdue", "overdue_days"),
+                }.items():
+                    if not normalized_meta.get(target):
+                        normalized_meta[target] = next((normalized_meta.get(alias) for alias in aliases if normalized_meta.get(alias)), "")
+                candidates.append({"id": str(index), "text": str(document or ""), "semantic_score": semantic_score, "metadata": normalized_meta})
+            retrieval_intent = {
+                "goal": "find invoice, payment status, aging, partner, and cashflow evidence",
+                "preferred_datasets": ["InvoiceTraining", "InvoiceConsultant", "ReferenceAccount"],
+                "exclude": ["FinanceInvoice", "ProjectStandards"],
+                "preferred_terms": [query_text],
+            }
+            ranked = rerank("payment", query_text, candidates, limit=limit, retrieval_intent=retrieval_intent)
+            ordered = [str(item.get("text") or "") for item in ranked if isinstance(item, dict)]
+            return ordered or list(documents[:limit])
+        except Exception:
+            return list(documents[:limit])
+
     def query(self, context_keywords="", max_results=12):
         query_text = (
             "Historical invoice delays, payment behavior class A-E, "
@@ -383,13 +421,21 @@ class KnowledgeBase:
         collection_size = self.collection.count()
         if collection_size <= 0:
             return "Tidak ada data finansial internal yang dapat dipakai."
-        max_results = min(max_results, collection_size)
+        output_limit = min(max_results, collection_size)
+        candidate_limit = min(max(output_limit * 3, output_limit), collection_size)
 
         try:
-            result = self.collection.query(query_texts=[query_text], n_results=max_results)
+            result = self.collection.query(
+                query_texts=[query_text],
+                n_results=candidate_limit,
+                include=["documents", "metadatas", "distances"],
+            )
             documents = result.get("documents", [])
             if documents and documents[0]:
-                return "\n---\n".join(documents[0])
+                metadatas = (result.get("metadatas") or [[]])[0]
+                distances = (result.get("distances") or [[]])[0]
+                ranked = self._rerank_documents(query_text, documents[0], metadatas, distances, limit=output_limit)
+                return "\n---\n".join(ranked)
         except Exception as exc:
             logger.error("Query error: %s", exc)
 

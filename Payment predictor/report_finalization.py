@@ -4,8 +4,10 @@ import re
 from cashflow_analysis import FinancialAnalyzer
 from executive_summary_builder import ExecutiveSummaryBuilder
 from reader_safe_text import reader_safe_text
+from editorial_intelligence import repair_payment_document_spine
 from report_evidence import PaymentEvidenceBuilder
 from report_structure import REPORT_STRUCTURE
+from payment_deliberation import PaymentDeliberationBuilder
 
 
 class ReportFinalizer:
@@ -57,7 +59,7 @@ class ReportFinalizer:
             markers.append(f"[[DASHBOARD:{json.dumps(compact_payload, ensure_ascii=False, separators=(',', ':'))}]]")
         return markers
 
-    def build_operational_snapshot_block(self, analysis_payload):
+    def build_operational_snapshot_block(self, analysis_payload, variant="detailed"):
         payload = self.normalize_analysis_payload(analysis_payload)
         if not payload:
             return ""
@@ -69,10 +71,47 @@ class ReportFinalizer:
 
         lines = []
         period_label = selected_period.get("label")
+        cash_on_hand = payload.get("cash_on_hand")
+        horizons = ((payload.get("horizon_snapshot") or {}).get("forecasts")) or {}
+
+        if str(variant or "").strip().lower() == "executive":
+            if period_label or cash_on_hand is not None:
+                period_part = f"periode {period_label}" if period_label else "periode berjalan"
+                cash_part = (
+                    f"posisi kas Rp{int(cash_on_hand):,}"
+                    if cash_on_hand is not None
+                    else "posisi kas mengikuti dashboard aktif"
+                )
+                lines.append(f"- Keputusan manajemen memakai {period_part} dengan {cash_part}.")
+
+            financial_ready = financial_sync.get("syncStatus") or "-"
+            financial_count = int(financial_sync.get("recordCount") or 0) if financial_sync else 0
+            cash_out_ready = cash_out_sync.get("syncStatus") or "-"
+            cash_out_count = int(cash_out_sync.get("recordCount") or 0) if cash_out_sync else 0
+            if financial_sync or cash_out_sync:
+                lines.append(
+                    "- Kesiapan data: "
+                    f"invoice {financial_ready} ({financial_count} record)"
+                    f"; komitmen keluar kas {cash_out_ready} ({cash_out_count} item)."
+                )
+
+            first_horizon = next((item for item in horizons.values() if isinstance(item, dict)), {})
+            forecast = first_horizon.get("forecast") or {}
+            health = first_horizon.get("cashflow_health") or {}
+            horizon = first_horizon.get("time_horizon") or {}
+            if forecast or health or horizon:
+                lines.append(
+                    "- Fokus eksekutif: "
+                    f"{horizon.get('label') or 'horizon aktif'} menjaga {horizon.get('focus') or 'likuiditas prioritas'}; "
+                    f"ending cash {FinancialAnalyzer._format_currency(int(forecast.get('ending_cash') or 0))}, "
+                    f"runway {float(health.get('runway_months') or 0):.1f} bulan, "
+                    f"coverage {float(health.get('coverage_ratio') or 0):.2f}x."
+                )
+            return "\n".join(lines).strip()
+
         if period_label:
             lines.append(f"- Periode dashboard yang diekspor ke laporan: {period_label}.")
 
-        cash_on_hand = payload.get("cash_on_hand")
         if cash_on_hand is not None:
             lines.append(f"- Cash in hand pada saat review: Rp{int(cash_on_hand):,}.")
 
@@ -110,7 +149,6 @@ class ReportFinalizer:
             else:
                 lines.append("- Sumber cash out masih memakai model operating cost bulanan karena feed kewajiban aktual belum dikonfigurasi.")
 
-        horizons = ((payload.get("horizon_snapshot") or {}).get("forecasts")) or {}
         for key in ("short_term", "mid_term", "long_term"):
             horizon_payload = horizons.get(key) or {}
             forecast = horizon_payload.get("forecast") or {}
@@ -147,6 +185,51 @@ class ReportFinalizer:
             context["projection_defensibility"] = projection_defensibility
 
         return context
+
+    def build_finance_action_table(self, analysis_payload):
+        payload = self.normalize_analysis_payload(analysis_payload)
+        forecast = payload.get("forecast") if isinstance(payload.get("forecast"), dict) else {}
+        dashboard = forecast.get("dashboard_snapshot") if isinstance(forecast.get("dashboard_snapshot"), dict) else {}
+        queue = dashboard.get("decision_queue") if isinstance(dashboard.get("decision_queue"), list) else []
+        if not queue:
+            return ""
+
+        rows = [
+            "| Prioritas | Tagihan/Akun | Umur Tagihan atau Hambatan | Tindakan | Penanggung Jawab | Batas Waktu | Dampak yang Diharapkan | Kontrol Tindak Lanjut |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for index, item in enumerate(queue[:5], start=1):
+            days = max(int(item.get("days_overdue") or 0), 0)
+            if days >= 120:
+                owner = "Koordinator Penagihan Keuangan"
+                deadline = "2 hari kerja"
+                impact = "Komitmen bayar terkunci atau eskalasi manajemen diputuskan."
+            elif days >= 45:
+                owner = "Tim Penagihan Keuangan dan Penanggung Jawab Akun"
+                deadline = "5 hari kerja"
+                impact = "Hambatan dokumen atau persetujuan ditutup dan tanggal bayar dikonfirmasi."
+            else:
+                owner = "Penanggung Jawab Akun dan Tim Penagihan Keuangan"
+                deadline = "7 hari kerja"
+                impact = "Status tagihan tetap aktif dan pergeseran tanggal bayar terdeteksi lebih awal."
+
+            action = str(item.get("action") or "Konfirmasi status tagihan dan tanggal bayar tertulis.")
+            action = action.replace("owner approval", "penanggung jawab persetujuan")
+            action = action.replace("follow-up", "tindak lanjut")
+            aging = f"Terlambat {days} hari" if days else "Belum terlambat"
+            values = (
+                item.get("priority") or index,
+                item.get("name") or "Akun prioritas",
+                aging,
+                action,
+                owner,
+                deadline,
+                impact,
+                "Catat bukti tindak lanjut dan tinjau status pada rapat penagihan mingguan.",
+            )
+            cells = [str(value).replace("|", "/").strip() for value in values]
+            rows.append("| " + " | ".join(cells) + " |")
+        return "\n".join(rows)
 
     @staticmethod
     def extract_visual_markers(visual_prompt):
@@ -205,6 +288,20 @@ class ReportFinalizer:
                 return f"{section_prefix}\n\n{new_block}\n\n{section_suffix}".strip()
 
         return f"{section_body.rstrip()}\n\n{new_block}".strip()
+
+    @staticmethod
+    def replace_subheading_block(section_body, subheading, content):
+        if not content or not str(content).strip():
+            return section_body
+        marker = f"### {subheading}"
+        replacement = f"{marker}\n{str(content).strip()}"
+        match = re.search(
+            rf"(?ms)^### {re.escape(subheading)}\s*$.*?(?=^### |\Z)",
+            section_body,
+        )
+        if match:
+            return f"{section_body[:match.start()].rstrip()}\n\n{replacement}\n\n{section_body[match.end():].lstrip()}".strip()
+        return f"{replacement}\n\n{section_body.lstrip()}".strip()
 
     @staticmethod
     def append_marker_block(section_body, marker):
@@ -277,6 +374,8 @@ class ReportFinalizer:
         chart_marker, flow_marker = self.extract_visual_markers(report_context.get("visual_prompt", ""))
         dashboard_markers = self.build_dashboard_visual_markers(analysis_payload)
         operational_snapshot = self.build_operational_snapshot_block(analysis_payload)
+        executive_snapshot = self.build_operational_snapshot_block(analysis_payload, variant="executive")
+        finance_action_table = self.build_finance_action_table(analysis_payload)
         evidence_block = PaymentEvidenceBuilder.to_markdown(report_context.get("agent_evidence_ledger") or [])
         peer_sections = [section for section in sections if section["title"] != "Ringkasan Eksekutif"]
         finalized_sections = []
@@ -288,7 +387,7 @@ class ReportFinalizer:
             if section_title == "Ringkasan Eksekutif":
                 section_body = self.build_executive_summary(section_body, report_context, peer_sections=peer_sections)
                 dashboard_block = "\n\n".join(
-                    block for block in [operational_snapshot, "\n".join(dashboard_markers)]
+                    block for block in [executive_snapshot, "\n".join(dashboard_markers)]
                     if str(block or "").strip()
                 )
                 if dashboard_block:
@@ -318,10 +417,22 @@ class ReportFinalizer:
                 )
             elif section_title == "Rekomendasi Preskriptif":
                 section_body = self.append_marker_block(section_body, flow_marker)
+            elif section_title == "Prioritas Tindakan 30 Hari":
+                section_body = self.replace_subheading_block(
+                    section_body,
+                    "Tabel Prioritas",
+                    finance_action_table,
+                )
 
             finalized_sections.append({"title": section_title, "body": section_body})
 
-        return reader_safe_text(self.join_top_level_sections(finalized_sections))
+        final_text = reader_safe_text(self.join_top_level_sections(finalized_sections))
+        final_text = repair_payment_document_spine(final_text)
+        contract = report_context.get("document_contract") if isinstance(report_context.get("document_contract"), dict) else {}
+        if contract:
+            appendix = PaymentDeliberationBuilder.build_appendix_markdown(contract)
+            final_text = f"{final_text.rstrip()}\n\n{appendix}".strip()
+        return final_text
 
     def build_fallback_report(self, report_context, notes, analysis_context, macro_osint, analysis_payload=None, structured_context_block=""):
         report_context = self.enrich_report_context_from_analysis_payload(report_context, analysis_payload)

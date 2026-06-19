@@ -1,6 +1,7 @@
 import calendar
 from datetime import datetime, timedelta
 
+import pandas as pd
 from flask import current_app, jsonify, request
 
 from app_services import build_sync_snapshot
@@ -11,7 +12,8 @@ from forecast_engine import CashflowForecaster, parse_idr_amount
 def register_forecast_routes(app, logger):
     @app.route("/api/forecast/periods", methods=["GET"])
     def get_forecast_periods():
-        return jsonify({"periods": _build_forecast_periods()})
+        date_bounds = _get_cached_dataset_date_bounds()
+        return jsonify({"periods": _build_forecast_periods(date_bounds=date_bounds), "date_bounds": _format_date_bounds(date_bounds)})
 
     @app.route("/api/forecast", methods=["POST"])
     def generate_forecast():
@@ -69,11 +71,14 @@ def register_forecast_routes(app, logger):
             return jsonify({"error": str(exc)}), 400
         start_date_iso = payload.get("start_date")
 
+        date_bounds = _get_cached_dataset_date_bounds()
         if not start_date_iso:
-            start_date = datetime.now()
+            start_date = _select_forecast_anchor(date_bounds, "integrated") or datetime.now()
+            anchor_policy = "latest_available_operational_date"
         else:
             try:
                 start_date = datetime.fromisoformat(start_date_iso)
+                anchor_policy = "user_supplied"
             except (ValueError, TypeError):
                 return jsonify({"error": "Invalid start_date format (use ISO format)"}), 400
 
@@ -92,6 +97,8 @@ def register_forecast_routes(app, logger):
                 "time_horizons": CashflowForecaster.TIME_HORIZONS,
                 "external_factors": _get_sanitized_external_factors(start_date, horizon_end),
                 "sync_status": build_sync_snapshot(),
+                "date_bounds": _format_date_bounds(date_bounds),
+                "anchor_policy": anchor_policy,
             })
         except Exception as e:
             logger.error("Multi-horizon forecast error: %s", e, exc_info=True)
@@ -182,8 +189,12 @@ def register_forecast_routes(app, logger):
         )
 
 
-def _build_forecast_periods(month_count=3):
-    base_date = datetime.now().replace(day=1)
+def _build_forecast_periods(month_count=3, date_bounds=None):
+    date_bounds = date_bounds or _get_cached_dataset_date_bounds()
+    anchor = date_bounds.get("max_date") if isinstance(date_bounds, dict) else None
+    if not isinstance(anchor, datetime):
+        anchor = datetime.now()
+    base_date = anchor.replace(day=1)
     periods = []
     windows = [
         (1, 10, "1-10"),
@@ -211,6 +222,191 @@ def _build_forecast_periods(month_count=3):
             )
 
     return periods
+
+
+def _default_forecast_start_date(stream="integrated"):
+    date_bounds = _get_cached_dataset_date_bounds()
+    return _select_forecast_anchor(date_bounds, stream) or datetime.now()
+
+
+def _select_forecast_anchor(date_bounds, stream="integrated"):
+    if not isinstance(date_bounds, dict):
+        return None
+    stream_key = {
+        "receivables": "invoice",
+        "cash_out": "bank_disbursement",
+        "integrated": None,
+    }.get(str(stream or "integrated").strip().lower())
+    if stream_key:
+        anchor = (date_bounds.get(stream_key) or {}).get("max_date")
+    else:
+        anchor = date_bounds.get("max_date")
+    return anchor if isinstance(anchor, datetime) else None
+
+
+def _format_date_bounds(date_bounds):
+    empty_stream = {"start": None, "end": None, "date_columns": [], "record_count": 0}
+    if not date_bounds:
+        return {
+            "source": "unavailable",
+            "start": None,
+            "end": None,
+            "date_columns": [],
+            "record_count": 0,
+            "invoice": dict(empty_stream),
+            "bank_disbursement": dict(empty_stream),
+            "combined": dict(empty_stream),
+            "freshness_gap_days": None,
+            "anchors": {"receivables": None, "cash_out": None, "integrated": None},
+            "anchor_policy": {
+                "receivables": "latest_invoice_date",
+                "cash_out": "latest_bank_disbursement_date",
+                "integrated": "latest_available_operational_date",
+            },
+        }
+
+    def format_stream(stream):
+        stream = stream or {}
+        stream_min = stream.get("min_date")
+        stream_max = stream.get("max_date")
+        return {
+            "start": stream_min.date().isoformat() if isinstance(stream_min, datetime) else None,
+            "end": stream_max.date().isoformat() if isinstance(stream_max, datetime) else None,
+            "date_columns": list(stream.get("date_columns") or []),
+            "record_count": int(stream.get("record_count") or 0),
+        }
+
+    min_date = date_bounds.get("min_date")
+    max_date = date_bounds.get("max_date")
+    combined = {
+        "min_date": min_date,
+        "max_date": max_date,
+        "date_columns": date_bounds.get("date_columns"),
+        "record_count": date_bounds.get("record_count"),
+    }
+    invoice = format_stream(date_bounds.get("invoice"))
+    bank_disbursement = format_stream(date_bounds.get("bank_disbursement"))
+    combined_formatted = format_stream(combined)
+    return {
+        "source": date_bounds.get("source") or "cached_apidog_dataset",
+        "start": combined_formatted["start"],
+        "end": combined_formatted["end"],
+        "date_columns": combined_formatted["date_columns"],
+        "record_count": combined_formatted["record_count"],
+        "invoice": invoice,
+        "bank_disbursement": bank_disbursement,
+        "combined": combined_formatted,
+        "freshness_gap_days": date_bounds.get("freshness_gap_days"),
+        "anchors": {
+            "receivables": invoice["end"],
+            "cash_out": bank_disbursement["end"],
+            "integrated": combined_formatted["end"],
+        },
+        "anchor_policy": {
+            "receivables": "latest_invoice_date",
+            "cash_out": "latest_bank_disbursement_date",
+            "integrated": "latest_available_operational_date",
+        },
+    }
+
+
+def _coerce_datetime(value):
+    timestamp = pd.to_datetime(value, errors="coerce")
+    if pd.isna(timestamp):
+        return None
+    return timestamp.to_pydatetime().replace(tzinfo=None)
+
+
+def _series_date_bounds(dataset, column):
+    if dataset is None or dataset.empty or not column or column not in dataset.columns:
+        return None
+    parsed = pd.to_datetime(dataset[column], errors="coerce").dropna()
+    if parsed.empty:
+        return None
+    return parsed.min().to_pydatetime().replace(tzinfo=None), parsed.max().to_pydatetime().replace(tzinfo=None)
+
+
+def _get_cached_dataset_date_bounds():
+    knowledge_base = current_app.config.get("knowledge_base")
+    dataset = getattr(knowledge_base, "df", None)
+    if dataset is None or dataset.empty:
+        return {}
+
+    resolved_columns = getattr(knowledge_base, "data_contract_summary", {}).get("sourceColumns", {}) or {}
+    candidate_columns = []
+    for key in ("period", "invoice_date", "invoice_due_date", "invoice_paid_date"):
+        column = resolved_columns.get(key)
+        if column and column not in candidate_columns:
+            candidate_columns.append(column)
+    for column in dataset.columns:
+        normalized = str(column or "").strip().lower()
+        if any(token in normalized for token in ("tanggal", "date", "periode", "due", "paid")) and column not in candidate_columns:
+            candidate_columns.append(column)
+
+    invoice_dates = []
+    used_columns = []
+    for column in candidate_columns:
+        bounds = _series_date_bounds(dataset, column)
+        if not bounds:
+            continue
+        used_columns.append(str(column))
+        invoice_dates.extend(bounds)
+
+    invoice_bounds = {}
+    if invoice_dates:
+        invoice_bounds = {
+            "min_date": min(invoice_dates),
+            "max_date": max(invoice_dates),
+            "date_columns": list(used_columns),
+            "record_count": int(len(dataset)),
+        }
+
+    cash_out_store = current_app.config.get("cash_out_store")
+    cash_out_records = cash_out_store.get_records() if cash_out_store else []
+    cash_out_dates = []
+    for record in cash_out_records or []:
+        if not isinstance(record, dict):
+            continue
+        for key in ("due_date", "date", "period"):
+            parsed = _coerce_datetime(record.get(key))
+            if parsed:
+                cash_out_dates.append(parsed)
+    if cash_out_dates:
+        bank_disbursement_bounds = {
+            "min_date": min(cash_out_dates),
+            "max_date": max(cash_out_dates),
+            "date_columns": ["BankDisbursement.due_date"],
+            "record_count": int(len(cash_out_records)),
+        }
+    else:
+        bank_disbursement_bounds = {}
+
+    collected_dates = list(invoice_dates)
+    if cash_out_dates:
+        collected_dates.extend((min(cash_out_dates), max(cash_out_dates)))
+    if not collected_dates:
+        return {}
+
+    invoice_max = invoice_bounds.get("max_date")
+    disbursement_max = bank_disbursement_bounds.get("max_date")
+    freshness_gap_days = None
+    if isinstance(invoice_max, datetime) and isinstance(disbursement_max, datetime):
+        freshness_gap_days = abs((disbursement_max.date() - invoice_max.date()).days)
+
+    combined_columns = list(used_columns)
+    if cash_out_dates:
+        combined_columns.append("BankDisbursement.due_date")
+
+    return {
+        "source": "cached_apidog_dataset",
+        "min_date": min(collected_dates),
+        "max_date": max(collected_dates),
+        "date_columns": combined_columns,
+        "record_count": int(len(dataset) + len(cash_out_records)),
+        "invoice": invoice_bounds,
+        "bank_disbursement": bank_disbursement_bounds,
+        "freshness_gap_days": freshness_gap_days,
+    }
 
 
 def _build_external_context(start_date, end_date):

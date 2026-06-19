@@ -16,6 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
 
 from config import DEFAULT_COLOR, WRITER_FIRM_NAME
+from editorial_intelligence import compact_finance_text
 from reader_safe_text import reader_safe_text
 from report_structure import REPORT_STRUCTURE
 
@@ -781,7 +782,10 @@ class DocumentBuilder:
             for column_index in range(column_count):
                 value = ""
                 if column_index < len(html_cells):
-                    value = html_cells[column_index].get_text(" ", strip=True)
+                    value = compact_finance_text(
+                        html_cells[column_index].get_text(" ", strip=True),
+                        max_words=18 if column_count >= 4 else 26,
+                    )
                 table_cells[column_index].text = value
         DocumentBuilder._format_table(table)
 

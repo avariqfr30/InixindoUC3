@@ -41,7 +41,7 @@ def build_cash_out_formula(scheduled_disbursement, fixed_cost_component, activit
         "fixed_cost_component": fixed,
         "activity_multiplier": round(multiplier, 3),
         "activity_adjustment": total - base,
-        "planning_source": "BankDisbursement" if source == "live_schedule" else "monthly_fixed_cost_baseline",
+        "planning_source": "scheduled_disbursement_feed" if source == "live_schedule" else "monthly_fixed_cost_baseline",
         "total_expected_cash_out": total,
     }
 
@@ -50,7 +50,7 @@ def build_horizon_assumptions(horizon_key, pipeline_available, cash_out_source):
     profiles = {
         "short_term": {
             "confidence": "high",
-            "basis": "Invoice due dates, paid/unpaid status, and scheduled BankDisbursement items dominate this horizon.",
+            "basis": "Invoice due dates, paid/unpaid status, and scheduled cash-out items dominate this horizon.",
         },
         "mid_term": {
             "confidence": "medium",

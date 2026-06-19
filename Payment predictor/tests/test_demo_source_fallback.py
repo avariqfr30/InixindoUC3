@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, text
 
-WORKSPACE = Path('/Users/avariqfr30/Documents/InixindoUC3/Payment predictor')
+WORKSPACE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
+WORKSPACE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 
@@ -85,8 +85,9 @@ class CashflowDashboardInterpretationTest(unittest.TestCase):
 
         self.assertIn("management_interpretation", dashboard)
         interpretation = dashboard["management_interpretation"]
-        self.assertEqual(interpretation["status"], "KRITIS")
-        self.assertIn("Kas akhir berisiko", interpretation["headline"])
+        self.assertEqual(interpretation["status"], "BAHAYA")
+        self.assertIn("Kas akhir", interpretation["headline"])
+        self.assertIn("bahaya", interpretation["headline"].lower())
         self.assertIn("senior", " ".join(interpretation["actions"]).lower())
         self.assertIn("decision_queue", dashboard)
         self.assertEqual(dashboard["decision_queue"][0]["name"], "BUMN A - Pelatihan SPBE")
@@ -105,6 +106,12 @@ class DashboardOperationRouteTest(unittest.TestCase):
         os.environ["SESSION_COOKIE_SECURE"] = "false"
         os.environ["DATA_REFRESH_INTERVAL_SECONDS"] = "0"
         os.environ["FORECAST_CACHE_TTL_SECONDS"] = "60"
+        os.environ["DISABLE_CSRF_FOR_TESTING"] = "1"
+        os.environ["TEMP_FULL_ACCESS_USERNAME"] = "dashboard_ops_user@inixindojogja.co.id"
+        os.environ["TEMP_FULL_ACCESS_PASSWORD"] = "password123"
+        os.environ["REFERENCE_INTERNAL_ACCOUNT_LOOKUP_MODE"] = "test_double"
+        os.environ["REFERENCE_INTERNAL_ACCOUNT_TEST_EMAILS"] = "dashboard_ops_user@inixindojogja.co.id"
+        os.environ["AUTH_SIGNUP_VERIFICATION_DELIVERY_MODE"] = "capture"
 
         for module_name in ("app", "config"):
             if module_name in sys.modules:

@@ -20,9 +20,7 @@
     "headers": {},
     "query_params": {},
     "body_format": "form",
-    "body": {
-      "dataset": "FinanceInvoice"
-    }
+    "body": {}
   },
   "field_map": {
     "period": "your_period_field",

@@ -1,11 +1,13 @@
 from config import FINANCE_SYSTEM_PROMPT, PERSONAS
 from reasoning_policy import CashflowHotsReasoningPolicy
+from report_planning import PaymentSectionPlanner
 from report_structure import REPORT_STRUCTURE
 
 
 class ReportPromptBuilder:
     def __init__(self, structure=REPORT_STRUCTURE):
         self.structure = structure
+        self.planner = PaymentSectionPlanner()
 
     def build_user_instruction(self, notes, active_sections):
         notes = (notes or "").strip()
@@ -14,6 +16,8 @@ class ReportPromptBuilder:
         return (
             "Susun laporan internal yang detail, profesional, dan siap dipakai sebagai bahan diskusi rapat manajemen.\n"
             "Jangan menulis seperti jawaban AI generik; tulis seperti memo manajemen yang berbasis data.\n"
+            "Baca dashboard sebagai pusat keputusan: angka utama, perubahan risiko, gap cash-in/cash-out, lalu tindakan. "
+            "Jangan membuat paragraf yang hanya mengulang formula; jelaskan apa arti angka itu bagi keputusan minggu ini.\n"
             "Kerjakan hanya section yang diminta pada pass ini dan hentikan output setelah section terakhir selesai.\n"
             "Pastikan setiap bagian di bawah terisi secara jelas:\n"
             f"{report_sections}\n\n"
@@ -52,6 +56,8 @@ class ReportPromptBuilder:
     def build_report_prompt(self, report_context, notes, analysis_context, macro_osint, active_sections, include_visuals):
         persona = PERSONAS.get("default", "Chief Financial Officer")
         section_scope, section_headings = self.build_section_scope(active_sections)
+        planning_block = self.planner.build_prompt_block(active_sections, report_context)
+        section_scope = f"{section_scope}\n\n{planning_block}"
         structured_context = self.format_structured_context_block(analysis_context)
         agent_evidence_brief = report_context.get(
             "agent_evidence_brief",

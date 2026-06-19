@@ -194,12 +194,13 @@ class Researcher:
                 "standar pelayanan",
             )
             if any(marker in summary_lower for marker in raw_markers) or len(summary.split()) < 6:
-                summary = (
-                    f"Sinyal eksternal untuk {item.get('factor') or 'risiko pembayaran'}: "
-                    f"{item.get('impact') or 'perlu dipakai sebagai konteks pendukung, bukan fakta utama internal.'}"
-                )
-            elif not summary_lower.startswith("sinyal eksternal"):
-                summary = f"Sinyal eksternal untuk {item.get('factor') or 'risiko pembayaran'}: {summary}"
+                summary = item.get("impact") or "Perlu dipakai sebagai konteks pendukung, bukan fakta utama internal."
+            else:
+                summary = re.sub(
+                    r"(?i)^sinyal\s+eksternal\s+untuk\s+[^:]+:\s*",
+                    "",
+                    summary,
+                ).strip()
             item["summary"] = cls._normalize_osint_fragment(summary, max_length=220)
             sanitized.append(item)
         return sanitized
@@ -513,6 +514,89 @@ class Researcher:
             lines.append(Researcher._build_entry_summary(entry))
 
         return "\n".join(lines)
+
+    @classmethod
+    def _extract_macro_cards(cls, macro_osint, context=None, max_cards=10):
+        context = context or {}
+        cards = []
+        current_topic = "cashflow_context"
+        pending = {}
+        for raw_line in re.split(r"\n+", str(macro_osint or "")):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                current_topic = line.strip("[]") or current_topic
+                continue
+            if "tidak dipakai" in line.lower() or "tidak tersedia" in line.lower():
+                continue
+            if line.startswith("Ringkasan sinyal:"):
+                pending["claim"] = cls._normalize_osint_fragment(line.split(":", 1)[1], max_length=220)
+                pending["lane"] = current_topic
+                continue
+            if line.startswith("Relevansi:"):
+                pending["relevance"] = cls._normalize_osint_fragment(line.split(":", 1)[1], max_length=80)
+                continue
+            if line.startswith("Sumber ringkas:"):
+                source_text = line.split(":", 1)[1].strip()
+                source_match = re.match(r"([^()]+)(?:\(([^)]+)\))?", source_text)
+                source = source_match.group(1).strip() if source_match else source_text
+                year = source_match.group(2).strip() if source_match and source_match.group(2) else "n.d."
+                claim = pending.get("claim")
+                if claim:
+                    matched = "; ".join(
+                        f"{key}={value}"
+                        for key, value in [
+                            ("focus", context.get("focus")),
+                            ("financial_summary", cls._normalize_osint_fragment(context.get("financial_summary"), max_length=90)),
+                            ("notes", cls._normalize_osint_fragment(context.get("notes"), max_length=60)),
+                        ]
+                        if str(value or "").strip()
+                    )
+                    cards.append({
+                        "claim": claim,
+                        "why_it_matters": "Memberi konteks pembanding untuk risiko pembayaran tanpa mengganti fakta invoice internal.",
+                        "source_title": source,
+                        "source_domain": source,
+                        "source_year": year,
+                        "confidence": "medium" if source and source != "-" else "low",
+                        "allowed_use": "context_only",
+                        "matched_internal_fact": matched or "cashflow report context",
+                        "lane": pending.get("lane") or "cashflow_context",
+                        "relevance": pending.get("relevance", ""),
+                    })
+                pending = {}
+                if len(cards) >= max_cards:
+                    break
+        return cards
+
+    @classmethod
+    def build_osint_dossier(cls, macro_osint, context=None):
+        context = context or {}
+        cards = cls._extract_macro_cards(macro_osint, context=context)
+        lanes = {
+            "payment_cycle": [card for card in cards if "anggaran" in card.get("lane", "").lower() or "pembayaran" in card.get("claim", "").lower()],
+            "collection_risk": [card for card in cards if re.search(r"piutang|invoice|koleksi|approval|bast|likuiditas", card.get("claim", ""), re.IGNORECASE)],
+            "cashflow_context": cards,
+        }
+        return {
+            "use_case": "payment",
+            "internal_anchor": {
+                key: value for key, value in {
+                    "focus": context.get("focus"),
+                    "financial_summary": cls._normalize_osint_fragment(context.get("financial_summary"), max_length=140),
+                    "notes": cls._normalize_osint_fragment(context.get("notes"), max_length=100),
+                }.items()
+                if str(value or "").strip()
+            },
+            "lanes": lanes,
+            "evidence_cards": cards,
+            "quality": {
+                "card_count": len(cards),
+                "citeable_count": sum(1 for card in cards if card.get("allowed_use") == "citeable"),
+                "lane_count": sum(1 for values in lanes.values() if values),
+            },
+        }
 
     @classmethod
     @osint_cache.memoize(expire=86400)

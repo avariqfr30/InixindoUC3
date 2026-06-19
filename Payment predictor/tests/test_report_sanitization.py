@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 
-WORKSPACE = Path("/Users/avariqfr30/Documents/InixindoUC3/Payment predictor")
+WORKSPACE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKSPACE))
 
 
@@ -30,6 +30,37 @@ class ReportSanitizationTest(unittest.TestCase):
         self.assertNotIn("https://", summary)
         self.assertNotIn("url=", summary)
         self.assertNotIn("Raw payment article title\n", summary)
+
+    def test_dashboard_external_factors_hide_external_signal_and_source_detail(self):
+        from osint_research import Researcher
+
+        factors = [
+            {
+                "factor": "Siklus anggaran pemerintah",
+                "impact": "Potensi mundur tambahan ketika termin pembayaran bergantung pada pencairan anggaran.",
+                "summary": "Keputusan Menteri dan sumber eksternal menyebut jadwal pencairan. Sumber: djpb.kemenkeu.go.id",
+                "source_domains": ["djpb.kemenkeu.go.id"],
+                "potential_delay_days": {"min": 10, "max": 30},
+            }
+        ]
+
+        sanitized = Researcher.sanitize_dashboard_external_factors(factors)
+        visible_summary = sanitized[0]["summary"]
+
+        self.assertNotIn("Sinyal eksternal", visible_summary)
+        self.assertNotIn("Sumber:", visible_summary)
+        self.assertNotIn("djpb.kemenkeu.go.id", visible_summary)
+        self.assertIn("Potensi mundur", visible_summary)
+
+    def test_dashboard_template_does_not_render_factor_summary_or_source_domains(self):
+        template = (WORKSPACE / "templates" / "index.html").read_text()
+        start = template.index("function buildExternalFactorsList")
+        end = template.index("function buildRecommendationItems")
+        function_body = template[start:end]
+
+        self.assertNotIn("factor.summary", function_body)
+        self.assertNotIn("source_domains", function_body)
+        self.assertNotIn("Sumber:", function_body)
 
     def test_normalize_osint_block_summarizes_raw_evidence(self):
         from report_finalization import ReportFinalizer
@@ -558,13 +589,14 @@ class ReportSanitizationTest(unittest.TestCase):
             macro_osint="-",
         )
 
-        self.assertIn("### Sorotan Utama untuk Manajemen", finalized)
+        self.assertIn("### Kesimpulan Utama", finalized)
+        self.assertIn("Rp 2,4 miliar", finalized)
         self.assertLess(
-            finalized.index("### Sorotan Utama untuk Manajemen"),
-            finalized.index("### Asumsi Proyeksi dan Catatan Batasan"),
+            finalized.index("### Kesimpulan Utama"),
+            finalized.index("### Catatan Keyakinan dan Batasan"),
         )
         self.assertLess(
-            finalized.index("### Sorotan Utama untuk Manajemen"),
+            finalized.index("### Kesimpulan Utama"),
             finalized.index("# Analisis Deskriptif Cashflow"),
         )
 
