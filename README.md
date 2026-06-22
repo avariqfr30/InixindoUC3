@@ -199,6 +199,9 @@ Anda bisa menyesuaikan perilaku antrean dan penyimpanan artefak dengan environme
 ```bash
 REPORT_MAX_CONCURRENT_JOBS=4
 REPORT_MAX_PENDING_JOBS=12
+REPORT_SECTION_PARALLELISM=1
+REPORT_LLM_TIMEOUT_SECONDS=180
+REPORT_CONCURRENCY_COOLDOWN_SECONDS=120
 REPORT_JOB_RETENTION_SECONDS=3600
 REPORT_METRICS_WINDOW_HOURS=24
 REPORT_MIN_COMPLETENESS_SCORE=80
@@ -211,6 +214,9 @@ JOB_STATE_DB_PATH=/var/tmp/inixindo-report-jobs.db
 Arti singkatnya:
 * `REPORT_MAX_CONCURRENT_JOBS`: jumlah job generate yang boleh berjalan bersamaan.
 * `REPORT_MAX_PENDING_JOBS`: batas total job aktif (`queued` + `running`). Di atas batas ini, app akan mengembalikan `429` agar load spike tidak membuat sistem tidak responsif.
+* `REPORT_SECTION_PARALLELISM`: jumlah bagian laporan independen yang boleh digenerate bersamaan. Nilai `1` mempertahankan alur sekuensial; deployment VPS saat ini tidak boleh melebihi `2`.
+* `REPORT_LLM_TIMEOUT_SECONDS`: batas waktu satu permintaan generasi model sebelum job memakai jalur penanganan error yang sudah ada.
+* `REPORT_CONCURRENCY_COOLDOWN_SECONDS`: durasi kembali ke generasi sekuensial setelah provider menolak beban, timeout, atau gagal tersambung.
 * `REPORT_JOB_RETENTION_SECONDS`: berapa lama job selesai/error dan file hasilnya dipertahankan sebelum dibersihkan otomatis.
 * `REPORT_METRICS_WINDOW_HOURS`: jendela waktu untuk metrik kesehatan terakhir pada endpoint `/health`.
 * `REPORT_MIN_COMPLETENESS_SCORE`: ambang minimum kualitas dokumen. Job dianggap lolos bila struktur dan isi laporan mencapai skor ini.
@@ -218,6 +224,8 @@ Arti singkatnya:
 * `FORECAST_CACHE_TTL_SECONDS`: berapa lama snapshot forecast/dashboard disimpan agar dashboard tetap cepat dibuka ulang oleh beberapa user.
 * `REPORT_ARTIFACTS_DIR`: direktori penyimpanan file `.docx` hasil generate.
 * `JOB_STATE_DB_PATH`: SQLite kecil untuk status job, durasi, fallback, dan metrik operasional.
+
+Untuk rollout paralelisme bagian laporan di VPS saat ini, pertahankan `REPORT_MAX_CONCURRENT_JOBS=1`. Uji `REPORT_SECTION_PARALLELISM=2` secara terpisah dan kembalikan ke `1` bila error, fallback, atau latensi meningkat. Jangan mengaktifkan dua job bersamaan dengan dua bagian paralel pada mesin ini.
 
 Jika sumber `cash out` aktual sudah tersedia, app sekarang juga bisa membaca feed kewajiban langsung dari endpoint terpisah:
 

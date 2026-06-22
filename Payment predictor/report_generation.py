@@ -1,5 +1,6 @@
 import concurrent.futures
 import logging
+import time
 
 from ollama import Client
 
@@ -7,14 +8,18 @@ from config import (
     DEFAULT_COLOR,
     LLM_MODEL,
     OLLAMA_HOST,
+    REPORT_CONCURRENCY_COOLDOWN_SECONDS,
+    REPORT_LLM_TIMEOUT_SECONDS,
     REPORT_NUM_CTX,
     REPORT_NUM_PREDICT,
     REPORT_REPEAT_PENALTY,
+    REPORT_SECTION_PARALLELISM,
     REPORT_TEMPERATURE,
     REPORT_TOP_P,
 )
 from osint_research import Researcher
 from report_document import ReportDocumentAssembler
+from report_concurrency import SectionPassExecutor
 from report_finalization import ReportFinalizer
 from report_prompting import ReportPromptBuilder
 from report_quality import ReportQualityScorer
@@ -27,9 +32,18 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     SECTION_PASSES = REPORT_STRUCTURE.section_passes
 
-    def __init__(self, kb_instance):
-        self.ollama = Client(host=OLLAMA_HOST)
+    def __init__(self, kb_instance, model_client_factory=None):
         self.kb = kb_instance
+        if model_client_factory is None:
+            model_client_factory = lambda: Client(
+                host=OLLAMA_HOST,
+                timeout=REPORT_LLM_TIMEOUT_SECONDS,
+            )
+        self.model_client_factory = model_client_factory
+        self.section_executor = SectionPassExecutor(
+            max_parallel=REPORT_SECTION_PARALLELISM,
+            cooldown_seconds=REPORT_CONCURRENCY_COOLDOWN_SECONDS,
+        )
         self.io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.structure = REPORT_STRUCTURE
         self.prompt_builder = ReportPromptBuilder(self.structure)
@@ -133,9 +147,10 @@ class ReportGenerator:
 
         max_attempts = 2
         num_predict = REPORT_NUM_PREDICT
+        client = self.model_client_factory()
 
         for attempt in range(1, max_attempts + 1):
-            response = self.ollama.chat(
+            response = client.chat(
                 model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": prompt},
@@ -171,6 +186,28 @@ class ReportGenerator:
                 continue
 
             return content
+
+    def _generate_sections(self, report_context, notes, analysis_context, macro_osint):
+        def generate(section_pass):
+            started_at = time.monotonic()
+            content = self._run_generation_pass(
+                report_context,
+                notes,
+                analysis_context,
+                macro_osint,
+                section_pass["sections"],
+                section_pass["include_visuals"],
+                section_pass["label"],
+            ).strip()
+            logger.info(
+                "Generation pass %s wall time %.2fs with effective parallelism %s.",
+                section_pass["label"],
+                time.monotonic() - started_at,
+                self.section_executor.effective_parallelism(),
+            )
+            return content
+
+        return self.section_executor.run(self.SECTION_PASSES, generate)
 
     def _polish_generated_content(self, content, report_context, editor=None):
         if editor is None:
@@ -226,18 +263,12 @@ class ReportGenerator:
         fallback_used = False
         generated_sections = []
         try:
-            for section_pass in self.SECTION_PASSES:
-                generated_sections.append(
-                    self._run_generation_pass(
-                        report_context,
-                        notes,
-                        analysis_context,
-                        macro_osint,
-                        section_pass["sections"],
-                        section_pass["include_visuals"],
-                        section_pass["label"],
-                    ).strip()
-                )
+            generated_sections = self._generate_sections(
+                report_context,
+                notes,
+                analysis_context,
+                macro_osint,
+            )
 
             generated_content = "\n\n".join(section for section in generated_sections if section).strip()
             generated_content = self._finalize_report_content(
