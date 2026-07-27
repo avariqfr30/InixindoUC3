@@ -264,6 +264,17 @@
                     <button type="button" id="btn-back">Kembali</button>
                     <button type="button" id="btn-generate">Buat Laporan <span id="spinner" class="spinner"></span></button>
                 </div>
+                <div id="feedback-panel" class="hidden" style="border-top:1px solid #e2e8f0; padding-top:16px; margin-top:16px;">
+                    <h3 id="feedback-title">Bagaimana dashboard ini?</h3>
+                    <label id="feedback-question" for="feedback-rating">Apakah dashboard membantu memahami kondisi cashflow?</label>
+                    <select id="feedback-rating"><option value="helpful">Hasil ini membantu</option><option value="needs_improvement">Perlu diperbaiki</option></select>
+                    <label for="feedback-reason">Alasan</label><select id="feedback-reason"></select>
+                    <label for="feedback-note">Catatan tambahan (opsional)</label><textarea id="feedback-note" maxlength="500"></textarea>
+                    <label><input id="feedback-remember" type="checkbox"> Ingat preferensi ini untuk laporan saya berikutnya</label>
+                    <button id="feedback-submit" type="button">Kirim Masukan</button>
+                    <p id="feedback-status" class="sub"></p>
+                    <button id="feedback-regenerate" type="button" class="secondary hidden">Buat ulang dengan masukan</button>
+                </div>
             </div>
         </div>
 
@@ -335,6 +346,14 @@
             dashboardMode: 'short_term',
             selectedBalancePointIndex: 0,
             toastTimer: null,
+            lastCompletedJobId: null,
+            lastGeneratePayload: null,
+            feedbackOptions: null,
+            submittedFeedback: null,
+            feedbackScope: 'dashboard',
+            dashboardFeedbackRunId: null,
+            submittedDashboardFeedback: null,
+            submittedReportFeedback: null,
         };
 
         window.addEventListener('pageshow', (event) => {
@@ -1416,6 +1435,9 @@
 	                ui.configStep.classList.add('hidden');
 	                ui.reviewStep.classList.remove('hidden');
 	                ui.rootCard.classList.add('review-mode');
+                    appState.dashboardFeedbackRunId = forecastSnapshot.feedback_snapshot_id || horizonSnapshot.feedback_snapshot_id || null;
+                    appState.submittedDashboardFeedback = null;
+                    setFeedbackScope('dashboard');
             } catch (error) {
                 showToast(error.message, 'error');
             } finally {
@@ -1525,6 +1547,9 @@
                     a.href = url;
                     a.download = `Inixindo_Cashflow_Intelligence_Report.docx`;
                     a.click();
+                    appState.lastCompletedJobId = jobId;
+                    appState.submittedReportFeedback = null;
+                    setFeedbackScope('report');
                     resetGenerateState();
                     ui.jobStatus.classList.add('hidden');
                     ui.jobStatus.textContent = '';
@@ -1534,6 +1559,61 @@
                     showToast(err.message, 'error');
                     resetGenerateState();
                 });
+        }
+
+        function renderFeedbackReasons() {
+            if (!appState.feedbackOptions) return;
+            const rating = document.getElementById('feedback-rating').value;
+            const select = document.getElementById('feedback-reason'); select.replaceChildren();
+            (appState.feedbackOptions[rating] || []).forEach(item => select.add(new Option(item.label, item.reason_code)));
+            document.getElementById('feedback-remember').closest('label').classList.toggle('hidden', rating === 'helpful');
+        }
+
+        function setFeedbackScope(scope) {
+            appState.feedbackScope = scope;
+            appState.submittedFeedback = scope === 'dashboard'
+                ? appState.submittedDashboardFeedback
+                : appState.submittedReportFeedback;
+            document.getElementById('feedback-title').textContent = scope === 'dashboard'
+                ? 'Bagaimana dashboard ini?'
+                : 'Bagaimana hasil laporan ini?';
+            document.getElementById('feedback-question').textContent = scope === 'dashboard'
+                ? 'Apakah dashboard membantu memahami kondisi cashflow?'
+                : 'Apakah laporan membantu pengambilan keputusan?';
+            document.getElementById('feedback-rating').value = 'helpful';
+            document.getElementById('feedback-note').value = '';
+            document.getElementById('feedback-remember').checked = false;
+            document.getElementById('feedback-status').textContent = '';
+            document.getElementById('feedback-regenerate').classList.add('hidden');
+            document.getElementById('feedback-panel').classList.toggle(
+                'hidden', scope === 'dashboard' && !appState.dashboardFeedbackRunId
+            );
+            loadFeedbackOptions();
+        }
+
+        function loadFeedbackOptions() {
+            fetch('/api/learning-feedback/options').then(response => response.json()).then(options => { appState.feedbackOptions=options; renderFeedbackReasons(); });
+        }
+
+        function submitLearningFeedback() {
+            const runId = appState.feedbackScope === 'dashboard'
+                ? appState.dashboardFeedbackRunId
+                : appState.lastCompletedJobId;
+            fetch('/api/learning-feedback', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+                run_id:runId, feedback_scope:appState.feedbackScope, rating:document.getElementById('feedback-rating').value,
+                reason_code:document.getElementById('feedback-reason').value, note:document.getElementById('feedback-note').value,
+                remember:document.getElementById('feedback-remember').checked
+            })}).then(response => response.json().then(data => {if(!response.ok) throw new Error(data.error||'Masukan gagal disimpan.'); return data;})).then(result => {
+                appState.submittedFeedback=result;
+                if (appState.feedbackScope === 'dashboard') appState.submittedDashboardFeedback = result;
+                else appState.submittedReportFeedback = result;
+                const nextStep = appState.feedbackScope === 'dashboard' && result.can_regenerate
+                    ? ' Masukan ini akan digunakan saat laporan dibuat.' : '';
+                document.getElementById('feedback-status').textContent=`Masukan dipahami: ${result.understood_guidance}${nextStep}`;
+                document.getElementById('feedback-regenerate').classList.toggle(
+                    'hidden', appState.feedbackScope !== 'report' || !result.can_regenerate
+                );
+            }).catch(error => showToast(error.message,'error'));
         }
 
         function pollJobStatus(jobId) {
@@ -1653,6 +1733,12 @@
                 analysis_context: appState.analysisContext,
                 analysis_payload: enrichedPayload
             };
+            if (appState.submittedDashboardFeedback?.can_regenerate && appState.dashboardFeedbackRunId) {
+                payload.feedback_id = appState.submittedDashboardFeedback.feedback_id;
+                payload.feedback_run_id = appState.dashboardFeedbackRunId;
+                payload.feedback_scope = 'dashboard';
+            }
+            appState.lastGeneratePayload = payload;
 
             fetch('/generate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
             .then(response => {
@@ -1683,6 +1769,15 @@
                 resetGenerateState();
             });
         };
+        document.getElementById('feedback-rating').addEventListener('change', renderFeedbackReasons);
+        document.getElementById('feedback-submit').addEventListener('click', submitLearningFeedback);
+        document.getElementById('feedback-regenerate').addEventListener('click', () => {
+            if (!appState.lastGeneratePayload || !appState.submittedFeedback || !appState.lastCompletedJobId) return;
+            document.getElementById('feedback-panel').classList.add('hidden'); ui.btnGenerate.disabled=true;
+            fetch('/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...appState.lastGeneratePayload, feedback_id:appState.submittedFeedback.feedback_id, feedback_run_id:appState.lastCompletedJobId, feedback_scope:'report'})})
+                .then(response => response.json().then(data => {if(!response.ok) throw new Error(data.error||'Pembuatan ulang gagal.'); return data;}))
+                .then(data => {appState.currentJobId=data.jobId; pollJobStatus(data.jobId);}).catch(error => {showToast(error.message,'error'); resetGenerateState();});
+        });
         
         document.getElementById('btn-refresh').onclick = () => {
             fetch('/refresh-knowledge', {method: 'POST'})

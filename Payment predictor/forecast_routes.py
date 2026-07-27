@@ -2,11 +2,26 @@ import calendar
 from datetime import datetime, timedelta
 
 import pandas as pd
-from flask import current_app, jsonify, request
+from flask import current_app, jsonify, request, session
 
 from app_services import build_sync_snapshot
 from core import Researcher
 from forecast_engine import CashflowForecaster, parse_idr_amount
+from learning_feedback import dashboard_snapshot_id
+
+
+def _register_dashboard_feedback_snapshot(sync_status, cash_on_hand, start_date, monthly_cost):
+    snapshot_id = dashboard_snapshot_id(
+        session.get("username", ""),
+        sync_status,
+        cash_on_hand,
+        start_date.isoformat(),
+        monthly_cost,
+        current_app.secret_key,
+    )
+    recent = [item for item in session.get("dashboard_feedback_runs", []) if isinstance(item, str)]
+    session["dashboard_feedback_runs"] = [snapshot_id, *[item for item in recent if item != snapshot_id]][:5]
+    return snapshot_id
 
 
 def register_forecast_routes(app, logger):
@@ -42,15 +57,19 @@ def register_forecast_routes(app, logger):
             return jsonify({"error": "Invalid date format (use ISO format)"}), 400
 
         try:
-            forecast = _get_or_build_single_forecast(
+            forecast = dict(_get_or_build_single_forecast(
                 cash_on_hand=cash_on_hand,
                 monthly_cost=monthly_cost,
                 start_date=start_date,
                 end_date=end_date,
-            )
+            ))
             forecast["currency"] = currency_code
             forecast["external_factors"] = _get_sanitized_external_factors(start_date, end_date)
-            forecast["sync_status"] = build_sync_snapshot()
+            sync_status = build_sync_snapshot()
+            forecast["sync_status"] = sync_status
+            forecast["feedback_snapshot_id"] = _register_dashboard_feedback_snapshot(
+                sync_status, cash_on_hand, start_date, monthly_cost
+            )
             return jsonify(forecast)
         except Exception as e:
             logger.error("Forecast error: %s", e, exc_info=True)
@@ -89,6 +108,7 @@ def register_forecast_routes(app, logger):
                 start_date=start_date,
             )
             horizon_end = start_date + timedelta(days=365)
+            sync_status = build_sync_snapshot()
             return jsonify({
                 "start_date": start_date.isoformat(),
                 "cash_on_hand": cash_on_hand,
@@ -96,7 +116,10 @@ def register_forecast_routes(app, logger):
                 "forecasts": forecasts,
                 "time_horizons": CashflowForecaster.TIME_HORIZONS,
                 "external_factors": _get_sanitized_external_factors(start_date, horizon_end),
-                "sync_status": build_sync_snapshot(),
+                "sync_status": sync_status,
+                "feedback_snapshot_id": _register_dashboard_feedback_snapshot(
+                    sync_status, cash_on_hand, start_date, monthly_cost
+                ),
                 "date_bounds": _format_date_bounds(date_bounds),
                 "anchor_policy": anchor_policy,
             })

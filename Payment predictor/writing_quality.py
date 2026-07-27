@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections import Counter
 from typing import Callable, Optional
 
 from evidence_quality import quality_check
@@ -17,10 +18,24 @@ MARKER_RE = re.compile(r"\[\[(?:CHART|PIE|FLOW|DASHBOARD|GANTT):.*?\]\]")
 
 
 class ProtectedIndonesianEditor:
-    def __init__(self, model_client=None, model_name=None, quality_fn: Optional[Callable] = None):
+    QUALITY_GATE_ISSUES = {
+        "near_duplicate_paragraph", "near_duplicate_opening", "indonesian_spelling_density",
+    }
+
+    def __init__(
+        self,
+        model_client=None,
+        model_name=None,
+        quality_fn: Optional[Callable] = None,
+        indonesian_quality_gate=None,
+    ):
         self.model_client = model_client
         self.model_name = model_name or os.getenv("LLM_MODEL", "gpt-oss:120b-cloud")
         self.quality_fn = quality_fn or (lambda text, protected: quality_check(text, protected))
+        if indonesian_quality_gate is None:
+            from indonesian_quality import IndonesianQualityGate
+            indonesian_quality_gate = IndonesianQualityGate()
+        self.indonesian_quality_gate = indonesian_quality_gate
 
     @staticmethod
     def protected_values(text):
@@ -28,6 +43,28 @@ class ProtectedIndonesianEditor:
         for pattern in FACT_PATTERNS:
             values.update(match.strip() for match in re.findall(pattern, str(text or "")) if match.strip())
         return sorted(value for value in values if len(value) >= 2)[:120]
+
+    @classmethod
+    def numeric_tokens(cls, text):
+        return [
+            re.sub(r"\s+", " ", token.strip())
+            for token in re.findall(FACT_PATTERNS[0], str(text or ""))
+            if token.strip()
+        ]
+
+    @classmethod
+    def preserves_numeric_facts(cls, original, candidate):
+        return Counter(cls.numeric_tokens(original)) == Counter(cls.numeric_tokens(candidate))
+
+    @staticmethod
+    def preserves_structure(original, candidate):
+        def structural_lines(value):
+            return tuple(
+                line.strip()
+                for line in str(value or "").splitlines()
+                if line.lstrip().startswith(("#", "|", "[["))
+            )
+        return structural_lines(original) == structural_lines(candidate)
 
     def _client(self):
         if self.model_client is not None:
@@ -82,14 +119,19 @@ class ProtectedIndonesianEditor:
             return original
         protected = self.protected_values(original)
         initial = self.quality_fn(original, protected)
-        initial["issues"] = sorted(set(list(initial.get("issues", [])) + self.local_template_issues(original)))
+        gate_result = self.indonesian_quality_gate.evaluate(original)
+        initial["issues"] = sorted(set(
+            list(initial.get("issues", []))
+            + self.local_template_issues(original)
+            + list(gate_result.issues)
+        ))
         issues = [
             issue for issue in initial.get("issues", [])
             if issue in {
                 "repeated_sentence", "repeated_paragraph", "filler_phrase", "unnecessary_english",
                 "long_sentence", "repeated_opening", "stock_transition", "unexplained_technical_term",
                 "repeated_dashboard_frame", "placeholder_dash_leakage", "stock_finance_phrase_density",
-                "dashboard_restatement", "repeated_openings",
+                "dashboard_restatement", "repeated_openings", *self.QUALITY_GATE_ISSUES,
             }
         ]
         if not issues:
@@ -119,8 +161,17 @@ class ProtectedIndonesianEditor:
             return original
         if not improved:
             return original
+        if not self.preserves_numeric_facts(original, improved):
+            return original
+        if not self.preserves_structure(original, improved):
+            return original
         final = self.quality_fn(improved, protected)
-        final["issues"] = sorted(set(list(final.get("issues", [])) + self.local_template_issues(improved)))
+        final_gate_result = self.indonesian_quality_gate.evaluate(improved)
+        final["issues"] = sorted(set(
+            list(final.get("issues", []))
+            + self.local_template_issues(improved)
+            + list(final_gate_result.issues)
+        ))
         if final.get("protected_missing"):
             return original
         remaining = {
@@ -129,7 +180,7 @@ class ProtectedIndonesianEditor:
                 "repeated_sentence", "repeated_paragraph", "filler_phrase", "unnecessary_english",
                 "long_sentence", "repeated_opening", "stock_transition", "unexplained_technical_term",
                 "repeated_dashboard_frame", "placeholder_dash_leakage", "stock_finance_phrase_density",
-                "dashboard_restatement", "repeated_openings",
+                "dashboard_restatement", "repeated_openings", *self.QUALITY_GATE_ISSUES,
             }
         }
         if remaining:

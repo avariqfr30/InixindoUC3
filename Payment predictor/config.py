@@ -86,7 +86,7 @@ OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "").strip()
 OLLAMA_WEB_SEARCH_URL = os.getenv("OLLAMA_WEB_SEARCH_URL", "https://ollama.com/api/web_search").strip()
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss:120b-cloud")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3:latest")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "qwen3-embedding:0.6b")
 DB_URI = os.getenv("DB_URI", f"sqlite:///{os.path.join(DATA_DIR, 'finance_predictor.db')}")
 DEMO_CSV_PATH = os.getenv("DEMO_CSV_PATH", os.path.join(DATA_DIR, "db.csv"))
 REPORT_MAX_CONCURRENT_JOBS = _int_env("REPORT_MAX_CONCURRENT_JOBS", 4)
@@ -105,6 +105,9 @@ REPORT_MIN_COMPLETENESS_SCORE = _float_env("REPORT_MIN_COMPLETENESS_SCORE", 80.0
 JOB_STATE_DB_PATH = os.getenv(
     "JOB_STATE_DB_PATH",
     os.path.join(DATA_DIR, "report_jobs.db"),
+)
+LEARNING_FEEDBACK_DB_PATH = os.getenv(
+    "LEARNING_FEEDBACK_DB_PATH", os.path.join(DATA_DIR, "learning_feedback.db")
 )
 REPORT_NUM_CTX = _int_env("REPORT_NUM_CTX", 24576)
 REPORT_NUM_PREDICT = _int_env("REPORT_NUM_PREDICT", 3500)

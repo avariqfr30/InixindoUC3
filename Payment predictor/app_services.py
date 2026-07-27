@@ -38,6 +38,7 @@ def configure_runtime_services(app, logger):
     )
     from core import CashOutStore, KnowledgeBase, ReportGenerator
     from forecast_engine import CashflowForecaster
+    from learning_feedback import create_feedback_store
 
     knowledge_base = KnowledgeBase(DB_URI)
     cash_out_store = CashOutStore(source_profile=knowledge_base.source_profile)
@@ -69,6 +70,7 @@ def configure_runtime_services(app, logger):
         job_store=job_store,
         metrics_window_hours=REPORT_METRICS_WINDOW_HOURS,
     )
+    learning_feedback_store = create_feedback_store()
     forecaster = CashflowForecaster(monthly_operating_cost_idr=200_000_000)
     refresh_coordinator = BackgroundRefreshCoordinator(
         knowledge_base=knowledge_base,
@@ -83,6 +85,7 @@ def configure_runtime_services(app, logger):
     app.config["knowledge_base"] = knowledge_base
     app.config["cash_out_store"] = cash_out_store
     app.config["job_manager"] = job_manager
+    app.config["learning_feedback_store"] = learning_feedback_store
     app.config["forecaster"] = forecaster
     app.config["user_store"] = user_store
     app.config["session_store"] = session_store

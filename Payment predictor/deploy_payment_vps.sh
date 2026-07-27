@@ -54,6 +54,8 @@ ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "
   find . -name '__pycache__' -type d -prune -exec rm -rf {} +
   python3 -m compileall . >/tmp/${SERVICE_NAME}_compile.log 2>&1 || { cat /tmp/${SERVICE_NAME}_compile.log; exit 1; }
   pip install -r requirements.txt >/tmp/${SERVICE_NAME}_pip.log 2>&1 || { cat /tmp/${SERVICE_NAME}_pip.log; exit 1; }
+  command -v hunspell >/dev/null || { echo 'Missing prerequisite: hunspell'; exit 1; }
+  test -r /usr/share/hunspell/id_ID.dic || { echo 'Missing prerequisite: Indonesian Hunspell dictionary'; exit 1; }
   sudo systemctl restart '$SERVICE_NAME'
   sudo systemctl status '$SERVICE_NAME' --no-pager -l | sed -n '1,20p'
   for _ in \$(seq 1 60); do

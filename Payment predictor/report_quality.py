@@ -7,9 +7,18 @@ from report_structure import REPORT_STRUCTURE
 
 
 class ReportQualityScorer:
-    def __init__(self, structure=REPORT_STRUCTURE, min_score=REPORT_MIN_COMPLETENESS_SCORE):
+    def __init__(
+        self,
+        structure=REPORT_STRUCTURE,
+        min_score=REPORT_MIN_COMPLETENESS_SCORE,
+        indonesian_quality_gate=None,
+    ):
         self.structure = structure
         self.min_score = min_score
+        if indonesian_quality_gate is None:
+            from indonesian_quality import IndonesianQualityGate
+            indonesian_quality_gate = IndonesianQualityGate()
+        self.indonesian_quality_gate = indonesian_quality_gate
 
     def score(self, raw_text, analysis_payload=None):
         report_text = str(raw_text or "")
@@ -152,6 +161,13 @@ class ReportQualityScorer:
         report_text = str(raw_text or "")
         categories = set()
         findings = []
+        language_result = self.indonesian_quality_gate.evaluate(report_text)
+        language_issues = set(language_result.issues)
+        categories.update(language_result.issues)
+        findings.extend(
+            f"Pemeriksaan Bahasa Indonesia: {issue}."
+            for issue in language_result.issues
+        )
         if re.search(
             r"\b(Internal API|APIDog|endpoint|source\s*=|Invoice Evidence Analyst|Context Analyst|Collection Risk Analyst|Forecast Analyst|Control Reviewer|Executive Editor|agent workflow)\b",
             report_text,
@@ -211,7 +227,15 @@ class ReportQualityScorer:
             if re.search(r"\b(?:InvoiceTraining|InvoiceConsultant|SECTION_PLAN_JSON|DOCUMENT_DELIBERATION)\b", report_text):
                 categories.add("raw_source_label")
                 findings.append("Lampiran masih memuat label sumber atau perencanaan internal.")
-        return {"passes": not categories, "categories": sorted(categories), "findings": findings}
+        blocking_categories = categories - language_issues
+        return {
+            "passes": not blocking_categories,
+            "categories": sorted(categories),
+            "blocking_categories": sorted(blocking_categories),
+            "findings": findings,
+            "warnings": sorted(set(language_result.warnings) | language_issues),
+            "language_metrics": dict(language_result.metrics),
+        }
 
     @staticmethod
     def _find_rejected_claim_violations(report_text, rejected_claims):

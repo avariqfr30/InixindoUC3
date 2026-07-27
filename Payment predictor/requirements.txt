@@ -13,3 +13,4 @@ sqlalchemy
 waitress
 flask-wtf>=1.2.0
 flask-limiter>=3.5.0
+rapidfuzz==3.14.5

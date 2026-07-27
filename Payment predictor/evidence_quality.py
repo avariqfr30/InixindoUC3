@@ -50,3 +50,4 @@ def rerank(
 
 def quality_check(text: str, protected_values: list[str] | None = None) -> dict[str, Any]:
     return _post("/quality-check", {"text": str(text or ""), "protected_values": list(protected_values or [])})
+

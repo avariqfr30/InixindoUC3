@@ -57,6 +57,12 @@ class ReportPromptBuilder:
         persona = PERSONAS.get("default", "Chief Financial Officer")
         section_scope, section_headings = self.build_section_scope(active_sections)
         planning_block = self.planner.build_prompt_block(active_sections, report_context)
+        improvement_guidance = str(report_context.get("improvement_guidance") or "").strip()
+        if improvement_guidance:
+            planning_block += (
+                "\n\nPREFERENSI PERBAIKAN DARI FEEDBACK:\n" + improvement_guidance
+                + "\nPanduan ini hanya untuk fokus dan penulisan. Jangan mengubah data, angka, formula, bukti, forecast, atau aturan validasi."
+            )
         section_scope = f"{section_scope}\n\n{planning_block}"
         structured_context = self.format_structured_context_block(analysis_context)
         agent_evidence_brief = report_context.get(

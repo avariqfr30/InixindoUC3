@@ -232,12 +232,13 @@ class ReportGenerator:
             pass
         return content
 
-    def run(self, notes="", analysis_context="", analysis_payload=None):
+    def run(self, notes="", analysis_context="", analysis_payload=None, improvement_guidance=""):
         logger.info("Starting cashflow intelligence report generation.")
 
         osint_context = "\n".join(part for part in (notes, analysis_context) if str(part or "").strip())
         global_osint_future = self.io_pool.submit(Researcher.get_macro_finance_trends, osint_context)
         report_context = self.kb.get_report_context(notes)
+        report_context["improvement_guidance"] = str(improvement_guidance or "").strip()[:1600]
 
         try:
             macro_osint = global_osint_future.result(timeout=45)
@@ -319,6 +320,8 @@ class ReportGenerator:
             rejected_claims=report_context.get("agent_rejected_claims"),
             deliberation_contract=document_contract,
         )
+        if final_qa.get("warnings"):
+            logger.warning("Indonesian quality checks degraded: %s", final_qa["warnings"])
         if not final_qa["passes"]:
             logger.warning("Final report QA failed before DOCX render: %s", final_qa["findings"])
             if not fallback_used:
@@ -342,6 +345,8 @@ class ReportGenerator:
                     rejected_claims=report_context.get("agent_rejected_claims"),
                     deliberation_contract=document_contract,
                 )
+                if final_qa.get("warnings"):
+                    logger.warning("Indonesian quality checks degraded: %s", final_qa["warnings"])
             if not final_qa["passes"]:
                 raise ValueError("Final report QA failed: " + "; ".join(final_qa["findings"]))
 

@@ -57,8 +57,9 @@ REPORT_STRUCTURE = ReportStructure(
             r"\s*Gap terhadap Total Invoice\s*\|"
         ),
         "priority_30_day": (
-            r"\|\s*Prioritas\s*\|\s*Fokus\s*\|\s*Penanggung Jawab\s*\|"
-            r"\s*Isu Utama\s*\|\s*Aksi 30 Hari\s*\|\s*Dampak yang Diharapkan\s*\|"
+            r"\|\s*Prioritas\s*\|\s*Tagihan/Akun\s*\|\s*Umur Tagihan atau Hambatan\s*\|"
+            r"\s*Tindakan\s*\|\s*Penanggung Jawab\s*\|\s*Batas Waktu\s*\|"
+            r"\s*Dampak yang Diharapkan\s*\|\s*Kontrol Tindak Lanjut\s*\|"
         ),
     },
 )

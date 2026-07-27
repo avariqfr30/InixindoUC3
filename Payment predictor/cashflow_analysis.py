@@ -66,6 +66,109 @@ EMBEDDING_SYNC_ENABLED = os.getenv("EMBEDDING_SYNC_ENABLED", "false").strip().lo
     "yes",
     "on",
 }
+VECTOR_INDEX_DIR = os.getenv(
+    "VECTOR_INDEX_DIR",
+    os.path.join(DATA_DIR, "vector_index"),
+)
+
+
+def _dataframe_fingerprint(data_frame):
+    normalized = data_frame.fillna("").astype(str)
+    digest = hashlib.sha256()
+    digest.update("\x1f".join(map(str, normalized.columns)).encode("utf-8"))
+    digest.update(pd.util.hash_pandas_object(normalized, index=True).values.tobytes())
+    return digest.hexdigest()
+
+
+def _collection_prefix(model_name):
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(model_name or "").lower()).strip("_")
+    return f"finance_{normalized or 'embedding'}"
+
+
+def _unique_text(values, *, limit, max_length):
+    output = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text.lower() in {"nan", "none", "null", "-"}:
+            continue
+        normalized = text.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(text[:max_length])
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _build_financial_embedding_records(data_frame):
+    group_columns = [
+        column
+        for column in (
+            "Status Pembayaran Invoice",
+            "Kelas Pembayaran",
+            "Layanan",
+        )
+        if column in data_frame.columns
+    ]
+    if not group_columns:
+        group_columns = [data_frame.columns[0]]
+
+    ids, documents, metadatas = [], [], []
+    for position, (group_key, group) in enumerate(
+        data_frame.fillna("").groupby(group_columns, dropna=False, sort=True)
+    ):
+        group_values = group_key if isinstance(group_key, tuple) else (group_key,)
+        group_metadata = {
+            column: str(value or "")
+            for column, value in zip(group_columns, group_values)
+        }
+        invoice_values = pd.to_numeric(
+            group.get("Nilai Invoice"),
+            errors="coerce",
+        ).dropna()
+        partners = _unique_text(
+            group.get("Tipe Partner", pd.Series(dtype=str)),
+            limit=8,
+            max_length=100,
+        )
+        invoice_numbers = _unique_text(
+            group.get("invoice_number", pd.Series(dtype=str)),
+            limit=8,
+            max_length=80,
+        )
+        historical_notes = _unique_text(
+            group.get("Catatan Historis Keterlambatan", pd.Series(dtype=str)),
+            limit=3,
+            max_length=180,
+        )
+        due_dates = _unique_text(
+            group.get("Tanggal Jatuh Tempo Invoice", pd.Series(dtype=str)),
+            limit=5,
+            max_length=40,
+        )
+        fields = [
+            *(f"{column}: {value}" for column, value in group_metadata.items() if value),
+            f"Jumlah invoice: {len(group)}",
+            f"Total nilai invoice: {invoice_values.sum():.2f}" if not invoice_values.empty else "",
+            f"Rata-rata nilai invoice: {invoice_values.mean():.2f}" if not invoice_values.empty else "",
+            "Contoh partner: " + ", ".join(partners) if partners else "",
+            "Contoh invoice: " + ", ".join(invoice_numbers) if invoice_numbers else "",
+            "Tanggal jatuh tempo representatif: " + ", ".join(due_dates) if due_dates else "",
+            "Catatan historis: " + " ; ".join(historical_notes) if historical_notes else "",
+        ]
+        ids.append(str(position))
+        documents.append(" | ".join(field for field in fields if field))
+        metadatas.append(
+            {
+                **group_metadata,
+                "record_count": int(len(group)),
+                "customer": partners[0] if partners else "",
+            }
+        )
+    return ids, documents, metadatas
+
 
 class KnowledgeBase:
     def __init__(self, db_uri):
@@ -79,15 +182,17 @@ class KnowledgeBase:
         self.data_mode = "demo"
         self.table_name = "invoices_demo"
         self.internal_api_client = None
-        self.chroma = chromadb.Client(Settings(anonymized_telemetry=False))
+        os.makedirs(VECTOR_INDEX_DIR, exist_ok=True)
+        self.chroma = chromadb.PersistentClient(
+            path=VECTOR_INDEX_DIR,
+            settings=Settings(anonymized_telemetry=False),
+        )
         self.embed_fn = embedding_functions.OllamaEmbeddingFunction(
             url=f"{OLLAMA_HOST}/api/embeddings",
             model_name=EMBED_MODEL,
+            timeout=300,
         )
-        self.collection = self.chroma.get_or_create_collection(
-            name="finance_holistic_db",
-            embedding_function=self.embed_fn,
-        )
+        self.collection = None
         self.df = None
         self.report_context_cache = None
         self.focused_report_context_cache = {}
@@ -229,41 +334,66 @@ class KnowledgeBase:
             logger.info("Embedding sync skipped; financial tables remain the source of truth for startup.")
             return True
 
-        existing_ids = self.collection.get().get("ids", [])
-        if existing_ids:
-            self.collection.delete(ids=existing_ids)
-
-        ids = []
-        documents = []
-        metadatas = []
-
-        for index, row in data_frame.iterrows():
-            text_representation = " | ".join(
-                f"{column}: {value}" for column, value in row.items()
-            )
-            ids.append(str(index))
-            documents.append(text_representation)
-            metadatas.append(row.astype(str).to_dict())
+        ids, documents, metadatas = _build_financial_embedding_records(data_frame)
 
         if not ids:
             return False
 
+        prefix = _collection_prefix(EMBED_MODEL)
+        fingerprint = _dataframe_fingerprint(data_frame)
+        collection_name = f"{prefix}_{fingerprint[:12]}"
+        previous_collection = self.collection
+        candidate_collection = self.chroma.get_or_create_collection(
+            name=collection_name,
+            embedding_function=self.embed_fn,
+            metadata={
+                "model": EMBED_MODEL,
+                "source_fingerprint": fingerprint,
+            },
+        )
+        if candidate_collection.count() == len(ids):
+            self.collection = candidate_collection
+            logger.info(
+                "Reusing financial vector index %s with %s records.",
+                collection_name,
+                len(ids),
+            )
+            return True
+
+        existing_ids = candidate_collection.get().get("ids", [])
+        if existing_ids:
+            candidate_collection.delete(ids=existing_ids)
+
         try:
             logger.info(
-                "Syncing %s financial records to the embedding store.",
+                "Indexing %s financial records with %s in batches of %s.",
                 len(ids),
+                EMBED_MODEL,
+                EMBEDDING_BATCH_SIZE,
             )
             for start in range(0, len(ids), EMBEDDING_BATCH_SIZE):
                 end = start + EMBEDDING_BATCH_SIZE
-                self.collection.add(
+                candidate_collection.add(
                     documents=documents[start:end],
                     metadatas=metadatas[start:end],
                     ids=ids[start:end],
                 )
+            if candidate_collection.count() != len(ids):
+                raise RuntimeError("vector index count does not match financial record count")
         except Exception as exc:
             logger.error("Embedding sync failed: %s", exc)
+            self.collection = previous_collection
+            try:
+                self.chroma.delete_collection(collection_name)
+            except Exception:
+                logger.warning("Failed to remove incomplete vector collection %s.", collection_name)
             return False
 
+        self.collection = candidate_collection
+        for existing in self.chroma.list_collections():
+            existing_name = getattr(existing, "name", str(existing))
+            if existing_name.startswith(f"{prefix}_") and existing_name != collection_name:
+                self.chroma.delete_collection(existing_name)
         return True
 
     def refresh_data(self):
@@ -409,18 +539,23 @@ class KnowledgeBase:
             return list(documents[:limit])
 
     def query(self, context_keywords="", max_results=12):
-        query_text = (
-            "Historical invoice delays, payment behavior class A-E, "
-            "systemic financial risk, collection bottlenecks. "
+        base_query = (
+            "Keterlambatan invoice historis, perilaku pembayaran kelas A-E, "
+            "risiko keuangan sistemik, dan hambatan penagihan. "
             f"{context_keywords or ''}"
+        )
+        query_text = (
+            "Instruct: Temukan bukti invoice dan pembayaran internal yang paling relevan "
+            "untuk analisis arus kas.\n"
+            f"Query: {base_query}"
         )
         if self.df is None or self.df.empty:
             return "Tidak ada data finansial internal yang dapat dipakai."
 
         max_results = min(max_results, len(self.df))
-        collection_size = self.collection.count()
+        collection_size = self.collection.count() if self.collection is not None else 0
         if collection_size <= 0:
-            return "Tidak ada data finansial internal yang dapat dipakai."
+            return ""
         output_limit = min(max_results, collection_size)
         candidate_limit = min(max(output_limit * 3, output_limit), collection_size)
 
@@ -439,7 +574,7 @@ class KnowledgeBase:
         except Exception as exc:
             logger.error("Query error: %s", exc)
 
-        return "Tidak ada data finansial internal yang dapat dipakai."
+        return ""
 
     def get_report_context(self, notes=""):
         with self.cache_lock:

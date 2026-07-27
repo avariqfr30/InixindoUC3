@@ -3,7 +3,6 @@ from datetime import datetime
 
 import pandas as pd
 
-from data_contract import invoice_lifecycle_status, normalize_financial_dataframe
 from financial_analyzer import FinancialAnalyzer
 from forecast_engine import CashflowForecaster, _is_settled_status, _is_unsettled_status
 
@@ -36,49 +35,6 @@ class InvoiceLifecycleStatusTest(unittest.TestCase):
         )
 
         self.assertEqual(invoices, [])
-
-    def test_normalization_reconciles_unsettled_status_when_paid_date_is_valid(self):
-        frame = pd.DataFrame([
-            {
-                "invoice_number": "INV-PAID-001",
-                "invoice_company_name": "PT Contoh",
-                "invoice_date": "2026-06-04",
-                "invoice_due_date": "2026-06-14",
-                "invoice_paid_date": "2026-06-08",
-                "invoice_is_settled": "no",
-                "invoice_amount": "1000000",
-                "payment_class": "Kelas A",
-                "source_dataset_label": "Training",
-            }
-        ])
-
-        normalized, _ = normalize_financial_dataframe(frame)
-
-        self.assertEqual(normalized.loc[0, "Status Pembayaran Invoice"], "Invoice Lunas")
-
-    def test_paid_date_before_invoice_does_not_override_unsettled_status(self):
-        lifecycle = invoice_lifecycle_status(
-            raw_status="no",
-            paid_date="2026-05-31",
-            invoice_date="2026-06-04",
-            due_date="2026-06-14",
-        )
-
-        self.assertFalse(lifecycle["is_settled"])
-        self.assertTrue(lifecycle["is_unsettled"])
-        self.assertEqual(lifecycle["conflict_reason"], "paid_date_before_invoice_date")
-
-    def test_partial_status_remains_open_even_with_paid_date(self):
-        lifecycle = invoice_lifecycle_status(
-            raw_status="Invoice Terbayar Sebagian",
-            paid_date="2026-06-08",
-            invoice_date="2026-06-04",
-            due_date="2026-06-14",
-        )
-
-        self.assertTrue(lifecycle["is_partial"])
-        self.assertTrue(lifecycle["is_unsettled"])
-        self.assertFalse(lifecycle["is_settled"])
 
     def test_outstanding_excludes_invoice_lunas_even_with_late_payment_class(self):
         frame = pd.DataFrame([

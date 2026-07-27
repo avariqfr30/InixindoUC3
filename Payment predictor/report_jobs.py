@@ -305,9 +305,10 @@ class ReportJobManager:
             "visualsIncluded": job["visuals_included"],
             "qualityGatePassed": job["quality_gate_passed"],
             "completenessScore": job["completeness_score"],
+            "submitted_by": job.get("submitted_by") or "",
         }
 
-    def submit(self, notes, analysis_context="", analysis_payload=None, submitted_by=""):
+    def submit(self, notes, analysis_context="", analysis_payload=None, submitted_by="", improvement_guidance=""):
         job_id = uuid.uuid4().hex
         preview_source = (notes or "").strip() or (analysis_context or "").strip()
         notes_preview = preview_source.replace("\n", " ")[:240]
@@ -319,10 +320,10 @@ class ReportJobManager:
                 raise QueueCapacityError(active_jobs, self.max_pending_jobs)
             self.job_store.create_job(job_id, notes_preview, submitted_by=submitted_by)
 
-        self.executor.submit(self._run_job, job_id, notes, analysis_context, analysis_payload)
+        self.executor.submit(self._run_job, job_id, notes, analysis_context, analysis_payload, improvement_guidance)
         return job_id
 
-    def _run_job(self, job_id, notes, analysis_context="", analysis_payload=None):
+    def _run_job(self, job_id, notes, analysis_context="", analysis_payload=None, improvement_guidance=""):
         started_at = time.time()
         self.job_store.update_job(
             job_id,
@@ -333,10 +334,11 @@ class ReportJobManager:
         )
 
         try:
+            generation_kwargs = {"analysis_payload": analysis_payload}
+            if improvement_guidance:
+                generation_kwargs["improvement_guidance"] = improvement_guidance
             document, file_name, run_metadata = self.report_generator.run(
-                notes,
-                analysis_context,
-                analysis_payload=analysis_payload,
+                notes, analysis_context, **generation_kwargs
             )
             artifact_path = self.artifacts_dir / f"{job_id}_{file_name}.docx"
             document.save(str(artifact_path))
@@ -381,13 +383,14 @@ class ReportJobManager:
         if not job:
             return None
         if job["status"] != "ready":
-            return {"status": job["status"], "error": job["error"]}
+            return {"status": job["status"], "error": job["error"], "submitted_by": job.get("submitted_by") or ""}
         artifact_path = job.get("artifact_path")
         if not artifact_path or not Path(artifact_path).exists():
             return {"status": "error", "error": "Generated artifact is no longer available."}
         return {
             "filename": job["filename"],
             "artifactPath": artifact_path,
+            "submitted_by": job.get("submitted_by") or "",
         }
 
     def get_health(self):
